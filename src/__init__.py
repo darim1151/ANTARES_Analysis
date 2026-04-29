@@ -10,6 +10,7 @@ Module map:
     config       - MJD windows, sample sizes, validation of ranges
     query        - ANTARES locus-level queries (with random_score)
     chunked_query - Adaptive chunked ingestion for complete nightly updates
+    history      - Drive-backed cumulative nightly history pipeline
     lightcurves  - Parallel per-locus lightcurve fetching
     cache        - Parquet load/save keyed by query parameters
     summary      - Human-readable summary statistics
@@ -17,13 +18,14 @@ Module map:
     validation   - Eight-test data-integrity suite
 """
 
-from . import cache, chunked_query, config, figures, lightcurves, query, summary, validation
+from . import cache, chunked_query, config, figures, history, lightcurves, query, summary, validation
 
 __all__ = [
     "cache",
     "chunked_query",
     "config",
     "figures",
+    "history",
     "lightcurves",
     "query",
     "summary",

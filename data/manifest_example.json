@@ -1,0 +1,36 @@
+{
+  "actual_loci": 100000,
+  "alert_rows": 2500000,
+  "chunk_count": 18,
+  "date_utc": "2026-04-28",
+  "finished_at_utc": "2026-04-29T08:42:00+00:00",
+  "mjd_max": 61103.0,
+  "mjd_min": 61102.0,
+  "paths": {
+    "alerts": "/content/drive/MyDrive/ANTARES_Analysis/data/nightly/2026/04/28/alerts.parquet",
+    "loci": "/content/drive/MyDrive/ANTARES_Analysis/data/nightly/2026/04/28/loci.parquet",
+    "manifest": "/content/drive/MyDrive/ANTARES_Analysis/data/nightly/2026/04/28/manifest.json"
+  },
+  "query_tag": null,
+  "runtime_seconds": 3600.0,
+  "saturated_chunk_count": 0,
+  "split_count": 7,
+  "started_at_utc": "2026-04-29T07:42:00+00:00",
+  "status": "complete",
+  "target_loci": 100000,
+  "validation": {
+    "alert_locus_link_pass": true,
+    "alert_rows_without_locus": 0,
+    "append_ready": true,
+    "bad_dec_count": 0,
+    "bad_ra_count": 0,
+    "coordinate_missing_columns": false,
+    "coordinate_pass": true,
+    "duplicate_locus_count": 0,
+    "mjd_above_count": 0,
+    "mjd_below_count": 0,
+    "mjd_missing_column": false,
+    "mjd_pass": true,
+    "overlap_count": 1234
+  }
+}

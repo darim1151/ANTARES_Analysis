@@ -1,0 +1,11 @@
+# Large generated ANTARES products belong in Google Drive/Colab storage.
+data/nightly/
+data/cumulative/
+data/cache_*/
+data/chunk_cache/
+*.parquet
+
+# Local Python/runtime noise.
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/

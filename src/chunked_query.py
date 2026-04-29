@@ -128,6 +128,7 @@ def _make_initial_chunks(mjd_min, mjd_max, initial_chunk_days):
 
 def query_range_adaptive(label, mjd_min, mjd_max,
                          tag=None,
+                         target_loci=None,
                          initial_chunk_days=DEFAULT_INITIAL_CHUNK_DAYS,
                          min_chunk_seconds=DEFAULT_MIN_CHUNK_SECONDS,
                          max_results_per_chunk=DEFAULT_ES_RESULT_LIMIT,
@@ -136,13 +137,18 @@ def query_range_adaptive(label, mjd_min, mjd_max,
                          use_chunk_cache=True,
                          verbose=True):
     """
-    Query a full MJD range by adaptively splitting saturated time chunks.
+    Query an MJD range by adaptively splitting saturated time chunks.
 
     Returns `(df_loci, report_df)`.
 
     `df_loci` is the de-duplicated combined result. `report_df` has one row
     per attempted chunk so you can see which windows were accepted, split,
     loaded from cache, or still saturated at the minimum chunk size.
+
+    `target_loci` is optional and backward-compatible. When set, querying
+    stops after at least that many unique loci have been accepted. This is
+    useful for nightly historical samples where we want a fixed research
+    target (e.g. 100,000 loci) without fetching an unbounded dense night.
     """
     if mjd_min > mjd_max:
         if verbose:
@@ -241,9 +247,19 @@ def query_range_adaptive(label, mjd_min, mjd_max,
                   f"{width_seconds:>8.1f}s  {n_rows:>6,} loci  "
                   f"{status}  ({source}; {queue} queued)")
 
+        if target_loci is not None and accepted_frames:
+            current = _dedupe_loci(pd.concat(accepted_frames, ignore_index=True))
+            if len(current) >= int(target_loci):
+                if verbose and pending:
+                    print(f"    target reached ({len(current):,}/{int(target_loci):,}); "
+                          f"stopping with {len(pending)} unqueried chunks.")
+                pending = []
+
     report_df = pd.DataFrame(report_rows)
     if accepted_frames:
         df_loci = _dedupe_loci(pd.concat(accepted_frames, ignore_index=True))
+        if target_loci is not None and len(df_loci) > int(target_loci):
+            df_loci = df_loci.head(int(target_loci)).reset_index(drop=True)
     else:
         df_loci = pd.DataFrame()
 

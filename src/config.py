@@ -98,6 +98,29 @@ CHUNK_SPLIT_THRESHOLD = 9500
 # validation suite to flag pre-LSST observations.
 LSST_START_MJD = 60200.0
 
+# ---------------------------------------------------------------------------
+# CUMULATIVE NIGHTLY HISTORY PARAMETERS
+# ---------------------------------------------------------------------------
+# Large historical products belong in Google Drive/Colab storage, not in the
+# GitHub repository. The history helper writes one partition per UTC night
+# under this root and maintains compact cumulative indexes beside them.
+HISTORY_DATA_ROOT = "/content/drive/MyDrive/ANTARES_Analysis"
+
+# Research target for historical backfill. If a night has fewer available
+# loci, the manifest records `under_target` rather than failing the run.
+HISTORY_TARGET_LOCI = 100000
+
+# Keep all lightcurves for accepted loci. This is scientifically richer but
+# slow/storage-heavy, so notebooks expose an easy override for smoke tests.
+HISTORY_FETCH_ALL_LIGHTCURVES = True
+
+# Parallelism for the per-locus lightcurve fetch in history workflows.
+HISTORY_MAX_LIGHTCURVE_WORKERS = 16
+
+# Resume interrupted Colab runs by skipping nightly partitions that already
+# have a manifest plus parquet outputs.
+HISTORY_RESUME_EXISTING_NIGHTS = True
+
 
 def validate_mjd_range(label, mjd_min, mjd_max):
     """
@@ -142,6 +165,9 @@ def print_config_summary():
         print(f"  Chunk min size    : {CHUNK_MIN_SECONDS:g} sec")
         print(f"  Chunk split at    : {CHUNK_SPLIT_THRESHOLD:,}/{CHUNK_MAX_RESULTS:,} loci")
         print(f"  History backfill  : {'ON' if CHUNKED_BACKFILL_HISTORY else 'OFF'}")
+    print(f"  History data root : {HISTORY_DATA_ROOT}")
+    print(f"  History target    : {HISTORY_TARGET_LOCI:,} loci/night")
+    print(f"  History LC fetch  : {'ON' if HISTORY_FETCH_ALL_LIGHTCURVES else 'OFF'}")
     # Spell out the disjointness check so a reviewer can verify the
     # "no overlap" property at a glance.
     overlap = "NON-overlapping" if MJD1_MIN >= MJD2_MAX else "OVERLAPPING"
