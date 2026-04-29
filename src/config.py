@@ -68,6 +68,32 @@ QUERY_TAG = None
 # returned across reruns - critical for caching to be meaningful.
 RANDOM_SEED = 42
 
+# ---------------------------------------------------------------------------
+# CHUNKED INGESTION PARAMETERS
+# ---------------------------------------------------------------------------
+# USE_CHUNKED_INGEST switches the notebook from "sample up to N_SAMPLES loci"
+# to an adaptive chunked query designed to avoid the ElasticSearch ~10,000
+# result cap. The old sampled path remains in the notebook as a fallback.
+USE_CHUNKED_INGEST = True
+
+# Backfilling the full historical range can require many ANTARES requests.
+# Keep this False for routine nightly runs: Range 1 is ingested chunk-by-chunk,
+# appended to the cumulative store, and Range 2 is read from that store. Turn
+# it on only when you intentionally want to build history from scratch.
+CHUNKED_BACKFILL_HISTORY = False
+
+# Start with 1-day chunks, then split only dense chunks. This usually needs
+# far fewer requests than always using 30-second bins.
+CHUNK_INITIAL_DAYS = 1.0
+
+# 30 seconds is the minimum chunk size requested for dense windows.
+CHUNK_MIN_SECONDS = 30.0
+
+# ANTARES/ElasticSearch can truncate around 10,000 hits. We ask for no more
+# than that and split a little early so "almost capped" chunks are not trusted.
+CHUNK_MAX_RESULTS = 10000
+CHUNK_SPLIT_THRESHOLD = 9500
+
 # Approximate MJD when LSST science operations began. Used by the
 # validation suite to flag pre-LSST observations.
 LSST_START_MJD = 60200.0
@@ -110,6 +136,12 @@ def print_config_summary():
     print(f"  Samples per range : {N_SAMPLES}")
     print(f"  Tag filter        : {QUERY_TAG if QUERY_TAG else 'none (all alerts)'}")
     print(f"  Random seed       : {RANDOM_SEED}")
+    print(f"  Chunked ingest    : {'ON' if USE_CHUNKED_INGEST else 'OFF'}")
+    if USE_CHUNKED_INGEST:
+        print(f"  Chunk start size  : {CHUNK_INITIAL_DAYS:g} day(s)")
+        print(f"  Chunk min size    : {CHUNK_MIN_SECONDS:g} sec")
+        print(f"  Chunk split at    : {CHUNK_SPLIT_THRESHOLD:,}/{CHUNK_MAX_RESULTS:,} loci")
+        print(f"  History backfill  : {'ON' if CHUNKED_BACKFILL_HISTORY else 'OFF'}")
     # Spell out the disjointness check so a reviewer can verify the
     # "no overlap" property at a glance.
     overlap = "NON-overlapping" if MJD1_MIN >= MJD2_MAX else "OVERLAPPING"

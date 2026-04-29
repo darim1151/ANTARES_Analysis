@@ -48,7 +48,7 @@ def locus_to_record(locus):
     return record
 
 
-def build_query(mjd_min, mjd_max, tag=None, seed=None):
+def build_query(mjd_min, mjd_max, tag=None, seed=None, include_upper=True):
     """
     Build the ElasticSearch query body for an MJD window.
 
@@ -71,13 +71,17 @@ def build_query(mjd_min, mjd_max, tag=None, seed=None):
         look identical because they are actually both newest-first lists.
         `_seq_no` is a per-shard monotonic ID guaranteed present on every
         document, so it gives the random hash a stable input.
+    `include_upper=False` switches the upper MJD bound from `lte` to `lt`.
+    Chunked ingestion uses that half-open form for intermediate chunks so
+    loci exactly on a boundary are not fetched twice.
     """
     # ANTARES indexes the locus-level "last seen" time as
     # properties.newest_alert_observation_time. Filtering on this field
     # (rather than per-alert times) lets us pull a snapshot without
     # joining alert tables.
+    upper_op = "lte" if include_upper else "lt"
     mjd_filter = {"range": {
-        "properties.newest_alert_observation_time": {"gte": mjd_min, "lte": mjd_max}
+        "properties.newest_alert_observation_time": {"gte": mjd_min, upper_op: mjd_max}
     }}
     filters = [mjd_filter]
     if tag:
@@ -101,7 +105,8 @@ def build_query(mjd_min, mjd_max, tag=None, seed=None):
 
 
 def query_range(label, mjd_min, mjd_max, n_samples,
-                tag=None, seed=None, verbose=True):
+                tag=None, seed=None, verbose=True, include_upper=True,
+                raise_on_error=False):
     """
     Execute the ANTARES query and return up to `n_samples` loci as a DataFrame.
 
@@ -115,6 +120,9 @@ def query_range(label, mjd_min, mjd_max, n_samples,
       - Per-locus parsing errors are tolerated: we count them but don't
         re-raise, because one badly-formed locus shouldn't kill a 5000-row
         query.
+      - `raise_on_error=True` is intended for chunked ingestion. It prevents
+        transient network/API errors from being mistaken for genuinely empty
+        time chunks.
     """
     if mjd_min > mjd_max:
         if verbose:
@@ -134,7 +142,7 @@ def query_range(label, mjd_min, mjd_max, n_samples,
                 break
         return recs, errs
 
-    query = build_query(mjd_min, mjd_max, tag=tag, seed=seed)
+    query = build_query(mjd_min, mjd_max, tag=tag, seed=seed, include_upper=include_upper)
     mode = f"random (seed={seed})" if seed is not None else "newest-first"
     if verbose:
         print(f"  Querying '{label}'  MJD [{mjd_min:.1f}, {mjd_max:.1f}]  "
@@ -151,14 +159,20 @@ def query_range(label, mjd_min, mjd_max, n_samples,
             if verbose:
                 print(f"\n  [WARN] random_score query failed ({exc}); "
                       "retrying without randomisation ...")
-            fallback = build_query(mjd_min, mjd_max, tag=tag, seed=None)
+            fallback = build_query(
+                mjd_min, mjd_max, tag=tag, seed=None, include_upper=include_upper
+            )
             try:
                 records, errors = _collect(fallback, n_samples)
             except Exception as exc2:
+                if raise_on_error:
+                    raise
                 if verbose:
                     print(f"  [ERROR] Fallback also failed: {exc2}")
                 return pd.DataFrame()
         else:
+            if raise_on_error:
+                raise
             if verbose:
                 print(f"  [ERROR] Query failed: {exc}")
             return pd.DataFrame()
