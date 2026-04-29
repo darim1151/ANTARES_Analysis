@@ -13,16 +13,29 @@ WHY MJD (Modified Julian Date)?
     to/from calendar dates only happens at the edges (titles, log lines).
 """
 
+import os
+import math
+
 from astropy.time import Time
 
 # ---------------------------------------------------------------------------
 # CURRENT TIME ANCHOR
 # ---------------------------------------------------------------------------
+# AUTO_REALTIME_LAST_NIGHT controls whether Range 1 tracks the latest complete
+# UTC MJD day at runtime. Keep it on for operational "last night" comparisons.
+# Set the environment variable ANTARES_AUTO_REALTIME=0 if you need a frozen,
+# exactly reproducible historical rerun.
+AUTO_REALTIME_LAST_NIGHT = os.getenv("ANTARES_AUTO_REALTIME", "1") != "0"
+FROZEN_MJD_NOW = 61103.0
+
+
+def latest_completed_mjd_day():
+    """Return the integer MJD boundary for the latest completed UTC day."""
+    return float(math.floor(Time.now().mjd))
+
+
 # MJD_NOW is the "today" anchor used to derive Range 1 ("last night").
-# Hard-coding it instead of using astropy.time.Time.now() means the analysis
-# is REPRODUCIBLE: the exact same MJD window is queried every time the
-# notebook is run, regardless of when it is executed.
-MJD_NOW = 61103.0
+MJD_NOW = latest_completed_mjd_day() if AUTO_REALTIME_LAST_NIGHT else FROZEN_MJD_NOW
 
 # ---------------------------------------------------------------------------
 # RANGE 1 - "Last night" snapshot of what LSST observed most recently.
@@ -46,9 +59,9 @@ LABEL1 = "Last Night"
 #   Range 2 off at MJD1_MIN the two windows are STRICTLY DISJOINT, which
 #   is what we want for an honest "tonight vs everything before tonight"
 #   comparison.
-MJD2_MIN = 60200.0   # ~Oct 2024, approximate start of LSST science ops
+MJD2_MIN = 60200.0
 MJD2_MAX = MJD1_MIN
-LABEL2 = "LSST History"
+LABEL2 = "Cumulative LSST History"
 
 # ---------------------------------------------------------------------------
 # SAMPLING / QUERY PARAMETERS
@@ -121,6 +134,12 @@ HISTORY_MAX_LIGHTCURVE_WORKERS = 16
 # have a manifest plus parquet outputs.
 HISTORY_RESUME_EXISTING_NIGHTS = True
 
+# Nightly comparison notebook behavior. Prefer the Drive-backed cumulative
+# history built by notebooks/historical_backfill.ipynb, and load historical
+# alert parquet only when it exists. This avoids re-querying history.
+USE_DRIVE_CUMULATIVE_HISTORY = True
+LOAD_CUMULATIVE_HISTORY_ALERTS = True
+
 
 def validate_mjd_range(label, mjd_min, mjd_max):
     """
@@ -159,6 +178,7 @@ def print_config_summary():
     print(f"  Samples per range : {N_SAMPLES}")
     print(f"  Tag filter        : {QUERY_TAG if QUERY_TAG else 'none (all alerts)'}")
     print(f"  Random seed       : {RANDOM_SEED}")
+    print(f"  Realtime night    : {'ON' if AUTO_REALTIME_LAST_NIGHT else 'OFF'}")
     print(f"  Chunked ingest    : {'ON' if USE_CHUNKED_INGEST else 'OFF'}")
     if USE_CHUNKED_INGEST:
         print(f"  Chunk start size  : {CHUNK_INITIAL_DAYS:g} day(s)")
@@ -168,6 +188,7 @@ def print_config_summary():
     print(f"  History data root : {HISTORY_DATA_ROOT}")
     print(f"  History target    : {HISTORY_TARGET_LOCI:,} loci/night")
     print(f"  History LC fetch  : {'ON' if HISTORY_FETCH_ALL_LIGHTCURVES else 'OFF'}")
+    print(f"  Use Drive history : {'ON' if USE_DRIVE_CUMULATIVE_HISTORY else 'OFF'}")
     # Spell out the disjointness check so a reviewer can verify the
     # "no overlap" property at a glance.
     overlap = "NON-overlapping" if MJD1_MIN >= MJD2_MAX else "OVERLAPPING"

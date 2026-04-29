@@ -543,6 +543,47 @@ def load_cumulative_loci_index(data_root=HISTORY_DATA_ROOT, before_mjd=None, bef
     return df.reset_index(drop=True)
 
 
+def load_cumulative_alerts(data_root=HISTORY_DATA_ROOT, before_mjd=None, before_date=None,
+                           max_nights=None):
+    """
+    Load alert/lightcurve rows from prior nightly partitions.
+
+    Missing or empty alert parquet files are skipped. Use `max_nights` when
+    you want a bounded plotting sample from a very large Drive store.
+    """
+    manifests = []
+    for manifest_path in _manifest_paths(data_root):
+        manifest = _load_manifest_path(manifest_path)
+        if manifest.get("status") not in APPENDABLE_STATUSES:
+            continue
+        if manifest.get("validation", {}).get("append_ready") is False:
+            continue
+        if before_mjd is not None and manifest.get("mjd_max") is not None:
+            if float(manifest["mjd_max"]) > float(before_mjd):
+                continue
+        if before_date is not None and manifest.get("date_utc"):
+            if manifest["date_utc"] >= before_date:
+                continue
+        manifests.append(manifest)
+
+    manifests = sorted(manifests, key=lambda item: item.get("mjd_min", 0.0))
+    if max_nights is not None:
+        manifests = manifests[-int(max_nights):]
+
+    frames = []
+    for manifest in manifests:
+        alerts_path = Path(manifest.get("paths", {}).get("alerts", ""))
+        if not alerts_path.exists():
+            continue
+        df_alerts = pd.read_parquet(alerts_path)
+        if not df_alerts.empty:
+            frames.append(df_alerts)
+
+    if not frames:
+        return _empty_alerts_frame()
+    return pd.concat(frames, ignore_index=True, sort=False)
+
+
 def compare_night_to_cumulative(df_night, df_cumulative):
     """Return compact comparison statistics for newest night vs prior history."""
     result = {
