@@ -34,6 +34,13 @@ FROZEN_MJD_NOW = 61103.0
 # windows such as 61164-61165 when 61163-61164 is the latest populated night.
 ANTARES_INDEXING_LOOKBACK_DAYS = float(os.getenv("ANTARES_INDEXING_LOOKBACK_DAYS", "1"))
 
+# Before the expensive full extraction, the comparison notebook can probe a
+# few recent 1-day windows and use the newest one that actually has ANTARES
+# loci. This protects the analysis when the broker indexing lag is longer than
+# the static lookback above.
+AUTO_SELECT_POPULATED_LAST_NIGHT = os.getenv("ANTARES_AUTO_SELECT_POPULATED", "1") != "0"
+ANTARES_LAST_NIGHT_SEARCH_DAYS = int(os.getenv("ANTARES_LAST_NIGHT_SEARCH_DAYS", "5"))
+
 
 def latest_completed_mjd_day():
     """Return the integer MJD boundary for the latest completed UTC day."""
@@ -191,6 +198,9 @@ def print_config_summary():
     print(f"  Realtime night    : {'ON' if AUTO_REALTIME_LAST_NIGHT else 'OFF'}")
     if AUTO_REALTIME_LAST_NIGHT:
         print(f"  ANTARES lookback  : {ANTARES_INDEXING_LOOKBACK_DAYS:g} day(s)")
+        print(f"  Populated search  : {'ON' if AUTO_SELECT_POPULATED_LAST_NIGHT else 'OFF'}")
+        if AUTO_SELECT_POPULATED_LAST_NIGHT:
+            print(f"  Search depth      : {ANTARES_LAST_NIGHT_SEARCH_DAYS} day(s)")
     print(f"  Chunked ingest    : {'ON' if USE_CHUNKED_INGEST else 'OFF'}")
     if USE_CHUNKED_INGEST:
         print(f"  Chunk start size  : {CHUNK_INITIAL_DAYS:g} day(s)")

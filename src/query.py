@@ -206,3 +206,50 @@ def query_both_ranges_parallel(range1_args, range2_args):
         df1 = f1.result() if f1 is not None else pd.DataFrame()
         df2 = f2.result() if f2 is not None else pd.DataFrame()
     return df1, df2
+
+
+def find_latest_populated_mjd_window(label, mjd_min, mjd_max,
+                                     max_days=5, tag=None, verbose=True):
+    """
+    Return the newest recent 1-day MJD window with at least one ANTARES locus.
+
+    This is a cheap guard against broker indexing lag: probe `n_samples=1`
+    before the expensive full chunked extraction. If every probe is empty,
+    keep the original window so downstream validation reports the real issue.
+    """
+    base_min = float(mjd_min)
+    base_max = float(mjd_max)
+    checked = []
+
+    for days_back in range(max(1, int(max_days))):
+        candidate_min = base_min - days_back
+        candidate_max = base_max - days_back
+        try:
+            probe = query_range(
+                label=f"{label} probe",
+                mjd_min=candidate_min,
+                mjd_max=candidate_max,
+                n_samples=1,
+                tag=tag,
+                seed=None,
+                verbose=False,
+            )
+            n_probe = len(probe)
+        except Exception as exc:
+            n_probe = 0
+            if verbose:
+                print(f"  Probe failed for MJD [{candidate_min:.1f}, {candidate_max:.1f}]: {exc}")
+
+        checked.append({
+            "mjd_min": candidate_min,
+            "mjd_max": candidate_max,
+            "n_loci": n_probe,
+        })
+        if verbose:
+            print(f"  Probe MJD [{candidate_min:.1f}, {candidate_max:.1f}] -> {n_probe} loci")
+        if n_probe > 0:
+            return candidate_min, candidate_max, pd.DataFrame(checked)
+
+    if verbose:
+        print("  [WARN] No populated recent night found; keeping configured window.")
+    return base_min, base_max, pd.DataFrame(checked)
