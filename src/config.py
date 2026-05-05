@@ -28,6 +28,12 @@ from astropy.time import Time
 AUTO_REALTIME_LAST_NIGHT = os.getenv("ANTARES_AUTO_REALTIME", "1") != "0"
 FROZEN_MJD_NOW = 61103.0
 
+# ANTARES can lag the newest completed UTC day while broker products are still
+# being indexed. A one-day lookback makes "Last Night" mean the most recent
+# completed day that is likely to be queryable, avoiding zero-row fresh-night
+# windows such as 61164-61165 when 61163-61164 is the latest populated night.
+ANTARES_INDEXING_LOOKBACK_DAYS = float(os.getenv("ANTARES_INDEXING_LOOKBACK_DAYS", "1"))
+
 
 def latest_completed_mjd_day():
     """Return the integer MJD boundary for the latest completed UTC day."""
@@ -35,7 +41,11 @@ def latest_completed_mjd_day():
 
 
 # MJD_NOW is the "today" anchor used to derive Range 1 ("last night").
-MJD_NOW = latest_completed_mjd_day() if AUTO_REALTIME_LAST_NIGHT else FROZEN_MJD_NOW
+MJD_NOW = (
+    latest_completed_mjd_day() - ANTARES_INDEXING_LOOKBACK_DAYS
+    if AUTO_REALTIME_LAST_NIGHT
+    else FROZEN_MJD_NOW
+)
 
 # ---------------------------------------------------------------------------
 # RANGE 1 - "Last night" snapshot of what LSST observed most recently.
@@ -179,6 +189,8 @@ def print_config_summary():
     print(f"  Tag filter        : {QUERY_TAG if QUERY_TAG else 'none (all alerts)'}")
     print(f"  Random seed       : {RANDOM_SEED}")
     print(f"  Realtime night    : {'ON' if AUTO_REALTIME_LAST_NIGHT else 'OFF'}")
+    if AUTO_REALTIME_LAST_NIGHT:
+        print(f"  ANTARES lookback  : {ANTARES_INDEXING_LOOKBACK_DAYS:g} day(s)")
     print(f"  Chunked ingest    : {'ON' if USE_CHUNKED_INGEST else 'OFF'}")
     if USE_CHUNKED_INGEST:
         print(f"  Chunk start size  : {CHUNK_INITIAL_DAYS:g} day(s)")
