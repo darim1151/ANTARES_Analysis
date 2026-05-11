@@ -2,14 +2,14 @@
 Cumulative nightly history pipeline for ANTARES/LSST analyses.
 
 The existing notebook still does the quick "last night vs sampled history"
-comparison. This module adds a Drive-backed research store that can be built
-night by night and resumed after Colab disconnects:
+comparison. This module adds a platform-backed research store that can be
+built night by night and resumed after disconnects:
 
-    data/nightly/YYYY/MM/DD/loci.parquet
-    data/nightly/YYYY/MM/DD/alerts.parquet
-    data/nightly/YYYY/MM/DD/manifest.json
-    data/cumulative/loci_index.parquet
-    data/cumulative/nightly_summary.parquet
+    data/lsst_only/nightly/YYYY/MM/DD/loci.parquet
+    data/lsst_only/nightly/YYYY/MM/DD/alerts.parquet
+    data/lsst_only/nightly/YYYY/MM/DD/manifest.json
+    data/lsst_only/cumulative/loci_index.parquet
+    data/lsst_only/cumulative/nightly_summary.parquet
 
 Each nightly partition is saved immediately after ingestion. The cumulative
 tables are compact indexes rebuilt from those manifests and parquet files.
@@ -23,18 +23,23 @@ from pathlib import Path
 import pandas as pd
 from astropy.time import Time
 
-from . import chunked_query, lightcurves
+from . import chunked_query, lightcurves, query
 from .config import (
     CHUNK_INITIAL_DAYS,
     CHUNK_MAX_RESULTS,
     CHUNK_MIN_SECONDS,
+    CHUNK_PARALLEL_SHARDS,
     CHUNK_SPLIT_THRESHOLD,
     HISTORY_DATA_ROOT,
+    HISTORY_DATA_SUBDIR,
     HISTORY_FETCH_ALL_LIGHTCURVES,
     HISTORY_MAX_LIGHTCURVE_WORKERS,
     HISTORY_RESUME_EXISTING_NIGHTS,
     HISTORY_TARGET_LOCI,
+    LSST_HISTORY_START_MJD,
+    LSST_ONLY,
     QUERY_TAG,
+    SURVEY_MODE,
 )
 
 
@@ -54,6 +59,10 @@ CUMULATIVE_INDEX_COLUMNS = [
     "ra",
     "dec",
     "tags",
+    "survey",
+    "ztf_object_id",
+    "dia_object_id",
+    "ss_object_id",
     "brightest_alert_magnitude",
     "num_mag_values",
 ]
@@ -81,10 +90,16 @@ def date_folder(date_utc):
     return year, month, day
 
 
+def survey_data_root(data_root, survey_subdir=HISTORY_DATA_SUBDIR):
+    """Return the data root for one survey mode under the persistent store."""
+    root = Path(data_root) / "data"
+    return root / survey_subdir if survey_subdir else root
+
+
 def nightly_dir(data_root, date_utc):
-    """Return the Google Drive directory for one UTC night."""
+    """Return the persistent directory for one UTC night."""
     year, month, day = date_folder(date_utc)
-    return Path(data_root) / "data" / "nightly" / year / month / day
+    return survey_data_root(data_root) / "nightly" / year / month / day
 
 
 def nightly_paths(data_root, date_utc):
@@ -100,7 +115,7 @@ def nightly_paths(data_root, date_utc):
 
 def cumulative_paths(data_root):
     """Return the standard cumulative index paths."""
-    root = Path(data_root) / "data" / "cumulative"
+    root = survey_data_root(data_root) / "cumulative"
     return {
         "dir": root,
         "loci_index": root / "loci_index.parquet",
@@ -185,7 +200,8 @@ def prepare_alerts(df_alerts, date_utc, range_label):
     return df.reset_index(drop=True)
 
 
-def validation_summary(df_loci, df_alerts, mjd_min, mjd_max, prior_locus_ids=None):
+def validation_summary(df_loci, df_alerts, mjd_min, mjd_max, prior_locus_ids=None,
+                       lsst_only=LSST_ONLY):
     """Return machine-readable validation fields for a nightly manifest."""
     validation = {
         "mjd_pass": True,
@@ -200,7 +216,22 @@ def validation_summary(df_loci, df_alerts, mjd_min, mjd_max, prior_locus_ids=Non
         "overlap_count": 0,
         "alert_locus_link_pass": True,
         "alert_rows_without_locus": 0,
+        "lsst_only_pass": True,
+        "lsst_identifier_count": 0,
+        "lsst_dia_count": 0,
+        "lsst_ss_count": 0,
+        "ztf_object_id_count": 0,
+        "history_start_pass": True,
     }
+
+    survey_counts = query.lsst_identifier_counts(df_loci)
+    validation.update(survey_counts)
+    if lsst_only:
+        validation["lsst_only_pass"] = (
+            not df_loci.empty
+            and validation["lsst_identifier_count"] == int(len(df_loci))
+        )
+        validation["history_start_pass"] = float(mjd_min) >= float(LSST_HISTORY_START_MJD)
 
     if not df_loci.empty and MJD_COL in df_loci.columns:
         mjds = df_loci[MJD_COL].dropna()
@@ -246,6 +277,8 @@ def validation_summary(df_loci, df_alerts, mjd_min, mjd_max, prior_locus_ids=Non
         and validation["duplicate_locus_count"] == 0
         and validation["coordinate_pass"]
         and validation["alert_locus_link_pass"]
+        and validation["lsst_only_pass"]
+        and validation["history_start_pass"]
     )
     return validation
 
@@ -295,6 +328,14 @@ def _manifest_to_summary_row(manifest):
         "coordinate_pass": validation.get("coordinate_pass"),
         "overlap_count": validation.get("overlap_count"),
         "alert_locus_link_pass": validation.get("alert_locus_link_pass"),
+        "survey_mode": manifest.get("survey_mode"),
+        "lsst_filter_used": manifest.get("lsst_filter_used"),
+        "parallel_shards": manifest.get("parallel_shards"),
+        "lsst_dia_count": manifest.get("lsst_dia_count"),
+        "lsst_ss_count": manifest.get("lsst_ss_count"),
+        "ztf_object_id_count": manifest.get("ztf_object_id_count"),
+        "lsst_only_pass": validation.get("lsst_only_pass"),
+        "history_start_pass": validation.get("history_start_pass"),
         "runtime_seconds": manifest.get("runtime_seconds"),
         "started_at_utc": manifest.get("started_at_utc"),
         "finished_at_utc": manifest.get("finished_at_utc"),
@@ -324,6 +365,8 @@ def ingest_night(
     max_results_per_chunk=CHUNK_MAX_RESULTS,
     split_threshold=CHUNK_SPLIT_THRESHOLD,
     max_lightcurve_workers=HISTORY_MAX_LIGHTCURVE_WORKERS,
+    parallel_shards=CHUNK_PARALLEL_SHARDS,
+    lsst_only=LSST_ONLY,
     prior_locus_ids=None,
     update_indexes=True,
     verbose=True,
@@ -373,6 +416,13 @@ def ingest_night(
         "split_count": 0,
         "saturated_chunk_count": 0,
         "status": "failed",
+        "survey_mode": SURVEY_MODE,
+        "lsst_filter_used": bool(lsst_only),
+        "lsst_filter": query.lsst_identifier_filter() if lsst_only else None,
+        "parallel_shards": int(parallel_shards or 1),
+        "lsst_dia_count": 0,
+        "lsst_ss_count": 0,
+        "ztf_object_id_count": 0,
         "started_at_utc": started_at,
         "finished_at_utc": None,
         "runtime_seconds": None,
@@ -398,6 +448,8 @@ def ingest_night(
             chunk_cache_dir=chunk_cache_dir,
             use_chunk_cache=True,
             verbose=verbose,
+            lsst_only=lsst_only,
+            parallel_shards=parallel_shards,
         )
         ingested_at = _now_utc()
         df_loci = prepare_loci(df_raw, date_utc, mjd_min, mjd_max, ingested_at)
@@ -425,11 +477,16 @@ def ingest_night(
             mjd_min=mjd_min,
             mjd_max=mjd_max,
             prior_locus_ids=prior_locus_ids,
+            lsst_only=lsst_only,
         )
         manifest.update(counts)
+        survey_counts = query.lsst_identifier_counts(df_loci)
         manifest.update({
             "actual_loci": int(len(df_loci)),
             "alert_rows": int(len(df_alerts)),
+            "lsst_dia_count": survey_counts["lsst_dia_count"],
+            "lsst_ss_count": survey_counts["lsst_ss_count"],
+            "ztf_object_id_count": survey_counts["ztf_object_id_count"],
             "status": _status_from_counts(
                 len(df_loci),
                 target_loci,
@@ -467,7 +524,7 @@ def ingest_night(
 
 def _manifest_paths(data_root):
     """Yield all nightly manifest paths under a data root."""
-    root = Path(data_root) / "data" / "nightly"
+    root = survey_data_root(data_root) / "nightly"
     if not root.exists():
         return []
     return sorted(root.glob("*/*/*/manifest.json"))
@@ -480,7 +537,7 @@ def _load_manifest_path(path):
 
 def update_cumulative_indexes(data_root=HISTORY_DATA_ROOT, require_append_ready=True):
     """
-    Rebuild cumulative loci and nightly summary parquet files from Drive data.
+    Rebuild cumulative loci and nightly summary parquet files from platform data.
 
     By default, manifests with `validation.append_ready == False` are not
     included in the cumulative loci index.
@@ -549,7 +606,7 @@ def load_cumulative_alerts(data_root=HISTORY_DATA_ROOT, before_mjd=None, before_
     Load alert/lightcurve rows from prior nightly partitions.
 
     Missing or empty alert parquet files are skipped. Use `max_nights` when
-    you want a bounded plotting sample from a very large Drive store.
+    you want a bounded plotting sample from a very large platform store.
     """
     manifests = []
     for manifest_path in _manifest_paths(data_root):
@@ -621,6 +678,8 @@ def backfill_history(
     fetch_lightcurves=HISTORY_FETCH_ALL_LIGHTCURVES,
     resume=HISTORY_RESUME_EXISTING_NIGHTS,
     chunk_cache_dir=None,
+    parallel_shards=CHUNK_PARALLEL_SHARDS,
+    lsst_only=LSST_ONLY,
     verbose=True,
 ):
     """
@@ -649,6 +708,8 @@ def backfill_history(
             resume=resume,
             range_label=f"History {display_date(date_utc)}",
             chunk_cache_dir=chunk_cache_dir,
+            parallel_shards=parallel_shards,
+            lsst_only=lsst_only,
             update_indexes=True,
             verbose=verbose,
         )
@@ -667,6 +728,8 @@ def run_nightly_update(
     fetch_lightcurves=HISTORY_FETCH_ALL_LIGHTCURVES,
     resume=HISTORY_RESUME_EXISTING_NIGHTS,
     chunk_cache_dir=None,
+    parallel_shards=CHUNK_PARALLEL_SHARDS,
+    lsst_only=LSST_ONLY,
     verbose=True,
 ):
     """
@@ -692,6 +755,8 @@ def run_nightly_update(
         resume=resume,
         range_label=f"Last Night {display_date(date_utc)}",
         chunk_cache_dir=chunk_cache_dir,
+        parallel_shards=parallel_shards,
+        lsst_only=lsst_only,
         prior_locus_ids=prior_ids,
         update_indexes=False,
         verbose=verbose,

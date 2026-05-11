@@ -21,6 +21,7 @@ lightcurve, cache, and validation helpers can keep working unchanged.
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
@@ -126,6 +127,104 @@ def _make_initial_chunks(mjd_min, mjd_max, initial_chunk_days):
     return chunks
 
 
+def make_parent_shards(mjd_min, mjd_max, n_shards):
+    """
+    Split an MJD interval into non-overlapping parent shards.
+
+    The returned rows are `(start, end, include_upper)`. Every shard is
+    half-open except the final shard, so exact boundary hits are owned once.
+    """
+    start = float(mjd_min)
+    end = float(mjd_max)
+    if start > end:
+        return []
+    n = max(1, int(n_shards or 1))
+    if n == 1 or start == end:
+        return [(start, end, True)]
+    width = (end - start) / n
+    shards = []
+    cursor = start
+    for idx in range(n):
+        shard_end = end if idx == n - 1 else start + width * (idx + 1)
+        shards.append((cursor, shard_end, idx == n - 1))
+        cursor = shard_end
+    return shards
+
+
+def _query_range_adaptive_parallel(label, mjd_min, mjd_max, parallel_shards,
+                                   **kwargs):
+    """Run adaptive ingestion independently inside fixed parent shards."""
+    shards = make_parent_shards(mjd_min, mjd_max, parallel_shards)
+    if len(shards) <= 1:
+        return query_range_adaptive(
+            label,
+            mjd_min,
+            mjd_max,
+            parallel_shards=1,
+            **kwargs,
+        )
+
+    target_loci = kwargs.get("target_loci")
+    verbose = kwargs.get("verbose", True)
+
+    # Each shard may stop once it has enough rows locally; the merged result is
+    # then de-duplicated and trimmed to the requested total. This preserves the
+    # speed benefit without querying an entire very dense night unnecessarily.
+    shard_kwargs = dict(kwargs)
+    shard_kwargs["parallel_shards"] = 1
+
+    if verbose:
+        print(f"  Parent shards: {len(shards)} non-overlapping workers")
+
+    frames = []
+    reports = []
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=len(shards)) as pool:
+        futures = {}
+        for idx, (start, end, include_upper) in enumerate(shards, start=1):
+            shard_label = f"{label} shard {idx}/{len(shards)}"
+            future = pool.submit(
+                query_range_adaptive,
+                label=shard_label,
+                mjd_min=start,
+                mjd_max=end,
+                include_upper_bound=include_upper,
+                **shard_kwargs,
+            )
+            futures[future] = (idx, start, end, include_upper)
+
+        for future in as_completed(futures):
+            idx, start, end, include_upper = futures[future]
+            df_shard, report_shard = future.result()
+            if not df_shard.empty:
+                df_shard = df_shard.copy()
+                df_shard["parent_shard"] = idx
+                frames.append(df_shard)
+            if report_shard is not None and not report_shard.empty:
+                report_shard = report_shard.copy()
+                report_shard["parent_shard"] = idx
+                report_shard["parent_mjd_min"] = start
+                report_shard["parent_mjd_max"] = end
+                report_shard["parent_include_upper"] = include_upper
+                reports.append(report_shard)
+
+    report_df = pd.concat(reports, ignore_index=True, sort=False) if reports else pd.DataFrame()
+    df_loci = _dedupe_loci(pd.concat(frames, ignore_index=True, sort=False)) if frames else pd.DataFrame()
+    if target_loci is not None and len(df_loci) > int(target_loci):
+        df_loci = df_loci.head(int(target_loci)).reset_index(drop=True)
+
+    if verbose:
+        elapsed = time.time() - t0
+        n_split = (report_df["status"] == "split").sum() if not report_df.empty else 0
+        n_sat = (report_df["status"] == "accepted_at_minimum_saturated").sum() if not report_df.empty else 0
+        print(f"  {label}: {len(df_loci):,} unique loci after shard merge "
+              f"({n_split} splits, {elapsed:.1f}s)")
+        if n_sat:
+            print(f"  [WARN] {n_sat} minimum-size chunks still reached the result cap.")
+
+    return df_loci, report_df
+
+
 def query_range_adaptive(label, mjd_min, mjd_max,
                          tag=None,
                          target_loci=None,
@@ -135,7 +234,10 @@ def query_range_adaptive(label, mjd_min, mjd_max,
                          split_threshold=DEFAULT_SPLIT_THRESHOLD,
                          chunk_cache_dir=None,
                          use_chunk_cache=True,
-                         verbose=True):
+                         verbose=True,
+                         lsst_only=True,
+                         parallel_shards=1,
+                         include_upper_bound=True):
     """
     Query an MJD range by adaptively splitting saturated time chunks.
 
@@ -155,6 +257,24 @@ def query_range_adaptive(label, mjd_min, mjd_max,
             print(f"  Skipping '{label}': MJDmin > MJDmax.")
         return pd.DataFrame(), pd.DataFrame()
 
+    if int(parallel_shards or 1) > 1:
+        return _query_range_adaptive_parallel(
+            label,
+            mjd_min,
+            mjd_max,
+            parallel_shards,
+            tag=tag,
+            target_loci=target_loci,
+            initial_chunk_days=initial_chunk_days,
+            min_chunk_seconds=min_chunk_seconds,
+            max_results_per_chunk=max_results_per_chunk,
+            split_threshold=split_threshold,
+            chunk_cache_dir=chunk_cache_dir,
+            use_chunk_cache=use_chunk_cache,
+            verbose=verbose,
+            lsst_only=lsst_only,
+        )
+
     min_chunk_days = seconds_to_mjd(min_chunk_seconds)
     initial_chunk_days = max(float(initial_chunk_days), min_chunk_days)
     split_threshold = min(int(split_threshold), int(max_results_per_chunk))
@@ -172,7 +292,7 @@ def query_range_adaptive(label, mjd_min, mjd_max,
 
     while pending:
         start, end = pending.pop(0)
-        include_upper = end >= mjd_max
+        include_upper = (end >= mjd_max) and include_upper_bound
         width_seconds = (end - start) * SECONDS_PER_DAY
         attempts += 1
 
@@ -197,6 +317,7 @@ def query_range_adaptive(label, mjd_min, mjd_max,
                     verbose=False,
                     include_upper=include_upper,
                     raise_on_error=True,
+                    lsst_only=lsst_only,
                 )
             except Exception as exc:
                 report_rows.append({

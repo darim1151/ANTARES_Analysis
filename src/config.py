@@ -19,6 +19,31 @@ import math
 from astropy.time import Time
 
 # ---------------------------------------------------------------------------
+# SURVEY / PLATFORM MODE
+# ---------------------------------------------------------------------------
+# The science path now targets LSST-associated ANTARES loci. ANTARES can merge
+# histories across surveys, so "lsst" means the locus has at least one LSST
+# survey identifier, not that it necessarily has no older ZTF association.
+SURVEY_MODE = os.getenv("ANTARES_SURVEY_MODE", "lsst").strip().lower()
+LSST_ONLY = os.getenv("ANTARES_LSST_ONLY", "1") != "0"
+
+
+def _default_history_root():
+    """Return the default persistent research-data root for Rubin Science Platform."""
+    user = os.getenv("USER") or os.getenv("JUPYTERHUB_USER") or "unknown_user"
+    return f"/project/{user}/ANTARES_Analysis"
+
+
+# Default Rubin alert-history start. MJD 61095.0 is 2026-02-24.
+LSST_HISTORY_START_MJD = float(os.getenv("ANTARES_LSST_HISTORY_START_MJD", "61095.0"))
+
+# Store LSST products separately from older broad/ZTF-era products.
+HISTORY_DATA_SUBDIR = os.getenv(
+    "ANTARES_HISTORY_DATA_SUBDIR",
+    "lsst_only" if LSST_ONLY else "all_antares",
+)
+
+# ---------------------------------------------------------------------------
 # CURRENT TIME ANCHOR
 # ---------------------------------------------------------------------------
 # AUTO_REALTIME_LAST_NIGHT controls whether Range 1 tracks the latest complete
@@ -76,7 +101,7 @@ LABEL1 = "Last Night"
 #   Range 2 off at MJD1_MIN the two windows are STRICTLY DISJOINT, which
 #   is what we want for an honest "tonight vs everything before tonight"
 #   comparison.
-MJD2_MIN = 60200.0
+MJD2_MIN = LSST_HISTORY_START_MJD
 MJD2_MAX = MJD1_MIN
 LABEL2 = "Cumulative LSST History"
 
@@ -124,17 +149,17 @@ CHUNK_MIN_SECONDS = 30.0
 CHUNK_MAX_RESULTS = 10000
 CHUNK_SPLIT_THRESHOLD = 9500
 
-# Approximate MJD when LSST science operations began. Used by the
-# validation suite to flag pre-LSST observations.
-LSST_START_MJD = 60200.0
+# Approximate MJD when Rubin/LSST alert products should be treated as valid
+# for this project. Used by validation to reject accidental ZTF-era backfills.
+LSST_START_MJD = LSST_HISTORY_START_MJD
 
 # ---------------------------------------------------------------------------
 # CUMULATIVE NIGHTLY HISTORY PARAMETERS
 # ---------------------------------------------------------------------------
-# Large historical products belong in Google Drive/Colab storage, not in the
-# GitHub repository. The history helper writes one partition per UTC night
-# under this root and maintains compact cumulative indexes beside them.
-HISTORY_DATA_ROOT = "/content/drive/MyDrive/ANTARES_Analysis"
+# Large historical products belong in persistent platform storage, not in the
+# GitHub repository. On Rubin Science Platform the default is /project/$USER;
+# set ANTARES_DATA_ROOT if your project allocation is elsewhere.
+HISTORY_DATA_ROOT = os.getenv("ANTARES_DATA_ROOT", _default_history_root())
 
 # Research target for historical backfill. If a night has fewer available
 # loci, the manifest records `under_target` rather than failing the run.
@@ -147,15 +172,23 @@ HISTORY_FETCH_ALL_LIGHTCURVES = True
 # Parallelism for the per-locus lightcurve fetch in history workflows.
 HISTORY_MAX_LIGHTCURVE_WORKERS = 16
 
+# Parallel parent shards for adaptive ANTARES locus ingestion. Each parent
+# shard is a non-overlapping MJD interval; adaptive splitting happens inside
+# the shard. Reduce to 2 if ANTARES begins returning timeouts/rate limits.
+CHUNK_PARALLEL_SHARDS = int(os.getenv("ANTARES_CHUNK_PARALLEL_SHARDS", "3"))
+
 # Resume interrupted Colab runs by skipping nightly partitions that already
 # have a manifest plus parquet outputs.
 HISTORY_RESUME_EXISTING_NIGHTS = True
 
-# Nightly comparison notebook behavior. Prefer the Drive-backed cumulative
+# Nightly comparison notebook behavior. Prefer the platform-backed cumulative
 # history built by notebooks/historical_backfill.ipynb, and load historical
 # alert parquet only when it exists. This avoids re-querying history.
-USE_DRIVE_CUMULATIVE_HISTORY = True
+USE_STORED_CUMULATIVE_HISTORY = True
 LOAD_CUMULATIVE_HISTORY_ALERTS = True
+
+# Backward-compatible alias used by older notebook cells.
+USE_DRIVE_CUMULATIVE_HISTORY = USE_STORED_CUMULATIVE_HISTORY
 
 
 def validate_mjd_range(label, mjd_min, mjd_max):
@@ -193,6 +226,9 @@ def print_config_summary():
         status = "OK" if valid else "INVALID (will be skipped)"
         print(f"  {label}: MJD {lo:.1f} - {hi:.1f}  ({span:.1f} days)  [{status}]")
     print(f"  Samples per range : {N_SAMPLES}")
+    print(f"  Survey mode       : {SURVEY_MODE}")
+    print(f"  LSST-only filter  : {'ON' if LSST_ONLY else 'OFF'}")
+    print(f"  LSST history start: MJD {LSST_HISTORY_START_MJD:.1f}")
     print(f"  Tag filter        : {QUERY_TAG if QUERY_TAG else 'none (all alerts)'}")
     print(f"  Random seed       : {RANDOM_SEED}")
     print(f"  Realtime night    : {'ON' if AUTO_REALTIME_LAST_NIGHT else 'OFF'}")
@@ -206,11 +242,13 @@ def print_config_summary():
         print(f"  Chunk start size  : {CHUNK_INITIAL_DAYS:g} day(s)")
         print(f"  Chunk min size    : {CHUNK_MIN_SECONDS:g} sec")
         print(f"  Chunk split at    : {CHUNK_SPLIT_THRESHOLD:,}/{CHUNK_MAX_RESULTS:,} loci")
+        print(f"  Parallel shards   : {CHUNK_PARALLEL_SHARDS}")
         print(f"  History backfill  : {'ON' if CHUNKED_BACKFILL_HISTORY else 'OFF'}")
     print(f"  History data root : {HISTORY_DATA_ROOT}")
+    print(f"  History data set  : {HISTORY_DATA_SUBDIR}")
     print(f"  History target    : {HISTORY_TARGET_LOCI:,} loci/night")
     print(f"  History LC fetch  : {'ON' if HISTORY_FETCH_ALL_LIGHTCURVES else 'OFF'}")
-    print(f"  Use Drive history : {'ON' if USE_DRIVE_CUMULATIVE_HISTORY else 'OFF'}")
+    print(f"  Use stored history: {'ON' if USE_DRIVE_CUMULATIVE_HISTORY else 'OFF'}")
     # Spell out the disjointness check so a reviewer can verify the
     # "no overlap" property at a glance.
     overlap = "NON-overlapping" if MJD1_MIN >= MJD2_MAX else "OVERLAPPING"

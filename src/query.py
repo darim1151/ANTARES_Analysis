@@ -22,6 +22,93 @@ expensive one (one HTTP request per locus).
 import pandas as pd
 from antares_client.search import search as antares_search
 
+LSST_DIA_FIELD = "properties.survey.lsst.dia_object_id"
+LSST_SS_FIELD = "properties.survey.lsst.ss_object_id"
+ZTF_OBJECT_ID_COL = "ztf_object_id"
+
+
+def lsst_identifier_filter():
+    """
+    Return the ANTARES/ElasticSearch filter for LSST-associated loci.
+
+    ANTARES can merge multi-survey history into one locus. This filter means
+    "has an LSST DIA-object or Solar-System identifier", not "has no ZTF data".
+    """
+    return {
+        "bool": {
+            "should": [
+                {"exists": {"field": LSST_DIA_FIELD}},
+                {"exists": {"field": LSST_SS_FIELD}},
+            ],
+            "minimum_should_match": 1,
+        }
+    }
+
+
+def _nonempty(value):
+    """Return True for scalar/list-like values that carry real content."""
+    if value is None:
+        return False
+    if isinstance(value, float) and pd.isna(value):
+        return False
+    if isinstance(value, (list, tuple, set)):
+        return any(_nonempty(item) for item in value)
+    return str(value).strip() != ""
+
+
+def _survey_lsst_dict(value):
+    """Extract the nested LSST survey dict from an ANTARES survey property."""
+    if not isinstance(value, dict):
+        return {}
+    lsst = value.get("lsst", {})
+    return lsst if isinstance(lsst, dict) else {}
+
+
+def lsst_identifier_counts(df):
+    """Count LSST DIA, LSST Solar-System, and ZTF IDs in a loci DataFrame."""
+    counts = {
+        "lsst_dia_count": 0,
+        "lsst_ss_count": 0,
+        "lsst_identifier_count": 0,
+        "ztf_object_id_count": 0,
+    }
+    if df is None or df.empty:
+        return counts
+
+    dia_mask = pd.Series(False, index=df.index)
+    ss_mask = pd.Series(False, index=df.index)
+
+    if "survey" in df.columns:
+        dia_mask = df["survey"].map(
+            lambda survey: _nonempty(_survey_lsst_dict(survey).get("dia_object_id"))
+        )
+        ss_mask = df["survey"].map(
+            lambda survey: _nonempty(_survey_lsst_dict(survey).get("ss_object_id"))
+        )
+
+    for col in ["survey.lsst.dia_object_id", "lsst_dia_object_id", "dia_object_id"]:
+        if col in df.columns:
+            dia_mask = dia_mask | df[col].map(_nonempty)
+    for col in ["survey.lsst.ss_object_id", "lsst_ss_object_id", "ss_object_id"]:
+        if col in df.columns:
+            ss_mask = ss_mask | df[col].map(_nonempty)
+
+    ztf_mask = pd.Series(False, index=df.index)
+    if ZTF_OBJECT_ID_COL in df.columns:
+        ztf_mask = ztf_mask | df[ZTF_OBJECT_ID_COL].map(_nonempty)
+    if "survey" in df.columns:
+        ztf_mask = ztf_mask | df["survey"].map(
+            lambda survey: _nonempty(survey.get("ztf", {}).get("id"))
+            if isinstance(survey, dict) and isinstance(survey.get("ztf", {}), dict)
+            else False
+        )
+
+    counts["lsst_dia_count"] = int(dia_mask.sum())
+    counts["lsst_ss_count"] = int(ss_mask.sum())
+    counts["lsst_identifier_count"] = int((dia_mask | ss_mask).sum())
+    counts["ztf_object_id_count"] = int(ztf_mask.sum())
+    return counts
+
 
 def locus_to_record(locus):
     """
@@ -48,7 +135,8 @@ def locus_to_record(locus):
     return record
 
 
-def build_query(mjd_min, mjd_max, tag=None, seed=None, include_upper=True):
+def build_query(mjd_min, mjd_max, tag=None, seed=None, include_upper=True,
+                lsst_only=True):
     """
     Build the ElasticSearch query body for an MJD window.
 
@@ -84,6 +172,8 @@ def build_query(mjd_min, mjd_max, tag=None, seed=None, include_upper=True):
         "properties.newest_alert_observation_time": {"gte": mjd_min, upper_op: mjd_max}
     }}
     filters = [mjd_filter]
+    if lsst_only:
+        filters.append(lsst_identifier_filter())
     if tag:
         # ANTARES tags live on the locus; a `term` clause is an exact match.
         filters.append({"term": {"tags": tag}})
@@ -106,7 +196,7 @@ def build_query(mjd_min, mjd_max, tag=None, seed=None, include_upper=True):
 
 def query_range(label, mjd_min, mjd_max, n_samples,
                 tag=None, seed=None, verbose=True, include_upper=True,
-                raise_on_error=False):
+                raise_on_error=False, lsst_only=True):
     """
     Execute the ANTARES query and return up to `n_samples` loci as a DataFrame.
 
@@ -142,11 +232,19 @@ def query_range(label, mjd_min, mjd_max, n_samples,
                 break
         return recs, errs
 
-    query = build_query(mjd_min, mjd_max, tag=tag, seed=seed, include_upper=include_upper)
+    query = build_query(
+        mjd_min,
+        mjd_max,
+        tag=tag,
+        seed=seed,
+        include_upper=include_upper,
+        lsst_only=lsst_only,
+    )
     mode = f"random (seed={seed})" if seed is not None else "newest-first"
+    survey_mode = "LSST-only" if lsst_only else "all ANTARES"
     if verbose:
         print(f"  Querying '{label}'  MJD [{mjd_min:.1f}, {mjd_max:.1f}]  "
-              f"n={n_samples}  [{mode}] ...", end=" ", flush=True)
+              f"n={n_samples}  [{mode}; {survey_mode}] ...", end=" ", flush=True)
 
     records, errors = [], 0
     try:
@@ -160,7 +258,12 @@ def query_range(label, mjd_min, mjd_max, n_samples,
                 print(f"\n  [WARN] random_score query failed ({exc}); "
                       "retrying without randomisation ...")
             fallback = build_query(
-                mjd_min, mjd_max, tag=tag, seed=None, include_upper=include_upper
+                mjd_min,
+                mjd_max,
+                tag=tag,
+                seed=None,
+                include_upper=include_upper,
+                lsst_only=lsst_only,
             )
             try:
                 records, errors = _collect(fallback, n_samples)
@@ -209,7 +312,8 @@ def query_both_ranges_parallel(range1_args, range2_args):
 
 
 def find_latest_populated_mjd_window(label, mjd_min, mjd_max,
-                                     max_days=5, tag=None, verbose=True):
+                                     max_days=5, tag=None, verbose=True,
+                                     lsst_only=True):
     """
     Return the newest recent 1-day MJD window with at least one ANTARES locus.
 
@@ -233,6 +337,7 @@ def find_latest_populated_mjd_window(label, mjd_min, mjd_max,
                 tag=tag,
                 seed=None,
                 verbose=False,
+                lsst_only=lsst_only,
             )
             n_probe = len(probe)
         except Exception as exc:

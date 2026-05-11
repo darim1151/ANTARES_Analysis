@@ -10,7 +10,7 @@ Module map:
     config       - MJD windows, sample sizes, validation of ranges
     query        - ANTARES locus-level queries (with random_score)
     chunked_query - Adaptive chunked ingestion for complete nightly updates
-    history      - Drive-backed cumulative nightly history pipeline
+    history      - Platform-backed cumulative nightly history pipeline
     lightcurves  - Parallel per-locus lightcurve fetching
     cache        - Parquet load/save keyed by query parameters
     summary      - Human-readable summary statistics

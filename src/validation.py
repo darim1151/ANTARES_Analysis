@@ -25,7 +25,8 @@ Tests rationale:
 
 import pandas as pd
 
-from .config import LSST_START_MJD
+from . import query
+from .config import LSST_ONLY, LSST_START_MJD
 from .lightcurves import LC_FID, LC_MAG
 
 
@@ -139,31 +140,45 @@ def run_validation_suite(df1, df2, df1_alerts, df2_alerts,
     # reprocesses ZTF data. We only WARN if more than 5% predate the
     # nominal LSST start - that hints the query mis-targeted ZTF
     # archival objects rather than fresh LSST alerts.
-    print(f'\n[4] LSST-era verification  (obs time >= MJD {LSST_START_MJD})')
+    print(f'\n[4] LSST identity and era verification  (obs time >= MJD {LSST_START_MJD})')
     for df, valid, lbl in [(df1, range1_valid, label1), (df2, range2_valid, label2)]:
-        if not valid or df.empty or MJD_COL not in df.columns:
+        if not valid or df.empty:
             continue
-        mjds = df[MJD_COL].dropna()
-        pre = (mjds < LSST_START_MJD).sum()
-        frac = pre / len(mjds) if len(mjds) else 0.0
-        check(
-            f'{lbl}: >=95% of loci in LSST era  ({pre} pre-LSST of {len(mjds)})',
-            frac < 0.05,
-            f'{frac:.1%} of loci pre-date MJD {LSST_START_MJD} (may be ZTF objects).',
-            warn=True,
-        )
+        counts = query.lsst_identifier_counts(df)
+        if LSST_ONLY:
+            check(
+                f'{lbl}: every locus has an LSST DIA or SS identifier  '
+                f'({counts["lsst_identifier_count"]}/{len(df)})',
+                counts["lsst_identifier_count"] == len(df),
+                'This run is configured as LSST-only, but some loci lack LSST identifiers.',
+            )
+        else:
+            check(
+                f'{lbl}: at least one LSST-associated locus is present',
+                counts["lsst_identifier_count"] > 0,
+                'No LSST identifiers found in this range.',
+                warn=True,
+            )
+        if counts["ztf_object_id_count"]:
+            check(
+                f'{lbl}: LSST-associated loci may also carry ZTF IDs  '
+                f'({counts["ztf_object_id_count"]} rows)',
+                False,
+                'ANTARES can merge multi-survey history; this is expected but should be noted.',
+                warn=True,
+            )
+        if MJD_COL in df.columns:
+            mjds = df[MJD_COL].dropna()
+            pre = (mjds < LSST_START_MJD).sum()
+            check(
+                f'{lbl}: no loci before Rubin alert-history start  '
+                f'({pre} before MJD {LSST_START_MJD})',
+                pre == 0,
+                f'{pre} loci pre-date MJD {LSST_START_MJD}; check MJD2_MIN/history start.',
+            )
 
-    # Informational: print any LSST-/Rubin-specific properties we found
-    # so the user knows whether genuine LSST schema is in play.
-    lsst_cols = sorted(set(
-        c for c in list(df1.columns) + list(df2.columns)
-        if 'lsst' in c.lower() or 'rubin' in c.lower()
-    ))
-    if lsst_cols:
-        print(f'  [INFO]  LSST-specific property columns: {lsst_cols}')
-    else:
-        print('  [INFO]  No lsst_*/rubin_* columns found; data is ZTF-origin '
-              'processed during the LSST era.')
+    print('  [INFO]  LSST identity counts use survey.lsst.dia_object_id and '
+          'survey.lsst.ss_object_id when present.')
     combined = pd.concat([df1, df2], ignore_index=True)
     if not combined.empty and 'tags' in combined.columns:
         ddf = combined['tags'].str.contains('in_LSSTDDF', na=False).sum()
