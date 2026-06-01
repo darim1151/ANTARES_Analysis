@@ -1,19 +1,25 @@
 # ANTARES Analysis
 
-LSST-only ANTARES workflows for building a cumulative historical data store and comparing a newly completed observing night against prior history.
+LSST-only ANTARES workflows for building a cumulative historical alert-era data store and comparing a real-time completed night against that stored history.
 
-This project uses ANTARES as the broker/source of alert and locus data. The Rubin Science Platform (RSP) is used for compute and storage; this is not a direct Rubin Butler or TAP pipeline.
+This project still uses ANTARES as the broker/source. Rubin Science Platform is used for compute and storage, not as a direct Rubin Butler/TAP replacement.
 
-## Project Structure
+## What This Project Does
 
-- `notebooks/historical_backfill.ipynb` builds and validates full-night historical LSST-associated ANTARES partitions.
-- `notebooks/alerts_time_comparison.ipynb` extracts a completed comparison night and compares it against prior cumulative history.
-- `notebooks/rsp_setup.ipynb` provides setup and connectivity checks.
-- `src/` contains shared configuration, query, chunking, and history helpers used by the notebooks.
+The pipeline has two main jobs:
 
-## LSST-Only Selection
+1. Build historical LSST-associated ANTARES nightly partitions.
+2. Compare the newest completed ANTARES/LSST night against prior cumulative history.
 
-The analysis keeps ANTARES loci that have at least one Rubin/LSST survey identifier:
+Use these notebooks:
+
+- `notebooks/historical_backfill.ipynb`: full-night historical backfill and cumulative index maintenance.
+- `notebooks/alerts_time_comparison.ipynb`: real-time last-night extraction and comparison against the historical backfill.
+- `notebooks/rsp_setup.ipynb`: optional setup/probe checks for imports, storage, and ANTARES connectivity.
+
+## LSST-Only Rule
+
+The project keeps ANTARES loci where at least one Rubin/LSST survey identifier exists:
 
 ```json
 {
@@ -27,20 +33,20 @@ The analysis keeps ANTARES loci that have at least one Rubin/LSST survey identif
 }
 ```
 
-This means **LSST-associated ANTARES loci**. ANTARES may merge multi-survey histories into one locus, so an LSST-associated locus can still contain older ZTF identifiers or ZTF-era lightcurve history. The manifests track LSST and ZTF identifier counts for validation.
+This means "LSST-associated ANTARES loci." It does not mean direct Rubin Science Platform catalog data, and it does not guarantee the locus has no older ZTF history. ANTARES can merge multi-survey histories into one locus, so some LSST-associated loci can still carry ZTF identifiers. The manifests record those counts for transparency.
 
-## Data Storage
+## Storage Layout
 
-Large parquet products are intentionally kept outside GitHub. On RSP, the default data root is:
+Do not store parquet or manifest products in GitHub. On RSP, use:
 
 ```text
-/home/mdarim/ANTARES_Analysis_Data
+/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data
 ```
 
 Expected layout:
 
 ```text
-ANTARES_Analysis_Data/
+/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data/
   data/lsst_only/nightly/YYYY/MM/DD/loci.parquet
   data/lsst_only/nightly/YYYY/MM/DD/alerts.parquet
   data/lsst_only/nightly/YYYY/MM/DD/manifest.json
@@ -49,99 +55,94 @@ ANTARES_Analysis_Data/
   cache/
 ```
 
-For shared RSP use, copy the `ANTARES_Analysis_Data` directory to a shared writable project location and set `DATA_ROOT` in the notebooks to that path. The `data/` directory is required for analysis; `cache/` is useful for resuming extraction but is not required for reading completed results.
+Avoid `/project` for this workflow unless your RSP session definitely has writable project storage.
 
-## Loci and Alert Rows
+## Loci vs Alert/Lightcurve Rows
 
-- A **locus** is one ANTARES object record.
-- A **lightcurve** is the alert-level photometric history associated with a locus.
-- One locus can correspond to many alert/lightcurve rows.
+- A locus is one ANTARES object/sky position.
+- A lightcurve is the per-alert photometric history for one locus.
+- One locus can produce many alert/lightcurve rows.
 
-Most sky-position plots show loci, not individual alert rows, so plotted point counts can be much smaller than the number of extracted alert rows.
+Sky plots usually show loci, so the number of plotted points can be much smaller than the number of alert rows.
 
-## Historical Backfill Workflow
+## Recommended RSP Workflow
 
-Use `notebooks/historical_backfill.ipynb` to continue the LSST-only historical store.
+1. Start an RSP Large server.
+2. Open a terminal and go to the repo:
 
-In normal use, edit only the user settings cell:
+   ```bash
+   cd /home/mdarim/notebooks/ANTARES_Analysis
+   ```
+
+3. Pull the notebook or docs you need from GitHub.
+4. Optional: run `notebooks/rsp_setup.ipynb` to verify imports and an LSST-only ANTARES probe.
+5. Run `notebooks/historical_backfill.ipynb` to continue historical full-night extraction.
+6. Run `notebooks/alerts_time_comparison.ipynb` to compare the newest completed night against prior historical backfill.
+
+## Historical Backfill
+
+Open `notebooks/historical_backfill.ipynb`.
+
+Edit only the **User Settings** cell for normal use:
 
 ```python
-DATA_ROOT = Path("/home/mdarim/ANTARES_Analysis_Data")
 MJD_START = 61103.0
 MJD_STOP = 61104.0
 RESUME_EXISTING_NIGHT = True
 FETCH_LIGHTCURVES = True
 ```
 
-MJD ranges are half-open: `[MJD_START, MJD_STOP)`.
+The MJD window is half-open: `[MJD_START, MJD_STOP)`.
 
-The current extraction strategy is probe-first tiling:
+Examples:
 
-- Query time/RA/Dec tiles.
+- `61096.0 -> 61097.0` is UTC date `2026-02-25`.
+- `61102.0 -> 61103.0` is UTC date `2026-03-03`.
+
+The notebook uses the current working probe-first strategy:
+
+- Query small time/RA/Dec tiles.
 - Accept a tile only when it returns fewer than the probe threshold.
 - Split dense tiles automatically.
-- Stop rather than silently accepting an incomplete saturated final tile.
-- Use cache files to resume repeated ANTARES and lightcurve requests.
+- Refuse to mark a night complete if a final tile is still saturated.
+- Cache tile and lightcurve requests so interrupted runs can resume.
 
-After each successful night, cumulative indexes are rebuilt from saved nightly parquet and manifest files.
+## Real-Time Comparison
 
-## Real-Time Comparison Workflow
+Open `notebooks/alerts_time_comparison.ipynb`.
 
-Use `notebooks/alerts_time_comparison.ipynb` to compare a completed comparison night against prior cumulative history.
+The notebook:
 
-The comparison workflow:
+1. Reads the stored historical backfill.
+2. Selects or accepts a real-time completed night.
+3. Extracts that night with the same LSST-only probe-first strategy.
+4. Fetches full lightcurves.
+5. Compares the night against prior cumulative history.
 
-1. Reads the existing historical backfill from `DATA_ROOT`.
-2. Selects or accepts a completed comparison night.
-3. Extracts LSST-associated ANTARES loci for that night.
-4. Fetches lightcurves when enabled.
-5. Compares the current night against prior cumulative loci and alert rows.
+Do not use `historical_backfill.ipynb` for real-time comparison; keep the roles separate.
 
-Keep historical backfill and real-time comparison as separate notebook workflows.
+## Pull Only the Historical Backfill Notebook on RSP
 
-## Running on RSP
-
-Clone or update the repository on RSP:
+After changes are pushed to GitHub:
 
 ```bash
-cd /home/mdarim/notebooks
-git clone https://github.com/darim1151/ANTARES_Analysis.git
-cd ANTARES_Analysis
-git pull --ff-only
+cd /home/mdarim/notebooks/ANTARES_Analysis
+git fetch origin
+git checkout origin/main -- notebooks/historical_backfill.ipynb
 ```
 
-Open notebooks from:
+If you also want the README update:
 
-```text
-/home/mdarim/notebooks/ANTARES_Analysis/notebooks
+```bash
+git checkout origin/main -- README.md
 ```
 
-The notebooks set the project import path explicitly so they can run whether Jupyter starts in the repo root or inside the `notebooks/` directory.
-
-## Shared Data Use
-
-To let another RSP user run analysis without repeating the backfill:
-
-1. Copy the completed data store to shared storage.
-2. Preserve the `ANTARES_Analysis_Data` directory layout.
-3. Set `DATA_ROOT` in the notebooks to the shared path.
-4. Rebuild cumulative indexes from the shared nightly files:
-
-```python
-from pathlib import Path
-from src import history
-
-DATA_ROOT = Path("/shared/path/ANTARES_Analysis_Data")
-loci_index, nightly_summary = history.update_cumulative_indexes(DATA_ROOT)
-```
-
-This rebuild step reads saved parquet and manifest files; it does not query ANTARES.
+Do not pull `notebooks/alerts_time_comparison.ipynb` unless you intentionally want to update the comparison workflow.
 
 ## Operational Notes
 
-- Do not commit parquet data, manifests, or cache products to GitHub.
-- Do not use Colab-only paths or `google.colab` drive mounting on RSP.
-- Avoid `/content` paths on RSP.
-- Avoid `/project` unless a writable shared project allocation is available.
-- Keep `RESUME_EXISTING_NIGHT=True` for normal historical backfill continuation.
-- Treat saved nightly parquet and manifests as the source of truth for completed nights.
+- Do not run old Colab-only cells such as `google.colab` drive mounting on RSP.
+- Do not use `/content` paths on RSP.
+- Keep `RESUME_EXISTING_NIGHT=True` for normal historical work.
+- The cumulative indexes are safe to rebuild; they are derived from saved nightly manifests and parquet files.
+- If a notebook reports an unexpected date in the data store, inspect it before using it in science comparisons. The backfill notebook does not remove or relocate data.
