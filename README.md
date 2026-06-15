@@ -121,6 +121,44 @@ The notebook:
 
 Do not use `historical_backfill.ipynb` for real-time comparison; keep the roles separate.
 
+## Feature-Space Diagnostics
+
+The real-time comparison notebook also contains an optional feature-space
+analysis for ANTARES locus properties:
+
+- `feature_chi2_magn_r` versus `feature_standard_deviation_magn_r`.
+- Weighted-mean `ugrizy` color-magnitude and color-color diagrams.
+- Robust summaries, KS statistics, two-dimensional Jensen-Shannon divergence,
+  and a deterministic permutation test.
+- Multi-label subsets for sufficiently populated ANTARES tags.
+
+The analysis first audits the schemas of saved nightly `loci.parquet` files.
+It reads only the requested columns and builds a compact, rebuildable table at:
+
+```text
+/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data/
+  data/lsst_only/analysis/locus_feature_snapshots.parquet
+  data/lsst_only/analysis/locus_feature_snapshots_manifest.json
+```
+
+No ANTARES query or alert refetch is performed by this feature analysis.
+If the requested properties were not saved in the nightly locus files, the
+notebook writes and displays the coverage audit and skips unavailable panels.
+
+Historical distributions use one row per unique locus: the latest saved
+snapshot strictly before the current comparison night. Generated tables,
+metadata, and PNG figures are written outside Git under:
+
+```text
+/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data/
+  analysis/nightly_comparison/YYYY-MM-DD/feature_diagnostics/
+```
+
+These are ANTARES locus-level broker features. They may summarize accumulated
+multi-survey history associated with a locus and must not be described as
+measurements restricted to the selected UTC night. Features with less than
+80% finite-value coverage are marked as exploratory in the saved metadata.
+
 ## Pull Only the Historical Backfill Notebook on RSP
 
 After changes are pushed to GitHub:
