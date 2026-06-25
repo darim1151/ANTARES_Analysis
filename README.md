@@ -40,13 +40,13 @@ This means "LSST-associated ANTARES loci." It does not mean direct Rubin Science
 Do not store parquet or manifest products in GitHub. On RSP, use:
 
 ```text
-/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data
+/home/mdarim/AntaresAlerts/ANTARES_Analysis_Data
 ```
 
 Expected layout:
 
 ```text
-/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data/
+/home/mdarim/AntaresAlerts/ANTARES_Analysis_Data/
   data/lsst_only/nightly/YYYY/MM/DD/loci.parquet
   data/lsst_only/nightly/YYYY/MM/DD/alerts.parquet
   data/lsst_only/nightly/YYYY/MM/DD/manifest.json
@@ -80,9 +80,9 @@ If the preflight fails, fix the shared directory once instead of manually
 `chmod`-ing individual outputs after each run. The usual owner/admin repair is:
 
 ```bash
-chgrp -R g_antares_analysis /home/ivezic/AntaresAlerts/ANTARES_Analysis_Data
-chmod -R g+rwX /home/ivezic/AntaresAlerts/ANTARES_Analysis_Data
-find /home/ivezic/AntaresAlerts/ANTARES_Analysis_Data -type d -exec chmod g+s {} \;
+chgrp -R g_antares_analysis /home/mdarim/AntaresAlerts/ANTARES_Analysis_Data
+chmod -R g+rwX /home/mdarim/AntaresAlerts/ANTARES_Analysis_Data
+find /home/mdarim/AntaresAlerts/ANTARES_Analysis_Data -type d -exec chmod g+s {} \;
 ```
 
 The code deliberately avoids world-writable permissions. It sets a cooperative
@@ -180,7 +180,7 @@ The analysis first audits the schemas of saved nightly `loci.parquet` files.
 It reads only the requested columns and builds a compact, rebuildable table at:
 
 ```text
-/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data/
+/home/mdarim/AntaresAlerts/ANTARES_Analysis_Data/
   data/lsst_only/analysis/locus_feature_snapshots.parquet
   data/lsst_only/analysis/locus_feature_snapshots_manifest.json
 ```
@@ -194,7 +194,7 @@ snapshot strictly before the current comparison night. Generated tables,
 metadata, and PNG figures are written outside Git under:
 
 ```text
-/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data/
+/home/mdarim/AntaresAlerts/ANTARES_Analysis_Data/
   analysis/nightly_comparison/YYYY-MM-DD/feature_diagnostics/
 ```
 

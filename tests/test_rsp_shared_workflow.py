@@ -28,7 +28,7 @@ class RspSharedWorkflowTests(unittest.TestCase):
     def test_config_defaults_and_env_override(self):
         self.assertEqual(
             config.DEFAULT_DATA_ROOT,
-            Path("/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data"),
+            Path("/home/mdarim/AntaresAlerts/ANTARES_Analysis_Data"),
         )
         with tempfile.TemporaryDirectory() as tmp:
             env = os.environ.copy()
@@ -102,7 +102,7 @@ class RspSharedWorkflowTests(unittest.TestCase):
         ]
         forbidden = [
             'os.environ["ANTARES_DATA_ROOT"]',
-            'DATA_ROOT = Path("/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data")',
+            'DATA_ROOT = Path("/home/mdarim/AntaresAlerts/ANTARES_Analysis_Data")',
             "google.colab",
             "/content",
             "drive.mount",

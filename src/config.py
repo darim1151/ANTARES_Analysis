@@ -25,7 +25,7 @@ from astropy.time import Time
 # Generated ANTARES products are large, shared research artifacts. They belong
 # in the shared RSP data root by default, not in the Git repository checkout.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DATA_ROOT = Path("/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data")
+DEFAULT_DATA_ROOT = Path("/home/mdarim/AntaresAlerts/ANTARES_Analysis_Data")
 
 
 def _configured_data_root():
