@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
-from . import query
+from . import query, rsp_permissions
 
 
 SECONDS_PER_DAY = 86400.0
@@ -86,8 +86,11 @@ def _chunk_cache_path(cache_dir, label, start, end, tag):
 def _read_cached_chunk(path):
     """Load one cached chunk if it exists; otherwise return None."""
     if not path or not os.path.exists(path):
+        if path:
+            print(f"  [cache miss] {path}")
         return None
     try:
+        print(f"  [cache hit] {path}")
         return pd.read_parquet(path)
     except Exception as exc:
         print(f"  [WARN] Could not read chunk cache {path}: {exc}")
@@ -101,8 +104,10 @@ def _write_cached_chunk(path, df):
     if df.empty and len(df.columns) == 0:
         # Pandas cannot always infer a parquet schema for a fully empty frame.
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    rsp_permissions.ensure_group_shared_path(os.path.dirname(path))
     df.to_parquet(path, index=False)
+    rsp_permissions.mark_file_group_writable(path)
+    print(f"  [cache write] {path}")
 
 
 def _dedupe_loci(df):
@@ -449,8 +454,9 @@ def update_cumulative_loci(cumulative_path, df_new,
         df_all = df_all.drop_duplicates(subset=[id_col], keep="last")
     df_all = df_all.reset_index(drop=True)
 
-    os.makedirs(os.path.dirname(cumulative_path) or ".", exist_ok=True)
+    rsp_permissions.ensure_group_shared_path(os.path.dirname(cumulative_path) or ".")
     df_all.to_parquet(cumulative_path, index=False)
+    rsp_permissions.mark_file_group_writable(cumulative_path)
 
     return df_all, {
         "old_rows": old_rows,

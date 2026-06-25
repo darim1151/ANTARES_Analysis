@@ -23,7 +23,7 @@ from pathlib import Path
 import pandas as pd
 from astropy.time import Time
 
-from . import chunked_query, lightcurves, query
+from . import chunked_query, lightcurves, query, rsp_permissions
 from .config import (
     CHUNK_INITIAL_DAYS,
     CHUNK_MAX_RESULTS,
@@ -148,16 +148,18 @@ def read_manifest(data_root, date_utc):
 
 def _write_json(path, payload):
     """Write a JSON file with stable indentation."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    rsp_permissions.ensure_group_shared_path(path.parent)
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
+    rsp_permissions.mark_file_group_writable(path)
 
 
 def _safe_to_parquet(df, path):
     """Write a DataFrame to parquet, creating parent directories first."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    rsp_permissions.ensure_group_shared_path(path.parent)
     df.to_parquet(path, index=False)
+    rsp_permissions.mark_file_group_writable(path)
 
 
 def _empty_alerts_frame():
@@ -543,7 +545,7 @@ def update_cumulative_indexes(data_root=HISTORY_DATA_ROOT, require_append_ready=
     included in the cumulative loci index.
     """
     paths = cumulative_paths(data_root)
-    paths["dir"].mkdir(parents=True, exist_ok=True)
+    rsp_permissions.ensure_group_shared_path(paths["dir"])
 
     manifests = []
     loci_frames = []

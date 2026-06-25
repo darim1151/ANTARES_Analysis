@@ -23,6 +23,11 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src import config  # noqa: E402
+
 DEFAULT_OUT = ROOT / "web" / "public" / "data"
 DEFAULT_SAMPLE = ROOT / "data" / "antares_raw_data.csv"
 DEFAULT_MANIFEST = ROOT / "data" / "manifest_example.json"
@@ -1085,7 +1090,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--demo", action="store_true", help="Use local CSV/sample manifest demo mode.")
-    mode.add_argument("--data-root", type=Path, help="RSP export root, e.g. /home/ivezic/AntaresAlerts/ANTARES_Analysis_Data.")
+    mode.add_argument("--data-root", type=Path, help=f"RSP export root, e.g. {config.DATA_ROOT}.")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--latest", action="store_true", help="Select the latest usable nightly partition in RSP mode.")
     selection.add_argument("--date", help="Select a specific UTC night, e.g. 2026-05-30.")
@@ -1104,9 +1109,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-source-paths", action="store_true", help="Include absolute source paths in JSON for private debugging only.")
     args = parser.parse_args()
 
-    if args.data_root is None:
-        args.demo = True
-    elif not args.latest and not args.date:
+    if args.data_root is None and not args.demo:
+        parser.error("Choose --data-root for RSP production export or --demo explicitly.")
+    if args.data_root is not None and not args.latest and not args.date:
         args.latest = True
     args.out = args.out.resolve()
     if args.data_root is not None:

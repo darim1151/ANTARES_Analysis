@@ -13,10 +13,42 @@ WHY MJD (Modified Julian Date)?
     to/from calendar dates only happens at the edges (titles, log lines).
 """
 
-import os
 import math
+import os
+from pathlib import Path
 
 from astropy.time import Time
+
+# ---------------------------------------------------------------------------
+# RSP / REPOSITORY PATHS
+# ---------------------------------------------------------------------------
+# Generated ANTARES products are large, shared research artifacts. They belong
+# in the shared RSP data root by default, not in the Git repository checkout.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DATA_ROOT = Path("/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data")
+
+
+def _configured_data_root():
+    """Return the configured shared data root.
+
+    ANTARES_ANALYSIS_DATA_ROOT is the canonical override. ANTARES_DATA_ROOT is
+    still accepted for older notebooks and shell sessions.
+    """
+    override = os.getenv("ANTARES_ANALYSIS_DATA_ROOT") or os.getenv("ANTARES_DATA_ROOT")
+    return Path(override).expanduser() if override else DEFAULT_DATA_ROOT
+
+
+DATA_ROOT = _configured_data_root()
+CACHE_ROOT = DATA_ROOT / "cache"
+LSST_ONLY_ROOT = DATA_ROOT / "data" / "lsst_only"
+NIGHTLY_ROOT = LSST_ONLY_ROOT / "nightly"
+CUMULATIVE_ROOT = LSST_ONLY_ROOT / "cumulative"
+ANALYSIS_ROOT = DATA_ROOT / "analysis"
+FEATURE_SNAPSHOT_PATH = LSST_ONLY_ROOT / "analysis" / "locus_feature_snapshots.parquet"
+FEATURE_SNAPSHOT_MANIFEST_PATH = (
+    LSST_ONLY_ROOT / "analysis" / "locus_feature_snapshots_manifest.json"
+)
+EXPECTED_SHARED_GROUP = os.getenv("ANTARES_SHARED_GROUP", "g_antares_analysis")
 
 # ---------------------------------------------------------------------------
 # SURVEY / PLATFORM MODE
@@ -26,12 +58,6 @@ from astropy.time import Time
 # survey identifier, not that it necessarily has no older ZTF association.
 SURVEY_MODE = os.getenv("ANTARES_SURVEY_MODE", "lsst").strip().lower()
 LSST_ONLY = os.getenv("ANTARES_LSST_ONLY", "1") != "0"
-
-
-def _default_history_root():
-    """Return the default persistent research-data root for Rubin Science Platform."""
-    user = os.getenv("USER") or os.getenv("JUPYTERHUB_USER") or "unknown_user"
-    return f"/project/{user}/ANTARES_Analysis"
 
 
 # Default Rubin alert-history start. MJD 61095.0 is 2026-02-24.
@@ -156,10 +182,8 @@ LSST_START_MJD = LSST_HISTORY_START_MJD
 # ---------------------------------------------------------------------------
 # CUMULATIVE NIGHTLY HISTORY PARAMETERS
 # ---------------------------------------------------------------------------
-# Large historical products belong in persistent platform storage, not in the
-# GitHub repository. On Rubin Science Platform the default is /project/$USER;
-# set ANTARES_DATA_ROOT if your project allocation is elsewhere.
-HISTORY_DATA_ROOT = os.getenv("ANTARES_DATA_ROOT", _default_history_root())
+# Backward-compatible alias used by older modules and notebooks.
+HISTORY_DATA_ROOT = DATA_ROOT
 
 # Research target for historical backfill. If a night has fewer available
 # loci, the manifest records `under_target` rather than failing the run.
@@ -249,6 +273,12 @@ def print_config_summary():
     print(f"  History target    : {HISTORY_TARGET_LOCI:,} loci/night")
     print(f"  History LC fetch  : {'ON' if HISTORY_FETCH_ALL_LIGHTCURVES else 'OFF'}")
     print(f"  Use stored history: {'ON' if USE_DRIVE_CUMULATIVE_HISTORY else 'OFF'}")
+    print(f"  Project root       : {PROJECT_ROOT}")
+    print(f"  Data root          : {DATA_ROOT}")
+    print(f"  Cache root         : {CACHE_ROOT}")
+    print(f"  Nightly root       : {NIGHTLY_ROOT}")
+    print(f"  Cumulative root    : {CUMULATIVE_ROOT}")
+    print(f"  Analysis root      : {ANALYSIS_ROOT}")
     # Spell out the disjointness check so a reviewer can verify the
     # "no overlap" property at a glance.
     overlap = "NON-overlapping" if MJD1_MIN >= MJD2_MAX else "OVERLAPPING"

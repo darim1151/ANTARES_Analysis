@@ -1,9 +1,16 @@
-# Large generated ANTARES products belong in Google Drive/Colab storage.
+# Large generated ANTARES products belong in the shared RSP data root.
+data/
+cache/
+analysis/
+figures/
+logs/
 data/nightly/
 data/cumulative/
 data/cache_*/
 data/chunk_cache/
 *.parquet
+permission_test_*.txt
+preflight_*/
 
 # Local Python/runtime noise.
 __pycache__/

@@ -27,6 +27,8 @@ import time
 
 import pandas as pd
 
+from . import rsp_permissions
+
 
 def cache_paths(cache_dir, mjd1_min, mjd1_max, mjd2_min, mjd2_max, n_samples):
     """
@@ -63,7 +65,10 @@ def try_load_cache(paths, label1, label2, use_cache=True):
     all_present = all(os.path.exists(p) for p in paths.values())
     if not (use_cache and all_present):
         if use_cache and not all_present:
-            print("No cache found - will run live ANTARES queries.")
+            print("No complete cache found - will run live ANTARES queries.")
+            for name, path in paths.items():
+                status = "hit" if os.path.exists(path) else "miss"
+                print(f"  [cache {status}] {name}: {path}")
         else:
             print("USE_CACHE = False - running live ANTARES queries.")
         return False, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
@@ -103,10 +108,10 @@ def save_cache(paths, df1, df2, df1_alerts, df2_alerts):
     ]:
         path = paths[name]
         if not df.empty:
-            # Ensure target directory exists - matters on a fresh checkout
-            # where /data/ may not be present yet.
-            os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+            # Ensure the shared cache directory exists and remains group-writeable.
+            rsp_permissions.ensure_group_shared_path(os.path.dirname(path) or '.')
             df.to_parquet(path, index=False)
+            rsp_permissions.mark_file_group_writable(path)
             print(f"  Saved {name:12s} -> {path}  ({len(df):,} rows)")
         else:
             print(f"  Skipped {name:12s} (empty DataFrame)")

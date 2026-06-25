@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-from . import history
+from . import config, history, rsp_permissions
 
 
 SCHEMA_VERSION = 1
@@ -85,11 +85,18 @@ def _analysis_root(data_root):
 
 
 def _snapshot_paths(data_root):
-    root = _analysis_root(data_root)
+    if Path(data_root).expanduser().resolve() == config.DATA_ROOT.expanduser().resolve():
+        root = config.FEATURE_SNAPSHOT_PATH.parent
+        parquet = config.FEATURE_SNAPSHOT_PATH
+        manifest = config.FEATURE_SNAPSHOT_MANIFEST_PATH
+    else:
+        root = _analysis_root(data_root)
+        parquet = root / "locus_feature_snapshots.parquet"
+        manifest = root / "locus_feature_snapshots_manifest.json"
     return {
         "root": root,
-        "parquet": root / "locus_feature_snapshots.parquet",
-        "manifest": root / "locus_feature_snapshots_manifest.json",
+        "parquet": parquet,
+        "manifest": manifest,
     }
 
 
@@ -138,10 +145,11 @@ def _read_manifest(path):
 
 
 def _write_json(path, payload):
-    path.parent.mkdir(parents=True, exist_ok=True)
+    rsp_permissions.ensure_group_shared_path(path.parent)
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
+    rsp_permissions.mark_file_group_writable(path)
 
 
 def _coverage_rows(source, schema_names, row_count, frame=None):
@@ -261,8 +269,9 @@ def build_or_load_feature_snapshots(data_root, force=False):
         "coverage": coverage.to_dict(orient="records"),
     }
 
-    paths["root"].mkdir(parents=True, exist_ok=True)
+    rsp_permissions.ensure_group_shared_path(paths["root"])
     snapshots.to_parquet(paths["parquet"], index=False)
+    rsp_permissions.mark_file_group_writable(paths["parquet"])
     _write_json(paths["manifest"], manifest)
     return snapshots, coverage, manifest
 
@@ -840,13 +849,19 @@ def save_feature_coverage_audit(
 ):
     """Persist a coverage-only result when no requested plane is usable."""
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    coverage.to_csv(output_dir / "feature_coverage.csv", index=False)
-    cohort_summary.to_csv(output_dir / "cohort_summary.csv", index=False)
-    pairwise_coverage.to_csv(output_dir / "feature_statistics.csv", index=False)
+    rsp_permissions.ensure_group_shared_path(output_dir)
+    coverage_path = output_dir / "feature_coverage.csv"
+    cohort_path = output_dir / "cohort_summary.csv"
+    statistics_path = output_dir / "feature_statistics.csv"
+    tag_path = output_dir / "tag_statistics.csv"
+    coverage.to_csv(coverage_path, index=False)
+    cohort_summary.to_csv(cohort_path, index=False)
+    pairwise_coverage.to_csv(statistics_path, index=False)
     pd.DataFrame(columns=["group", "plane"]).to_csv(
-        output_dir / "tag_statistics.csv", index=False
+        tag_path, index=False
     )
+    for path in [coverage_path, cohort_path, statistics_path, tag_path]:
+        rsp_permissions.mark_file_group_writable(path)
     metadata = {
         "created_at_utc": _now_utc(),
         "git_commit_sha": _git_sha(),
@@ -873,12 +888,16 @@ def save_feature_products(
 ):
     """Save tables, metadata, and main/tag figure sets."""
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    rsp_permissions.ensure_group_shared_path(output_dir)
     coverage = coverage if coverage is not None else pd.DataFrame()
-    coverage.to_csv(output_dir / "feature_coverage.csv", index=False)
-    results["cohort_summary"].to_csv(output_dir / "cohort_summary.csv", index=False)
+    coverage_path = output_dir / "feature_coverage.csv"
+    cohort_path = output_dir / "cohort_summary.csv"
+    statistics_path = output_dir / "feature_statistics.csv"
+    tag_path = output_dir / "tag_statistics.csv"
+    coverage.to_csv(coverage_path, index=False)
+    results["cohort_summary"].to_csv(cohort_path, index=False)
     results["feature_statistics"].to_csv(
-        output_dir / "feature_statistics.csv", index=False
+        statistics_path, index=False
     )
     tag_output = results["tag_statistics"].copy()
     if tag_output.empty:
@@ -887,7 +906,9 @@ def save_feature_products(
         tag_output = tag_output.merge(
             results["tag_counts"], left_on="group", right_on="tag", how="outer"
         )
-    tag_output.to_csv(output_dir / "tag_statistics.csv", index=False)
+    tag_output.to_csv(tag_path, index=False)
+    for path in [coverage_path, cohort_path, statistics_path, tag_path]:
+        rsp_permissions.mark_file_group_writable(path)
 
     figure_paths = []
     figures = [
@@ -913,6 +934,7 @@ def save_feature_products(
     for filename, figure in figures:
         path = output_dir / filename
         figure.savefig(path, dpi=180, bbox_inches="tight")
+        rsp_permissions.mark_file_group_writable(path)
         figure_paths.append(str(path))
         plt.close(figure)
 

@@ -12,6 +12,7 @@ Module map:
     chunked_query - Adaptive chunked ingestion for complete nightly updates
     history      - Platform-backed cumulative nightly history pipeline
     feature_analysis - Locus feature snapshots, statistics, and figures
+    rsp_permissions - Shared RSP data-root preflight and chmod helpers
     lightcurves  - Parallel per-locus lightcurve fetching
     cache        - Parquet load/save keyed by query parameters
     summary      - Human-readable summary statistics
@@ -28,6 +29,7 @@ from . import (
     history,
     lightcurves,
     query,
+    rsp_permissions,
     summary,
     validation,
 )
@@ -41,6 +43,7 @@ __all__ = [
     "history",
     "lightcurves",
     "query",
+    "rsp_permissions",
     "summary",
     "validation",
 ]

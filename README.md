@@ -57,6 +57,38 @@ Expected layout:
 
 Avoid `/project` for this workflow unless your RSP session definitely has writable project storage.
 
+### Shared RSP Permissions
+
+The production data root is shared between collaborators. Both accounts must
+belong to the RSP/Comanage group:
+
+```text
+g_antares_analysis
+```
+
+Before running a backfill or nightly comparison, run:
+
+```bash
+python scripts/check_rsp_shared_root.py
+```
+
+The check verifies group membership, group-writable directories, setgid
+inheritance, and a real test write under the shared data root. The notebooks
+run the same preflight before they rebuild indexes or query ANTARES.
+
+If the preflight fails, fix the shared directory once instead of manually
+`chmod`-ing individual outputs after each run. The usual owner/admin repair is:
+
+```bash
+chgrp -R g_antares_analysis /home/ivezic/AntaresAlerts/ANTARES_Analysis_Data
+chmod -R g+rwX /home/ivezic/AntaresAlerts/ANTARES_Analysis_Data
+find /home/ivezic/AntaresAlerts/ANTARES_Analysis_Data -type d -exec chmod g+s {} \;
+```
+
+The code deliberately avoids world-writable permissions. It sets a cooperative
+`umask(0o002)` in RSP notebooks and marks generated Parquet, JSON, CSV, cache,
+and figure files group-readable/group-writable.
+
 ## Loci vs Alert/Lightcurve Rows
 
 - A locus is one ANTARES object/sky position.
@@ -75,9 +107,21 @@ Sky plots usually show loci, so the number of plotted points can be much smaller
    ```
 
 3. Pull the notebook or docs you need from GitHub.
-4. Optional: run `notebooks/rsp_setup.ipynb` to verify imports and an LSST-only ANTARES probe.
-5. Run `notebooks/historical_backfill.ipynb` to continue historical full-night extraction.
-6. Run `notebooks/alerts_time_comparison.ipynb` to compare the newest completed night against prior historical backfill.
+4. Run the shared-root preflight:
+
+   ```bash
+   python scripts/check_rsp_shared_root.py
+   ```
+
+5. Optional: run `notebooks/rsp_setup.ipynb` to verify imports and an LSST-only ANTARES probe.
+6. Run `notebooks/historical_backfill.ipynb` to continue historical full-night extraction.
+7. Run `notebooks/alerts_time_comparison.ipynb` to compare the newest completed night against prior historical backfill.
+
+For local smoke tests, override the shared root explicitly:
+
+```bash
+ANTARES_ANALYSIS_DATA_ROOT=/tmp/ANTARES_Analysis_Data python -m unittest discover -s tests
+```
 
 ## Historical Backfill
 
@@ -181,6 +225,8 @@ Do not pull `notebooks/alerts_time_comparison.ipynb` unless you intentionally wa
 
 - Do not run old Colab-only cells such as `google.colab` drive mounting on RSP.
 - Do not use `/content` paths on RSP.
+- Do not hard-code local data paths in notebooks; use `src.config.DATA_ROOT`, `CACHE_ROOT`, `NIGHTLY_ROOT`, `CUMULATIVE_ROOT`, and `ANALYSIS_ROOT`.
 - Keep `RESUME_EXISTING_NIGHT=True` for normal historical work.
 - The cumulative indexes are safe to rebuild; they are derived from saved nightly manifests and parquet files.
 - If a notebook reports an unexpected date in the data store, inspect it before using it in science comparisons. The backfill notebook does not remove or relocate data.
+- If the shared-root preflight fails, the correct outcome is to stop before the expensive query. Fix Comanage group membership or setgid/group-write inheritance first, then restart the RSP Notebook Aspect session.
