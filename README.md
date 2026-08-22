@@ -35,24 +35,45 @@ python3.11 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The Phase 1 console entry point exposes package identity and help only:
+The Phase 2 console is a read-only control plane for the migrated Middle Earth
+dataset and the repository's Jupyter workflows:
 
 ```bash
 antares-analysis --version
 antares-analysis --help
+antares-analysis profile list
+antares-analysis profile show --profile middle-earth
+antares-analysis profile export --profile middle-earth
+antares-analysis doctor --profile middle-earth
+antares-analysis data status --profile middle-earth
+antares-analysis jupyter list
+antares-analysis jupyter command setup --profile middle-earth
 ```
 
-Production ingestion commands remain disabled until their locking, strict
-error propagation, and transactional-publication contracts are implemented.
+Add `--json` to profile inspection, `doctor`, `data status`, `jupyter list`, or
+`jupyter command` for stable machine-readable output. `profile export` and
+`jupyter env` render copy/paste-safe shell exports. `jupyter command` renders a
+shell-safe launch command but deliberately does not execute it. Exit status 0
+means the requested inspection passed, 1 means a health/status gate failed,
+and 2 means the request or configuration is invalid.
+
+Every Phase 2 command is non-mutating: it does not create data or cache
+directories, launch Jupyter, query ANTARES, update manifests, or rebuild
+cumulative products. Production writer commands remain disabled until their
+locking, strict error propagation, resume, rollback, and transactional
+publication contracts are implemented and tested. The implementation sequence
+and acceptance gates are in `docs/cli/PHASED_ROADMAP.md`.
+
 See `requirements/README.md` for the mandatory Linux x86_64 hashed-lock and
 fresh-wheel verification procedure. Neither a macOS `pip freeze` nor
 `environment.yml` alone is a production deployment lock.
 
-The Phase 1 wheel contains the importable `src` package and the safe identity
-CLI only. Operational notebooks and repository scripts remain versioned
-companion material and are not represented as deployable writer commands in
-this wheel. `environment.yml` is an interactive convenience input; the accepted
-Linux pip locks and verified wheelhouse are the supported release artifacts.
+The wheel contains the importable `src` package and the read-only CLI.
+Operational notebooks and repository scripts remain versioned companion
+material; the CLI discovers notebooks from a checkout and does not package or
+execute them. `environment.yml` is an interactive convenience input; the
+accepted Linux pip locks and verified wheelhouse are the supported release
+artifacts.
 
 ## LSST-Only Rule
 
@@ -309,11 +330,13 @@ Do not pull `notebooks/alerts_time_comparison.ipynb` unless you intentionally wa
 - If the shared-root preflight fails, the correct outcome is to stop before the expensive query. Fix Comanage group membership or setgid/group-write inheritance first, then restart the RSP Notebook Aspect session.
 - The notebooks are interactive operational workflows, not yet an unattended production writer or scheduler.
 
-## Deferred Production Hardening
+## Current Safety Boundary
 
-This portability work does not implement daily ingestion or deployment. Before
-the notebooks become an unattended production writer, separately design and
-test writer locking, strict fetch-error propagation, cache-key evolution and
-validation, the Middle Earth scheduler/service choice, and migration of the
-notebook ingestion logic into a supported CLI. Cache rebuilding and warming
-also remain separate, explicitly authorized work.
+The Phase 2 CLI implements read-only profiles, diagnostics, data inventory, and
+Jupyter navigation. It does not implement daily ingestion or deployment. Phase
+3 must add and verify writer locking, immutable run plans, dry runs, strict
+fetch-error propagation, staged validation, atomic publication, interruption
+recovery, and rollback before notebook ingestion logic becomes a supported CLI
+writer. Middle Earth job execution and managed Jupyter launch remain later,
+separately gated integrations. Cache rebuilding and warming also remain
+separate, explicitly authorized work.
