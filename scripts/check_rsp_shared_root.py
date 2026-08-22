@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Check that the shared RSP ANTARES data root is safe for production writes."""
+"""Compatibility preflight for the explicit RSP shared-group mode."""
 
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -30,8 +29,11 @@ def parse_args():
     )
     parser.add_argument(
         "--expected-group",
-        default=config.EXPECTED_SHARED_GROUP,
-        help=f"Shared Unix group expected on RSP. Default: {config.EXPECTED_SHARED_GROUP}",
+        default=config.SHARED_GROUP or config.DEFAULT_SHARED_GROUP,
+        help=(
+            "Shared Unix group expected on RSP. Default: "
+            f"{config.SHARED_GROUP or config.DEFAULT_SHARED_GROUP}"
+        ),
     )
     parser.add_argument(
         "--set-umask",
@@ -52,10 +54,12 @@ def parse_args():
 def main():
     args = parse_args()
     if args.set_umask:
-        os.umask(0o002)
-    report = rsp_permissions.print_shared_data_root_report(
+        rsp_permissions.configure_process_umask(policy="shared-group")
+    report = rsp_permissions.print_storage_root_report(
         args.data_root,
+        policy="shared-group",
         expected_group=args.expected_group,
+        write_test=True,
         require_setgid=not args.allow_missing_setgid,
     )
     return 0 if report["ok"] else 1

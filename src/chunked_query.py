@@ -104,9 +104,9 @@ def _write_cached_chunk(path, df):
     if df.empty and len(df.columns) == 0:
         # Pandas cannot always infer a parquet schema for a fully empty frame.
         return
-    rsp_permissions.ensure_group_shared_path(os.path.dirname(path))
+    rsp_permissions.ensure_storage_path(os.path.dirname(path))
     df.to_parquet(path, index=False)
-    rsp_permissions.mark_file_group_writable(path)
+    rsp_permissions.mark_file_for_storage(path)
     print(f"  [cache write] {path}")
 
 
@@ -454,9 +454,9 @@ def update_cumulative_loci(cumulative_path, df_new,
         df_all = df_all.drop_duplicates(subset=[id_col], keep="last")
     df_all = df_all.reset_index(drop=True)
 
-    rsp_permissions.ensure_group_shared_path(os.path.dirname(cumulative_path) or ".")
+    rsp_permissions.ensure_storage_path(os.path.dirname(cumulative_path) or ".")
     df_all.to_parquet(cumulative_path, index=False)
-    rsp_permissions.mark_file_group_writable(cumulative_path)
+    rsp_permissions.mark_file_for_storage(cumulative_path)
 
     return df_all, {
         "old_rows": old_rows,

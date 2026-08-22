@@ -1,0 +1,23 @@
+# Convenience input for an interactive Arnor Python 3.11 environment.
+#
+# This file pins the direct versions proven by the local Python 3.9 regression
+# suite. It is not a solved Conda lock or a supported production deployment
+# path. The verified pip/venv Linux lock and wheelhouse are authoritative for
+# Phase 1; transitive Conda dependencies are intentionally not claimed here.
+name: antares-analysis
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pip
+  - astropy=6.0.1
+  - ipykernel=6.31.0
+  - ipython=8.18.1
+  - matplotlib=3.9.4
+  - nbformat=5.10.4
+  - numpy=1.26.4
+  - pandas=2.3.3
+  - pyarrow=21.0.0
+  - pip:
+      - antares-client==1.14.0

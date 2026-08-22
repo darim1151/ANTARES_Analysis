@@ -40,6 +40,8 @@ class FeatureAnalysisTests(unittest.TestCase):
             "date_utc": date_utc,
             "mjd_min": mjd,
             "mjd_max": mjd + 1,
+            "actual_loci": int(len(frame)),
+            "alert_rows": int(len(frame)),
             "status": "complete",
             "validation": {"append_ready": append_ready},
             "paths": {
@@ -99,6 +101,12 @@ class FeatureAnalysisTests(unittest.TestCase):
 
         changed = self._frame(["a", "b", "c"], 61100.0)
         changed.to_parquet(first, index=False)
+        manifest_path = first.parent / "manifest.json"
+        source_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        source_manifest["actual_loci"] = len(changed)
+        manifest_path.write_text(
+            json.dumps(source_manifest), encoding="utf-8"
+        )
         snapshots2, _, manifest2 = feature_analysis.build_or_load_feature_snapshots(
             self.root
         )

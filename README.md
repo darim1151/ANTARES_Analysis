@@ -2,7 +2,9 @@
 
 LSST-only ANTARES workflows for building a cumulative historical alert-era data store and comparing a real-time completed night against that stored history.
 
-This project still uses ANTARES as the broker/source. Rubin Science Platform is used for compute and storage, not as a direct Rubin Butler/TAP replacement.
+This project still uses ANTARES as the broker/source. The workflows can run on
+Middle Earth or Rubin Science Platform (RSP); neither environment is a direct
+Rubin Butler/TAP replacement.
 
 ## What This Project Does
 
@@ -15,7 +17,42 @@ Use these notebooks:
 
 - `notebooks/historical_backfill.ipynb`: full-night historical backfill and cumulative index maintenance.
 - `notebooks/alerts_time_comparison.ipynb`: real-time last-night extraction and comparison against the historical backfill.
-- `notebooks/rsp_setup.ipynb`: optional setup/probe checks for imports, storage, and ANTARES connectivity.
+- `notebooks/rsp_setup.ipynb`: optional portable setup/probe checks for imports, storage, and ANTARES connectivity.
+
+## Reproducible Development and Release Checks
+
+The project is packaged as `antares-analysis`. Python 3.11 is the production
+candidate, while Python 3.9 remains in the compatibility test matrix. The
+direct dependency versions in `pyproject.toml` and `environment.yml` are the
+versions exercised by the current regression environment.
+
+For local development in an isolated environment:
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip==26.1.2
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+The Phase 1 console entry point exposes package identity and help only:
+
+```bash
+antares-analysis --version
+antares-analysis --help
+```
+
+Production ingestion commands remain disabled until their locking, strict
+error propagation, and transactional-publication contracts are implemented.
+See `requirements/README.md` for the mandatory Linux x86_64 hashed-lock and
+fresh-wheel verification procedure. Neither a macOS `pip freeze` nor
+`environment.yml` alone is a production deployment lock.
+
+The Phase 1 wheel contains the importable `src` package and the safe identity
+CLI only. Operational notebooks and repository scripts remain versioned
+companion material and are not represented as deployable writer commands in
+this wheel. `environment.yml` is an interactive convenience input; the accepted
+Linux pip locks and verified wheelhouse are the supported release artifacts.
 
 ## LSST-Only Rule
 
@@ -35,32 +72,59 @@ The project keeps ANTARES loci where at least one Rubin/LSST survey identifier e
 
 This means "LSST-associated ANTARES loci." It does not mean direct Rubin Science Platform catalog data, and it does not guarantee the locus has no older ZTF history. ANTARES can merge multi-survey histories into one locus, so some LSST-associated loci can still carry ZTF identifiers. The manifests record those counts for transparency.
 
-## Storage Layout
+## Storage and Configuration
 
-Do not store parquet or manifest products in GitHub. On RSP, use:
+Do not store Parquet or manifest products in GitHub. Configure the durable data
+root and the rebuildable cache root independently. Set environment variables
+**before** importing `src.config`; after changing them in a Jupyter environment,
+restart the kernel so the module is imported with the new values.
 
-```text
-/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data
+The selected Middle Earth profile is:
+
+```bash
+export ANTARES_ANALYSIS_DATA_ROOT=/astro/store/shire/ANTARES_Analysis_Data
+export ANTARES_ANALYSIS_CACHE_ROOT=/astro/store/shire/ANTARES_Analysis_cache
+export ANTARES_STORAGE_POLICY=private
 ```
 
-Expected layout:
+The migrated Middle Earth dataset is private (`mdarim:mdarim`, mode `0700`).
+Private mode does not require an RSP group and does not add group-write, setgid,
+`chgrp`, or ACL changes. Configuring `ANTARES_ANALYSIS_CACHE_ROOT` only selects a
+path: it does not create, authorize, copy, rebuild, warm, or delete a cache. The
+durable root must not acquire an `ANTARES_Analysis_Data/cache` directory on
+Middle Earth.
+
+RSP remains available as an explicit shared-group compatibility profile:
+
+```bash
+export ANTARES_ANALYSIS_DATA_ROOT=/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data
+export ANTARES_STORAGE_POLICY=shared-group
+export ANTARES_SHARED_GROUP=g_antares_analysis
+```
+
+Set `ANTARES_ANALYSIS_CACHE_ROOT` too when the RSP cache should live outside the
+data root. When the cache override is unset, `DATA_ROOT/cache` remains the
+backward-compatible default.
+
+The durable and cache layouts are therefore separate:
 
 ```text
-/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data/
+$ANTARES_ANALYSIS_DATA_ROOT/
   data/lsst_only/nightly/YYYY/MM/DD/loci.parquet
   data/lsst_only/nightly/YYYY/MM/DD/alerts.parquet
   data/lsst_only/nightly/YYYY/MM/DD/manifest.json
   data/lsst_only/cumulative/loci_index.parquet
   data/lsst_only/cumulative/nightly_summary.parquet
-  cache/
+
+$ANTARES_ANALYSIS_CACHE_ROOT/
+  <versioned query caches>
 ```
 
 Avoid `/project` for this workflow unless your RSP session definitely has writable project storage.
 
-### Shared RSP Permissions
+### Shared RSP Compatibility Permissions
 
-The production data root is shared between collaborators. Both accounts must
-belong to the RSP/Comanage group:
+In `shared-group` mode, collaborators must belong to the RSP/Comanage group:
 
 ```text
 g_antares_analysis
@@ -85,9 +149,10 @@ chmod -R g+rwX /home/ivezic/AntaresAlerts/ANTARES_Analysis_Data
 find /home/ivezic/AntaresAlerts/ANTARES_Analysis_Data -type d -exec chmod g+s {} \;
 ```
 
-The code deliberately avoids world-writable permissions. It sets a cooperative
-`umask(0o002)` in RSP notebooks and marks generated Parquet, JSON, CSV, cache,
-and figure files group-readable/group-writable.
+The code deliberately avoids world-writable permissions. In `shared-group`
+mode it selects a cooperative umask and marks generated Parquet, JSON, CSV,
+cache, and figure files group-readable/group-writable. These operations are
+not taken in `private` mode.
 
 ## Loci vs Alert/Lightcurve Rows
 
@@ -107,9 +172,13 @@ Sky plots usually show loci, so the number of plotted points can be much smaller
    ```
 
 3. Pull the notebook or docs you need from GitHub.
-4. Run the shared-root preflight:
+4. Select the explicit RSP compatibility policy, then run the shared-root
+   preflight:
 
    ```bash
+   export ANTARES_ANALYSIS_DATA_ROOT=/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data
+   export ANTARES_STORAGE_POLICY=shared-group
+   export ANTARES_SHARED_GROUP=g_antares_analysis
    python scripts/check_rsp_shared_root.py
    ```
 
@@ -117,10 +186,13 @@ Sky plots usually show loci, so the number of plotted points can be much smaller
 6. Run `notebooks/historical_backfill.ipynb` to continue historical full-night extraction.
 7. Run `notebooks/alerts_time_comparison.ipynb` to compare the newest completed night against prior historical backfill.
 
-For local smoke tests, override the shared root explicitly:
+For local smoke tests, override both roots explicitly and use private mode:
 
 ```bash
-ANTARES_ANALYSIS_DATA_ROOT=/tmp/ANTARES_Analysis_Data python -m unittest discover -s tests
+ANTARES_ANALYSIS_DATA_ROOT=/tmp/ANTARES_Analysis_Data \
+ANTARES_ANALYSIS_CACHE_ROOT=/tmp/ANTARES_Analysis_cache \
+ANTARES_STORAGE_POLICY=private \
+python3 -m unittest discover -s tests
 ```
 
 ## Historical Backfill
@@ -151,6 +223,10 @@ The notebook uses the current working probe-first strategy:
 - Refuse to mark a night complete if a final tile is still saturated.
 - Cache tile and lightcurve requests so interrupted runs can resume.
 
+The historical and comparison notebooks intentionally retain their existing
+distinct cache-version namespaces. Do not merge them unless identical query
+and cache-key semantics are demonstrated and covered by tests.
+
 ## Real-Time Comparison
 
 Open `notebooks/alerts_time_comparison.ipynb`.
@@ -176,13 +252,13 @@ analysis for ANTARES locus properties:
   and a deterministic permutation test.
 - Multi-label subsets for sufficiently populated ANTARES tags.
 
-The analysis first audits the schemas of saved nightly `loci.parquet` files.
-It reads only the requested columns and builds a compact, rebuildable table at:
+The analysis first audits the schemas and fully streams saved nightly
+`loci.parquet` files to catch unreadable data pages. The compact snapshot itself
+materializes only the requested columns and is written at:
 
 ```text
-/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data/
-  data/lsst_only/analysis/locus_feature_snapshots.parquet
-  data/lsst_only/analysis/locus_feature_snapshots_manifest.json
+$ANTARES_ANALYSIS_DATA_ROOT/data/lsst_only/analysis/locus_feature_snapshots.parquet
+$ANTARES_ANALYSIS_DATA_ROOT/data/lsst_only/analysis/locus_feature_snapshots_manifest.json
 ```
 
 No ANTARES query or alert refetch is performed by this feature analysis.
@@ -194,8 +270,7 @@ snapshot strictly before the current comparison night. Generated tables,
 metadata, and PNG figures are written outside Git under:
 
 ```text
-/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data/
-  analysis/nightly_comparison/YYYY-MM-DD/feature_diagnostics/
+$ANTARES_ANALYSIS_DATA_ROOT/analysis/nightly_comparison/YYYY-MM-DD/feature_diagnostics/
 ```
 
 These are ANTARES locus-level broker features. They may summarize accumulated
@@ -226,7 +301,19 @@ Do not pull `notebooks/alerts_time_comparison.ipynb` unless you intentionally wa
 - Do not run old Colab-only cells such as `google.colab` drive mounting on RSP.
 - Do not use `/content` paths on RSP.
 - Do not hard-code local data paths in notebooks; use `src.config.DATA_ROOT`, `CACHE_ROOT`, `NIGHTLY_ROOT`, `CUMULATIVE_ROOT`, and `ANALYSIS_ROOT`.
+- Set storage environment variables before importing `src.config`; restart the Jupyter kernel after changing them.
+- Merely configuring a cache root does not authorize or perform cache creation or rebuilding.
 - Keep `RESUME_EXISTING_NIGHT=True` for normal historical work.
 - The cumulative indexes are safe to rebuild; they are derived from saved nightly manifests and parquet files.
 - If a notebook reports an unexpected date in the data store, inspect it before using it in science comparisons. The backfill notebook does not remove or relocate data.
 - If the shared-root preflight fails, the correct outcome is to stop before the expensive query. Fix Comanage group membership or setgid/group-write inheritance first, then restart the RSP Notebook Aspect session.
+- The notebooks are interactive operational workflows, not yet an unattended production writer or scheduler.
+
+## Deferred Production Hardening
+
+This portability work does not implement daily ingestion or deployment. Before
+the notebooks become an unattended production writer, separately design and
+test writer locking, strict fetch-error propagation, cache-key evolution and
+validation, the Middle Earth scheduler/service choice, and migration of the
+notebook ingestion logic into a supported CLI. Cache rebuilding and warming
+also remain separate, explicitly authorized work.

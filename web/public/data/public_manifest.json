@@ -1,0 +1,79 @@
+{
+  "alerts_available": false,
+  "counts": {
+    "alert_rows": 0,
+    "density_tiles": 217,
+    "historical_points": 1312,
+    "last_night_points": 488,
+    "lightcurve_objects": 10,
+    "sky_points": 1800,
+    "top_candidates": 10
+  },
+  "data_root_used": null,
+  "dataset_name": "SkyPulse Eye-Candy Demo",
+  "export_mode": "demo",
+  "generated_at_utc": "2026-08-22T18:04:07+00:00",
+  "lightcurve_sample_source": "synthetic_demo",
+  "nightly_manifest_validation": {
+    "alert_locus_link_pass": true,
+    "alert_rows_without_locus": 0,
+    "append_ready": true,
+    "bad_dec_count": 0,
+    "bad_ra_count": 0,
+    "coordinate_missing_columns": false,
+    "coordinate_pass": true,
+    "duplicate_locus_count": 0,
+    "history_start_pass": true,
+    "lsst_dia_count": 87210,
+    "lsst_identifier_count": 100000,
+    "lsst_only_pass": true,
+    "lsst_ss_count": 12790,
+    "mjd_above_count": 0,
+    "mjd_below_count": 0,
+    "mjd_missing_column": false,
+    "mjd_pass": true,
+    "overlap_count": 1234,
+    "ztf_object_id_count": 14022
+  },
+  "schema_version": 2,
+  "scientific_caveats": [
+    "SkyPulse shows LSST-associated ANTARES loci and public export samples; it is not a direct Rubin Butler, TAP, or official Rubin production-system query.",
+    "ANTARES is the broker/source for these alert-analysis records; Rubin Science Platform was used for compute and storage.",
+    "ANTARES can merge multi-survey histories into one locus, so some LSST-associated loci may also carry older survey identifiers.",
+    "Brightness history comes from ANTARES alert records, with photometry columns such as ant_mag, ant_magerr, and ant_passband when available.",
+    "Highlighted objects use a transparent exploration ranking, not a classification and not a claim of scientific importance.",
+    "This is a static export of saved parquet outputs, not live data and not direct Rubin Butler/TAP access.",
+    "Demo mode uses repository sample rows and synthetic brightness stories; use --data-root on RSP or copied parquet files for real alert-record lightcurves.",
+    "Demo lightcurve samples are synthetic and must not be presented as ANTARES alert-record photometry."
+  ],
+  "selected_night_date": "2026-03-03",
+  "source_caveats": [
+    "SkyPulse shows LSST-associated ANTARES loci and public export samples; it is not a direct Rubin Butler, TAP, or official Rubin production-system query.",
+    "ANTARES is the broker/source for these alert-analysis records; Rubin Science Platform was used for compute and storage.",
+    "ANTARES can merge multi-survey histories into one locus, so some LSST-associated loci may also carry older survey identifiers.",
+    "Brightness history comes from ANTARES alert records, with photometry columns such as ant_mag, ant_magerr, and ant_passband when available.",
+    "Highlighted objects use a transparent exploration ranking, not a classification and not a claim of scientific importance.",
+    "This is a static export of saved parquet outputs, not live data and not direct Rubin Butler/TAP access.",
+    "Demo mode uses repository sample rows and synthetic brightness stories; use --data-root on RSP or copied parquet files for real alert-record lightcurves.",
+    "Demo lightcurve samples are synthetic and must not be presented as ANTARES alert-record photometry."
+  ],
+  "source_data_range": {
+    "historical_mjd_max": 61102.0,
+    "historical_mjd_min": 61095.0,
+    "latest_mjd_max": 61103.0,
+    "latest_mjd_min": 61102.0,
+    "latest_night_utc": "2026-03-03"
+  },
+  "source_files": {
+    "manifest": "data/manifest_example.json",
+    "sample_csv": "data/antares_raw_data.csv"
+  },
+  "validation": {
+    "bad_coordinate_count": 0,
+    "duplicate_sky_point_id_count": 0,
+    "json_serializable": true,
+    "lightcurves_refer_to_candidates": true,
+    "ra_dec_bounds_pass": true,
+    "top_candidates_in_sky_points": true
+  }
+}

@@ -15,7 +15,7 @@ import hashlib
 import json
 import math
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -23,15 +23,11 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from src import config  # noqa: E402
-
 DEFAULT_OUT = ROOT / "web" / "public" / "data"
 DEFAULT_SAMPLE = ROOT / "data" / "antares_raw_data.csv"
 DEFAULT_MANIFEST = ROOT / "data" / "manifest_example.json"
 SCHEMA_VERSION = 2
+MJD_EPOCH = datetime(1858, 11, 17, tzinfo=timezone.utc)
 SURVEY_SUBDIR = "lsst_only"
 USABLE_STATUSES = {"complete", "under_target", "saturated_unresolved"}
 PREFERRED_LATEST_STATUSES = {"complete", "under_target"}
@@ -83,6 +79,16 @@ class ExportError(RuntimeError):
 
 def now_utc() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def mjd_to_utc_date(mjd: float) -> str:
+    """Return the UTC calendar date containing a finite Modified Julian Date."""
+    if not math.isfinite(mjd):
+        raise ExportError(f"MJD must be finite, received {mjd!r}.")
+    try:
+        return (MJD_EPOCH + timedelta(days=mjd)).date().isoformat()
+    except OverflowError as exc:
+        raise ExportError(f"MJD {mjd!r} is outside the supported calendar range.") from exc
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -262,8 +268,13 @@ def make_demo_points(
     latest_max = float(manifest.get("mjd_max", latest_min + 1.0))
     historical_min = max(61095.0, latest_min - 32.0)
     historical_max = latest_min
-    latest_date = manifest.get("date_utc", "2026-04-28")
-    historical_dates = ["2026-03-28", "2026-04-03", "2026-04-11", "2026-04-19"]
+    latest_date = str(manifest.get("date_utc") or mjd_to_utc_date(latest_min))
+    expected_latest_date = mjd_to_utc_date(latest_min)
+    if latest_date != expected_latest_date:
+        raise ExportError(
+            f"Demo manifest date_utc {latest_date!r} does not match "
+            f"mjd_min {latest_min}, whose UTC date is {expected_latest_date}."
+        )
 
     points: list[dict[str, Any]] = []
     for _, row in frame.iterrows():
@@ -277,7 +288,7 @@ def make_demo_points(
             group = "last_night"
         else:
             mjd = historical_min + stable_unit(f"{locus_id}:history") * (historical_max - historical_min)
-            date_utc = historical_dates[int(stable_unit(f"{locus_id}:date") * len(historical_dates)) % len(historical_dates)]
+            date_utc = mjd_to_utc_date(mjd)
             group = "historical"
 
         obs_count = int(row["obs_count"])
@@ -380,7 +391,7 @@ def make_demo_lightcurves(candidates: list[dict[str, Any]], points_by_id: dict[s
     for candidate in candidates:
         point = points_by_id[candidate["id"]]
         base = float(point["brightness_mag"])
-        center_mjd = float(point["mjd"])
+        latest_mjd = float(point["mjd"])
         rows = []
         for index in range(18):
             phase = index / 17
@@ -388,7 +399,7 @@ def make_demo_lightcurves(candidates: list[dict[str, Any]], points_by_id: dict[s
             mag = base + math.sin(phase * math.pi * 2.2) * 0.34 + (phase - 0.5) * 0.22 + jitter
             rows.append(
                 {
-                    "mjd": round(center_mjd - 8.5 + index, 6),
+                    "mjd": round(latest_mjd - 17 + index, 6),
                     "magnitude": round(mag, 3),
                     "filter": filters[index % len(filters)],
                     "source": "synthetic_demo",
@@ -762,6 +773,12 @@ def make_rsp_lightcurves(
 
 
 def make_density(points: list[dict[str, Any]], ra_bin_size: float, dec_bin_size: float) -> list[dict[str, Any]]:
+    if not math.isfinite(ra_bin_size) or ra_bin_size <= 0:
+        raise ExportError("RA bin size must be a positive finite number.")
+    if not math.isfinite(dec_bin_size) or dec_bin_size <= 0:
+        raise ExportError("Declination bin size must be a positive finite number.")
+    ra_bin_count = math.ceil(360 / ra_bin_size)
+    dec_bin_count = math.ceil(180 / dec_bin_size)
     rows = []
     for point in points:
         ra = number_or_none(point.get("ra"))
@@ -770,8 +787,11 @@ def make_density(points: list[dict[str, Any]], ra_bin_size: float, dec_bin_size:
             continue
         rows.append(
             {
-                "ra_bin": int(ra // ra_bin_size),
-                "dec_bin": int((dec + 90) // dec_bin_size),
+                "ra_bin": min(max(int(ra // ra_bin_size), 0), ra_bin_count - 1),
+                "dec_bin": min(
+                    max(int((dec + 90) // dec_bin_size), 0),
+                    dec_bin_count - 1,
+                ),
                 "is_last_night": bool(point.get("is_last_night")),
             }
         )
@@ -793,9 +813,9 @@ def make_density(points: list[dict[str, Any]], ra_bin_size: float, dec_bin_size:
             {
                 "id": f"ra{ra_bin:02d}_dec{dec_bin:02d}",
                 "ra_min": round(ra_bin * ra_bin_size, 4),
-                "ra_max": round((ra_bin + 1) * ra_bin_size, 4),
+                "ra_max": round(min((ra_bin + 1) * ra_bin_size, 360), 4),
                 "dec_min": round(dec_bin * dec_bin_size - 90, 4),
-                "dec_max": round((dec_bin + 1) * dec_bin_size - 90, 4),
+                "dec_max": round(min((dec_bin + 1) * dec_bin_size - 90, 90), 4),
                 "count": count,
                 "last_night_count": last_count,
                 "historical_count": historical_count,
@@ -834,6 +854,29 @@ def validate_payloads(payloads: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return validation
 
 
+def comparison_payload(
+    last_points: list[dict[str, Any]],
+    historical_points: list[dict[str, Any]],
+    alert_rows: int,
+    candidates: list[dict[str, Any]],
+    tiles: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Describe exactly the sampled points shipped to the public frontend."""
+
+    overlap = sum(1 for point in last_points if point.get("seen_before") is True)
+    night_count = len(last_points)
+    return {
+        "night_loci": night_count,
+        "historical_loci": len(historical_points),
+        "new_loci": night_count - overlap,
+        "overlap_loci": overlap,
+        "overlap_fraction_of_night": overlap / night_count if night_count else 0,
+        "alert_rows": int(alert_rows),
+        "highlighted_objects": len(candidates),
+        "density_tiles": len(tiles),
+    }
+
+
 def build_demo_payloads(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
     manifest_example = read_json(args.manifest)
     generated_at = now_utc()
@@ -842,10 +885,12 @@ def build_demo_payloads(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
     points_by_id = {point["id"]: point for point in points}
     lightcurves = make_demo_lightcurves(candidates, points_by_id)
     tiles = make_density(points, args.ra_bin_size, args.dec_bin_size)
-    last_count = sum(1 for point in points if point["is_last_night"])
-    overlap = sum(1 for point in points if point["is_last_night"] and point["seen_before"])
-    new_loci = last_count - overlap
-    historical_count = len(points) - last_count
+    last_points = [point for point in points if point["is_last_night"]]
+    historical_points = [point for point in points if not point["is_last_night"]]
+    comparison = comparison_payload(last_points, historical_points, 0, candidates, tiles)
+    last_count = comparison["night_loci"]
+    new_loci = comparison["new_loci"]
+    historical_count = comparison["historical_loci"]
     caveats = source_caveats("demo", demo_synthetic_lightcurves=True, saturated=False)
     common = common_payload("demo", generated_at, source_range, caveats, source_range["latest_night_utc"])
     payloads = {
@@ -882,16 +927,7 @@ def build_demo_payloads(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
                 {"label": "latest night", "value": f"{last_count:,}", "detail": "latest processed points"},
                 {"label": "new to memory", "value": f"{new_loci:,}", "detail": "not seen in prior sample"},
             ],
-            "comparison": {
-                "night_loci": last_count,
-                "historical_loci": historical_count,
-                "new_loci": new_loci,
-                "overlap_loci": overlap,
-                "overlap_fraction_of_night": overlap / last_count if last_count else 0,
-                "alert_rows": 0,
-                "highlighted_objects": len(candidates),
-                "density_tiles": len(tiles),
-            },
+            "comparison": comparison,
         },
         "sky_points.json": {**common, "points": points},
         "density_tiles.json": {**common, "tiles": tiles},
@@ -921,6 +957,12 @@ def build_rsp_payloads(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
     selected_date = selected["date_utc"]
     selected_mjd_min = float(selected_manifest.get("mjd_min"))
     selected_mjd_max = float(selected_manifest.get("mjd_max"))
+    expected_selected_date = mjd_to_utc_date(selected_mjd_min)
+    if selected_date != expected_selected_date:
+        raise ExportError(
+            f"Selected manifest date_utc {selected_date!r} does not match "
+            f"mjd_min {selected_mjd_min}, whose UTC date is {expected_selected_date}."
+        )
     history = frames["history"]
     loci = frames["loci"]
     alerts = frames["alerts"]
@@ -964,8 +1006,13 @@ def build_rsp_payloads(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
 
     lightcurves, unavailable, source_columns = make_rsp_lightcurves(alerts, candidates, args.max_lightcurve_points)
     tiles = make_density(points, args.ra_bin_size, args.dec_bin_size)
-    overlap = sum(1 for point in last_points if point["seen_before"])
-    new_loci = len(last_points) - overlap
+    comparison = comparison_payload(
+        last_points,
+        historical_points,
+        len(alerts),
+        candidates,
+        tiles,
+    )
     saturated = selected["status"] == "saturated_unresolved"
     caveats = source_caveats("rsp_parquet", demo_synthetic_lightcurves=False, saturated=saturated)
     source_range = {
@@ -1036,16 +1083,7 @@ def build_rsp_payloads(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
                 {"label": "history before night", "value": f"{len(history):,}", "detail": "prior cumulative rows"},
                 {"label": "alert rows", "value": f"{len(alerts):,}", "detail": "available alert-record rows"},
             ],
-            "comparison": {
-                "night_loci": int(len(loci)),
-                "historical_loci": int(len(history)),
-                "new_loci": int(new_loci),
-                "overlap_loci": int(overlap),
-                "overlap_fraction_of_night": overlap / len(last_points) if last_points else 0,
-                "alert_rows": int(len(alerts)),
-                "highlighted_objects": len(candidates),
-                "density_tiles": len(tiles),
-            },
+            "comparison": comparison,
         },
         "sky_points.json": {**common, "points": points},
         "density_tiles.json": {**common, "tiles": tiles},
@@ -1090,7 +1128,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--demo", action="store_true", help="Use local CSV/sample manifest demo mode.")
-    mode.add_argument("--data-root", type=Path, help=f"RSP export root, e.g. {config.DATA_ROOT}.")
+    mode.add_argument(
+        "--data-root",
+        type=Path,
+        help="RSP export root containing data/lsst_only (for example, a shared Arnor root).",
+    )
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--latest", action="store_true", help="Select the latest usable nightly partition in RSP mode.")
     selection.add_argument("--date", help="Select a specific UTC night, e.g. 2026-05-30.")

@@ -16,3 +16,33 @@ preflight_*/
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
+.venv/
+build/
+dist/
+release-artifact/
+*.egg-info/
+.coverage
+htmlcov/
+.DS_Store
+
+# SkyPulse frontend local artifacts.
+web/node_modules/
+web/.next/
+web/out/
+web/.turbo/
+web/tsconfig.tsbuildinfo
+web/coverage/
+web/playwright-report/
+web/test-results/
+web/.env*
+!web/.env.example
+
+# The six sanitized SkyPulse demo files are clean-clone build fixtures. Keep
+# all other directories named data/ covered by the scientific-data rule above.
+!web/public/data/
+!web/public/data/public_manifest.json
+!web/public/data/public_summary.json
+!web/public/data/sky_points.json
+!web/public/data/density_tiles.json
+!web/public/data/top_candidates.json
+!web/public/data/lightcurve_samples.json

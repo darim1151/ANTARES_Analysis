@@ -17,13 +17,18 @@ tables are compact indexes rebuilt from those manifests and parquet files.
 
 import json
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 from astropy.time import Time
 
-from . import chunked_query, lightcurves, query, rsp_permissions
+from . import chunked_query, lightcurves, query
+try:
+    from . import rsp_permissions
+except ImportError:  # Backward compatibility with older clean RSP checkouts.
+    rsp_permissions = None
 from .config import (
     CHUNK_INITIAL_DAYS,
     CHUNK_MAX_RESULTS,
@@ -66,6 +71,52 @@ CUMULATIVE_INDEX_COLUMNS = [
     "brightest_alert_magnitude",
     "num_mag_values",
 ]
+
+ZERO_ROW_LOCI_REQUIRED_COLUMNS = {
+    LOCUS_ID_COL,
+    "ra",
+    "dec",
+    MJD_COL,
+    "night_date_utc",
+    "night_mjd_min",
+    "night_mjd_max",
+    "ingested_at_utc",
+    "source_query_mode",
+}
+ZERO_ROW_ALERTS_REQUIRED_COLUMNS = {
+    LOCUS_ID_COL,
+    "night_date_utc",
+    "range_label",
+}
+ZERO_ROW_REVALIDATION_POLICY = "valid_zero_row_lsst_only_v1"
+
+
+def _ensure_storage_path(path):
+    """Create a storage directory using the configured portability policy."""
+    path = Path(path)
+    if rsp_permissions is not None:
+        helper = getattr(rsp_permissions, "ensure_storage_path", None)
+        if helper is not None:
+            return helper(path)
+        # Older RSP checkouts predate the policy-neutral helper and are
+        # explicitly shared-group deployments.
+        return rsp_permissions.ensure_group_shared_path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _mark_file_for_storage(path):
+    """Apply the configured storage policy to one newly written file."""
+    path = Path(path)
+    if rsp_permissions is not None:
+        helper = getattr(rsp_permissions, "mark_file_for_storage", None)
+        if helper is not None:
+            helper(path)
+        else:
+            # Backward compatibility with older shared-group RSP checkouts.
+            rsp_permissions.mark_file_group_writable(path)
+    elif path.exists():
+        path.chmod(path.stat().st_mode | 0o600)
 
 
 def _now_utc():
@@ -148,18 +199,18 @@ def read_manifest(data_root, date_utc):
 
 def _write_json(path, payload):
     """Write a JSON file with stable indentation."""
-    rsp_permissions.ensure_group_shared_path(path.parent)
+    _ensure_storage_path(path.parent)
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    rsp_permissions.mark_file_group_writable(path)
+    _mark_file_for_storage(path)
 
 
 def _safe_to_parquet(df, path):
     """Write a DataFrame to parquet, creating parent directories first."""
-    rsp_permissions.ensure_group_shared_path(path.parent)
+    _ensure_storage_path(path.parent)
     df.to_parquet(path, index=False)
-    rsp_permissions.mark_file_group_writable(path)
+    _mark_file_for_storage(path)
 
 
 def _empty_alerts_frame():
@@ -202,9 +253,28 @@ def prepare_alerts(df_alerts, date_utc, range_label):
     return df.reset_index(drop=True)
 
 
-def validation_summary(df_loci, df_alerts, mjd_min, mjd_max, prior_locus_ids=None,
-                       lsst_only=LSST_ONLY):
+def validation_summary(
+    df_loci,
+    df_alerts,
+    mjd_min,
+    mjd_max,
+    prior_locus_ids=None,
+    lsst_only=LSST_ONLY,
+    query_completed=True,
+    query_fetch_clean=True,
+):
     """Return machine-readable validation fields for a nightly manifest."""
+    zero_row_night = bool(
+        df_loci is not None
+        and df_loci.empty
+        and df_alerts is not None
+        and df_alerts.empty
+    )
+    zero_row_schema_pass = bool(
+        zero_row_night
+        and ZERO_ROW_LOCI_REQUIRED_COLUMNS.issubset(df_loci.columns)
+        and ZERO_ROW_ALERTS_REQUIRED_COLUMNS.issubset(df_alerts.columns)
+    )
     validation = {
         "mjd_pass": True,
         "mjd_missing_column": MJD_COL not in df_loci.columns,
@@ -224,15 +294,24 @@ def validation_summary(df_loci, df_alerts, mjd_min, mjd_max, prior_locus_ids=Non
         "lsst_ss_count": 0,
         "ztf_object_id_count": 0,
         "history_start_pass": True,
+        "query_completed_pass": bool(query_completed),
+        "query_fetch_clean": bool(query_fetch_clean),
+        "zero_row_night": zero_row_night,
+        "zero_row_schema_pass": (
+            zero_row_schema_pass if zero_row_night else None
+        ),
     }
 
     survey_counts = query.lsst_identifier_counts(df_loci)
     validation.update(survey_counts)
     if lsst_only:
-        validation["lsst_only_pass"] = (
-            not df_loci.empty
-            and validation["lsst_identifier_count"] == int(len(df_loci))
-        )
+        if zero_row_night:
+            validation["lsst_only_pass"] = zero_row_schema_pass
+        else:
+            validation["lsst_only_pass"] = (
+                not df_loci.empty
+                and validation["lsst_identifier_count"] == int(len(df_loci))
+            )
         validation["history_start_pass"] = float(mjd_min) >= float(LSST_HISTORY_START_MJD)
 
     if not df_loci.empty and MJD_COL in df_loci.columns:
@@ -281,8 +360,163 @@ def validation_summary(df_loci, df_alerts, mjd_min, mjd_max, prior_locus_ids=Non
         and validation["alert_locus_link_pass"]
         and validation["lsst_only_pass"]
         and validation["history_start_pass"]
+        and validation["query_completed_pass"]
+        and validation["query_fetch_clean"]
+        and validation["zero_row_schema_pass"] is not False
     )
     return validation
+
+
+def _meaningful_error_value(value):
+    """Return whether a recorded error field represents an actual error."""
+    if value is None or value is False:
+        return False
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value != 0
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
+def recorded_query_fetch_errors(manifest):
+    """Return non-empty recorded query/fetch error fields with dotted paths."""
+    findings = {}
+
+    def visit(value, prefix=""):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                key_text = str(key)
+                path = f"{prefix}.{key_text}" if prefix else key_text
+                lowered = key_text.lower()
+                is_error_field = (
+                    lowered == "error"
+                    or (
+                        "error" in lowered
+                        and any(
+                            token in lowered
+                            for token in ("query", "fetch", "lightcurve")
+                        )
+                    )
+                )
+                if is_error_field and _meaningful_error_value(child):
+                    findings[path] = child
+                if isinstance(child, (dict, list, tuple)):
+                    visit(child, path)
+        elif isinstance(value, (list, tuple)):
+            for index, child in enumerate(value):
+                visit(child, f"{prefix}[{index}]")
+
+    visit(manifest)
+    return findings
+
+
+def revalidate_zero_row_night(data_root, date_utc):
+    """Regenerate one valid empty-night manifest from its durable products.
+
+    This is intentionally conservative: it accepts only a completed,
+    error-free, structurally valid LSST-only night whose manifest and both
+    sibling Parquet products all report zero rows. It returns a regenerated
+    manifest but performs no write; callers can validate an entire repair set
+    before persisting any source change.
+    """
+    paths = nightly_paths(data_root, date_utc)
+    manifest = read_manifest(data_root, date_utc)
+    if manifest is None:
+        raise FileNotFoundError(f"Missing nightly manifest: {paths['manifest']}")
+    if manifest.get("date_utc") != date_utc:
+        raise ValueError(
+            f"Manifest date {manifest.get('date_utc')!r} does not match "
+            f"requested date {date_utc}."
+        )
+    if manifest.get("status") != "complete":
+        raise ValueError(
+            f"Zero-row revalidation requires status='complete'; found "
+            f"{manifest.get('status')!r} for {date_utc}."
+        )
+    if manifest.get("actual_loci") != 0 or manifest.get("alert_rows") != 0:
+        raise ValueError(
+            f"Zero-row revalidation requires actual_loci=0 and alert_rows=0 "
+            f"for {date_utc}."
+        )
+    chunk_count = manifest.get("chunk_count")
+    if (
+        isinstance(chunk_count, bool)
+        or not isinstance(chunk_count, int)
+        or chunk_count <= 0
+    ):
+        raise ValueError(
+            f"Zero-row revalidation requires a positive chunk_count for "
+            f"{date_utc}; found {chunk_count!r}."
+        )
+    if manifest.get("saturated_chunk_count") not in (0, 0.0):
+        raise ValueError(
+            f"Zero-row revalidation rejects saturated query chunks for "
+            f"{date_utc}."
+        )
+    if not manifest.get("finished_at_utc"):
+        raise ValueError(
+            f"Zero-row revalidation requires finished_at_utc for {date_utc}."
+        )
+    recorded_errors = recorded_query_fetch_errors(manifest)
+    if recorded_errors:
+        raise ValueError(
+            f"Zero-row revalidation found recorded query/fetch errors for "
+            f"{date_utc}: {recorded_errors}"
+        )
+
+    for name in ("loci", "alerts"):
+        if not paths[name].is_file():
+            raise FileNotFoundError(
+                f"Missing zero-row science product: {paths[name]}"
+            )
+    try:
+        df_loci = pd.read_parquet(paths["loci"])
+        df_alerts = pd.read_parquet(paths["alerts"])
+    except Exception as exc:
+        raise ValueError(
+            f"Could not read zero-row Parquet products for {date_utc}: {exc}"
+        ) from exc
+    if not df_loci.empty or not df_alerts.empty:
+        raise ValueError(
+            f"Zero-row revalidation found non-empty Parquet data for "
+            f"{date_utc}: loci={len(df_loci)}, alerts={len(df_alerts)}."
+        )
+
+    validation = validation_summary(
+        df_loci,
+        df_alerts,
+        mjd_min=manifest.get("mjd_min"),
+        mjd_max=manifest.get("mjd_max"),
+        prior_locus_ids=None,
+        lsst_only=bool(manifest.get("lsst_filter_used", True)),
+        query_completed=True,
+        query_fetch_clean=True,
+    )
+    if not validation.get("append_ready"):
+        raise ValueError(
+            f"Zero-row validation did not pass for {date_utc}: {validation}"
+        )
+
+    regenerated = deepcopy(manifest)
+    regenerated.update({
+        "actual_loci": 0,
+        "alert_rows": 0,
+        "lsst_dia_count": 0,
+        "lsst_ss_count": 0,
+        "ztf_object_id_count": 0,
+        "status": "complete",
+        "validation": validation,
+        "paths": {
+            "loci": str(paths["loci"]),
+            "alerts": str(paths["alerts"]),
+            "manifest": str(paths["manifest"]),
+        },
+        "revalidated_at_utc": _now_utc(),
+        "revalidation_policy": ZERO_ROW_REVALIDATION_POLICY,
+    })
+    return regenerated
 
 
 def _status_from_counts(actual_loci, target_loci, saturated_chunk_count, failed=False):
@@ -537,20 +771,76 @@ def _load_manifest_path(path):
         return json.load(handle)
 
 
-def update_cumulative_indexes(data_root=HISTORY_DATA_ROOT, require_append_ready=True):
+def _read_required_nightly_parquet(
+    manifest_path, manifest, product, count_field
+):
+    """Read and count-check a product beside its discovered manifest."""
+    product_path = Path(manifest_path).parent / f"{product}.parquet"
+    if not product_path.is_file():
+        raise FileNotFoundError(
+            f"Missing sibling {product}.parquet for nightly manifest "
+            f"{manifest_path}"
+        )
+    try:
+        frame = pd.read_parquet(product_path)
+    except Exception as exc:
+        raise ValueError(
+            f"Could not read sibling {product}.parquet for nightly manifest "
+            f"{manifest_path}: {exc}"
+        ) from exc
+
+    expected_rows = manifest.get(count_field)
+    if (
+        isinstance(expected_rows, bool)
+        or not isinstance(expected_rows, int)
+        or expected_rows < 0
+    ):
+        raise ValueError(
+            f"Invalid {count_field} in nightly manifest {manifest_path}: "
+            f"{expected_rows!r}."
+        )
+    if int(len(frame)) != expected_rows:
+        raise ValueError(
+            f"Manifest/Parquet {product} row mismatch for {manifest_path}: "
+            f"manifest={expected_rows}, parquet={len(frame)}."
+        )
+    return frame
+
+
+def update_cumulative_indexes(
+    data_root=HISTORY_DATA_ROOT,
+    require_append_ready=True,
+    output_dir=None,
+    manifest_overrides=None,
+):
     """
     Rebuild cumulative loci and nightly summary parquet files from platform data.
 
     By default, manifests with `validation.append_ready == False` are not
     included in the cumulative loci index.
     """
-    paths = cumulative_paths(data_root)
-    rsp_permissions.ensure_group_shared_path(paths["dir"])
+    if output_dir is None:
+        paths = cumulative_paths(data_root)
+    else:
+        output_root = Path(output_dir)
+        paths = {
+            "dir": output_root,
+            "loci_index": output_root / "loci_index.parquet",
+            "nightly_summary": output_root / "nightly_summary.parquet",
+        }
+    _ensure_storage_path(paths["dir"])
 
+    overrides = dict(manifest_overrides or {})
     manifests = []
     loci_frames = []
     for manifest_path in _manifest_paths(data_root):
         manifest = _load_manifest_path(manifest_path)
+        manifest_date = manifest.get("date_utc")
+        if manifest_date in overrides:
+            manifest = deepcopy(overrides.pop(manifest_date))
+        # Preserve the cumulative summary's historical semantics: every
+        # discovered manifest is represented, even when its science rows are
+        # not eligible for the loci index.
         manifests.append(manifest)
 
         if manifest.get("status") not in APPENDABLE_STATUSES:
@@ -559,13 +849,19 @@ def update_cumulative_indexes(data_root=HISTORY_DATA_ROOT, require_append_ready=
         if require_append_ready and append_ready is False:
             continue
 
-        loci_path = Path(manifest.get("paths", {}).get("loci", ""))
-        if not loci_path.exists():
-            continue
-        df_loci = pd.read_parquet(loci_path)
+        # Absolute paths embedded in copied manifests are provenance only.
+        df_loci = _read_required_nightly_parquet(
+            manifest_path, manifest, "loci", "actual_loci"
+        )
         keep = [col for col in CUMULATIVE_INDEX_COLUMNS if col in df_loci.columns]
         if keep:
             loci_frames.append(df_loci[keep].copy())
+
+    if overrides:
+        raise ValueError(
+            f"Manifest overrides did not match source dates: "
+            f"{sorted(overrides)}"
+        )
 
     if manifests:
         summary_df = pd.DataFrame(_manifest_to_summary_row(m) for m in manifests)
@@ -607,8 +903,10 @@ def load_cumulative_alerts(data_root=HISTORY_DATA_ROOT, before_mjd=None, before_
     """
     Load alert/lightcurve rows from prior nightly partitions.
 
-    Missing or empty alert parquet files are skipped. Use `max_nights` when
-    you want a bounded plotting sample from a very large platform store.
+    Empty alert parquet files represent valid zero-row nights. A missing,
+    unreadable, or count-mismatched sibling for an append-ready manifest raises
+    instead of silently omitting scientific rows. Use `max_nights` for a
+    bounded plotting sample from a very large platform store.
     """
     manifests = []
     for manifest_path in _manifest_paths(data_root):
@@ -623,18 +921,20 @@ def load_cumulative_alerts(data_root=HISTORY_DATA_ROOT, before_mjd=None, before_
         if before_date is not None and manifest.get("date_utc"):
             if manifest["date_utc"] >= before_date:
                 continue
-        manifests.append(manifest)
+        manifests.append((manifest_path, manifest))
 
-    manifests = sorted(manifests, key=lambda item: item.get("mjd_min", 0.0))
+    manifests = sorted(
+        manifests, key=lambda item: item[1].get("mjd_min", 0.0)
+    )
     if max_nights is not None:
         manifests = manifests[-int(max_nights):]
 
     frames = []
-    for manifest in manifests:
-        alerts_path = Path(manifest.get("paths", {}).get("alerts", ""))
-        if not alerts_path.exists():
-            continue
-        df_alerts = pd.read_parquet(alerts_path)
+    for manifest_path, manifest in manifests:
+        # Resolve from the discovered manifest, never from declared provenance.
+        df_alerts = _read_required_nightly_parquet(
+            manifest_path, manifest, "alerts", "alert_rows"
+        )
         if not df_alerts.empty:
             frames.append(df_alerts)
 

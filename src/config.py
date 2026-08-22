@@ -20,16 +20,20 @@ from pathlib import Path
 from astropy.time import Time
 
 # ---------------------------------------------------------------------------
-# RSP / REPOSITORY PATHS
+# STORAGE / REPOSITORY PATHS
 # ---------------------------------------------------------------------------
-# Generated ANTARES products are large, shared research artifacts. They belong
-# in the shared RSP data root by default, not in the Git repository checkout.
+# Generated ANTARES products are large research artifacts.  The historical
+# default remains the RSP location for compatibility, while deployments should
+# select their data root, cache root, and permission policy explicitly.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_ROOT = Path("/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data")
+DEFAULT_SHARED_GROUP = "g_antares_analysis"
+DEFAULT_STORAGE_POLICY = "private"
+VALID_STORAGE_POLICIES = frozenset({"private", "shared-group"})
 
 
 def _configured_data_root():
-    """Return the configured shared data root.
+    """Return the configured durable data root.
 
     ANTARES_ANALYSIS_DATA_ROOT is the canonical override. ANTARES_DATA_ROOT is
     still accepted for older notebooks and shell sessions.
@@ -38,8 +42,45 @@ def _configured_data_root():
     return Path(override).expanduser() if override else DEFAULT_DATA_ROOT
 
 
+def _configured_cache_root(data_root):
+    """Return the independently configurable cache root without creating it."""
+    override = os.getenv("ANTARES_ANALYSIS_CACHE_ROOT")
+    return Path(override).expanduser() if override else Path(data_root) / "cache"
+
+
+def normalize_storage_policy(value):
+    """Validate and normalize one explicit storage-policy value."""
+    policy = str(value).strip().lower()
+    if policy not in VALID_STORAGE_POLICIES:
+        choices = ", ".join(sorted(VALID_STORAGE_POLICIES))
+        raise ValueError(
+            f"Invalid ANTARES_STORAGE_POLICY {value!r}; expected one of: {choices}."
+        )
+    return policy
+
+
+def _configured_storage_policy():
+    return normalize_storage_policy(
+        os.getenv("ANTARES_STORAGE_POLICY", DEFAULT_STORAGE_POLICY)
+    )
+
+
+def _configured_shared_group(storage_policy):
+    """Return the configured Unix group only when shared-group mode is active."""
+    if storage_policy != "shared-group":
+        return None
+    group = os.getenv("ANTARES_SHARED_GROUP", DEFAULT_SHARED_GROUP).strip()
+    if not group:
+        raise ValueError(
+            "ANTARES_SHARED_GROUP must be non-empty in shared-group storage mode."
+        )
+    return group
+
+
 DATA_ROOT = _configured_data_root()
-CACHE_ROOT = DATA_ROOT / "cache"
+CACHE_ROOT = _configured_cache_root(DATA_ROOT)
+STORAGE_POLICY = _configured_storage_policy()
+SHARED_GROUP = _configured_shared_group(STORAGE_POLICY)
 LSST_ONLY_ROOT = DATA_ROOT / "data" / "lsst_only"
 NIGHTLY_ROOT = LSST_ONLY_ROOT / "nightly"
 CUMULATIVE_ROOT = LSST_ONLY_ROOT / "cumulative"
@@ -48,7 +89,10 @@ FEATURE_SNAPSHOT_PATH = LSST_ONLY_ROOT / "analysis" / "locus_feature_snapshots.p
 FEATURE_SNAPSHOT_MANIFEST_PATH = (
     LSST_ONLY_ROOT / "analysis" / "locus_feature_snapshots_manifest.json"
 )
-EXPECTED_SHARED_GROUP = os.getenv("ANTARES_SHARED_GROUP", "g_antares_analysis")
+# Backward-compatible name used by older notebooks and scripts.  It is
+# deliberately None in private mode so ANTARES_SHARED_GROUP cannot silently
+# activate group-specific behavior.
+EXPECTED_SHARED_GROUP = SHARED_GROUP
 
 # ---------------------------------------------------------------------------
 # SURVEY / PLATFORM MODE
@@ -276,6 +320,8 @@ def print_config_summary():
     print(f"  Project root       : {PROJECT_ROOT}")
     print(f"  Data root          : {DATA_ROOT}")
     print(f"  Cache root         : {CACHE_ROOT}")
+    print(f"  Storage policy     : {STORAGE_POLICY}")
+    print(f"  Shared group       : {SHARED_GROUP or 'not used'}")
     print(f"  Nightly root       : {NIGHTLY_ROOT}")
     print(f"  Cumulative root    : {CUMULATIVE_ROOT}")
     print(f"  Analysis root      : {ANALYSIS_ROOT}")

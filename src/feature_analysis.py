@@ -6,7 +6,9 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -80,6 +82,23 @@ def _now_utc():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _ensure_storage_path(path):
+    """Create a directory through the configured storage policy."""
+    helper = getattr(rsp_permissions, "ensure_storage_path", None)
+    if helper is not None:
+        return helper(path)
+    # Compatibility with older, explicitly shared-group RSP checkouts.
+    return rsp_permissions.ensure_group_shared_path(path)
+
+
+def _mark_file_for_storage(path):
+    """Apply the configured storage policy to one newly written file."""
+    helper = getattr(rsp_permissions, "mark_file_for_storage", None)
+    if helper is not None:
+        return helper(path)
+    return rsp_permissions.mark_file_group_writable(path)
+
+
 def _analysis_root(data_root):
     return history.survey_data_root(data_root) / "analysis"
 
@@ -107,7 +126,17 @@ def _manifest_files(data_root):
     return sorted(root.glob("*/*/*/manifest.json"))
 
 
+def _sha256_file(path):
+    """Return a relocation-stable content identity for one source file."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _source_inventory(data_root):
+    data_root = Path(data_root)
     inventory = []
     for manifest_path in _manifest_files(data_root):
         manifest = _read_manifest(manifest_path)
@@ -115,18 +144,84 @@ def _source_inventory(data_root):
             continue
         if manifest.get("validation", {}).get("append_ready") is False:
             continue
-        loci_path = Path(manifest.get("paths", {}).get("loci", ""))
-        if not loci_path.exists():
-            continue
+
+        # The discovered manifest directory is authoritative after relocation.
+        # Embedded paths remain provenance and must never redirect this read.
+        loci_path = manifest_path.parent / "loci.parquet"
+        if not loci_path.is_file():
+            raise FileNotFoundError(
+                f"Missing sibling loci.parquet for append-ready manifest "
+                f"{manifest_path}"
+            )
+        try:
+            parquet_file = pq.ParquetFile(loci_path)
+            schema_names = parquet_file.schema_arrow.names
+            row_count = int(parquet_file.metadata.num_rows)
+        except Exception as exc:
+            raise ValueError(
+                f"Could not read sibling loci.parquet for append-ready "
+                f"manifest {manifest_path}: {exc}"
+            ) from exc
+        if LOCUS_ID not in schema_names:
+            raise ValueError(
+                f"Sibling loci.parquet for append-ready manifest "
+                f"{manifest_path} is missing required column {LOCUS_ID!r}."
+            )
+
+        # Opening a Parquet footer is not enough to prove its data pages are
+        # readable. Stream every column in bounded record batches so damage in
+        # an unrequested source column cannot make an unreadable required
+        # sibling look safe merely because the feature subset still decodes.
+        try:
+            decoded_rows = sum(
+                batch.num_rows
+                for batch in parquet_file.iter_batches(batch_size=65_536)
+            )
+        except Exception as exc:
+            raise ValueError(
+                "Could not decode all columns in sibling loci.parquet "
+                f"for append-ready manifest {manifest_path}: {exc}"
+            ) from exc
+        if decoded_rows != row_count:
+            raise ValueError(
+                f"Decoded loci row mismatch for {manifest_path}: "
+                f"metadata={row_count}, decoded={decoded_rows}."
+            )
+
+        expected_rows = manifest.get("actual_loci")
+        if (
+            isinstance(expected_rows, bool)
+            or not isinstance(expected_rows, int)
+            or expected_rows < 0
+        ):
+            raise ValueError(
+                f"Invalid actual_loci in append-ready manifest "
+                f"{manifest_path}: {expected_rows!r}."
+            )
+        if row_count != expected_rows:
+            raise ValueError(
+                f"Manifest/Parquet loci row mismatch for {manifest_path}: "
+                f"manifest={expected_rows}, parquet={row_count}."
+            )
+
         stat = loci_path.stat()
+        try:
+            source_sha256 = _sha256_file(loci_path)
+        except Exception as exc:
+            raise ValueError(
+                f"Could not checksum sibling loci.parquet for append-ready "
+                f"manifest {manifest_path}: {exc}"
+            ) from exc
+        source_id = loci_path.relative_to(data_root).as_posix()
         inventory.append(
             {
                 "date_utc": manifest.get("date_utc"),
                 "mjd_min": manifest.get("mjd_min"),
                 "mjd_max": manifest.get("mjd_max"),
-                "path": str(loci_path),
+                "path": source_id,
                 "size_bytes": stat.st_size,
-                "mtime_ns": stat.st_mtime_ns,
+                "row_count": row_count,
+                "sha256": source_sha256,
             }
         )
     return sorted(inventory, key=lambda row: (row.get("mjd_min") or 0, row["path"]))
@@ -145,11 +240,148 @@ def _read_manifest(path):
 
 
 def _write_json(path, payload):
-    rsp_permissions.ensure_group_shared_path(path.parent)
+    _ensure_storage_path(path.parent)
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    rsp_permissions.mark_file_group_writable(path)
+    _mark_file_for_storage(path)
+
+
+def _source_parquet_path(data_root, source):
+    """Resolve one portable inventory identifier beneath its current root."""
+    source_id = Path(source["path"])
+    if source_id.is_absolute() or ".." in source_id.parts:
+        raise ValueError(
+            f"Feature source identifier must be data-root-relative: {source_id}"
+        )
+    return Path(data_root) / source_id
+
+
+def _validate_staged_snapshot(
+    parquet_path, manifest_path, expected_rows, expected_inventory_hash
+):
+    """Fully read and validate staged snapshot products before promotion."""
+    try:
+        parquet_file = pq.ParquetFile(parquet_path)
+        schema_names = parquet_file.schema_arrow.names
+        metadata_rows = int(parquet_file.metadata.num_rows)
+        staged_frame = pd.read_parquet(parquet_path)
+    except Exception as exc:
+        raise ValueError(
+            f"Could not validate staged feature snapshot {parquet_path}: {exc}"
+        ) from exc
+
+    if schema_names != REQUESTED_COLUMNS:
+        raise ValueError(
+            "Staged feature snapshot schema mismatch: "
+            f"expected={REQUESTED_COLUMNS!r}, actual={schema_names!r}."
+        )
+    if list(staged_frame.columns) != REQUESTED_COLUMNS:
+        raise ValueError(
+            "Staged feature snapshot column mismatch after readback: "
+            f"expected={REQUESTED_COLUMNS!r}, "
+            f"actual={list(staged_frame.columns)!r}."
+        )
+    if metadata_rows != expected_rows or len(staged_frame) != expected_rows:
+        raise ValueError(
+            "Staged feature snapshot row-count mismatch: "
+            f"expected={expected_rows}, metadata={metadata_rows}, "
+            f"readback={len(staged_frame)}."
+        )
+
+    try:
+        staged_manifest = _read_manifest(manifest_path)
+    except Exception as exc:
+        raise ValueError(
+            f"Could not validate staged feature manifest {manifest_path}: {exc}"
+        ) from exc
+    if staged_manifest.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError("Staged feature manifest schema_version mismatch.")
+    if staged_manifest.get("requested_columns") != REQUESTED_COLUMNS:
+        raise ValueError("Staged feature manifest requested_columns mismatch.")
+    if staged_manifest.get("snapshot_rows") != expected_rows:
+        raise ValueError("Staged feature manifest snapshot_rows mismatch.")
+    if staged_manifest.get("source_inventory_hash") != expected_inventory_hash:
+        raise ValueError("Staged feature manifest inventory hash mismatch.")
+    if (
+        _inventory_hash(staged_manifest.get("source_inventory", []))
+        != expected_inventory_hash
+    ):
+        raise ValueError("Staged feature manifest inventory contents mismatch.")
+
+
+def _is_valid_empty_snapshot_cache(paths, cached_manifest, inventory_hash):
+    """Return whether existing outputs are a validated, current empty cache."""
+    return (
+        cached_manifest.get("source_inventory") == []
+        and cached_manifest.get("snapshot_rows") == 0
+        and _is_current_snapshot_cache(paths, cached_manifest, inventory_hash)
+    )
+
+
+def _is_current_snapshot_cache(paths, cached_manifest, inventory_hash):
+    """Return whether the existing snapshot pair passes the promotion contract."""
+    expected_rows = cached_manifest.get("snapshot_rows")
+    if (
+        not paths["parquet"].is_file()
+        or not paths["manifest"].is_file()
+        or cached_manifest.get("schema_version") != SCHEMA_VERSION
+        or cached_manifest.get("source_inventory_hash") != inventory_hash
+        or isinstance(expected_rows, bool)
+        or not isinstance(expected_rows, int)
+        or expected_rows < 0
+    ):
+        return False
+    try:
+        _validate_staged_snapshot(
+            paths["parquet"],
+            paths["manifest"],
+            expected_rows=expected_rows,
+            expected_inventory_hash=inventory_hash,
+        )
+    except ValueError:
+        return False
+    return True
+
+
+def _promote_snapshot_products(staged_parquet, staged_manifest, paths):
+    """Atomically replace each snapshot file and roll back a partial pair."""
+    targets = [
+        ("parquet", Path(staged_parquet), paths["parquet"]),
+        ("manifest", Path(staged_manifest), paths["manifest"]),
+    ]
+    backups = {}
+    existed = {}
+    for label, _, target in targets:
+        target = Path(target)
+        existed[label] = target.exists()
+        if existed[label]:
+            backup = Path(staged_parquet).parent / f".previous-{target.name}"
+            shutil.copy2(target, backup)
+            backups[label] = backup
+
+    promoted = []
+    try:
+        for label, staged, target in targets:
+            os.replace(staged, target)
+            promoted.append((label, Path(target)))
+    except Exception as promotion_error:
+        rollback_errors = []
+        for label, target in reversed(promoted):
+            try:
+                if existed[label]:
+                    os.replace(backups[label], target)
+                elif target.exists():
+                    target.unlink()
+            except Exception as rollback_error:
+                rollback_errors.append(f"{label}: {rollback_error}")
+        if rollback_errors:
+            details = "; ".join(rollback_errors)
+            raise RuntimeError(
+                "Feature snapshot promotion failed and rollback was "
+                f"incomplete: {details}"
+            ) from promotion_error
+        raise
 
 
 def _coverage_rows(source, schema_names, row_count, frame=None):
@@ -196,18 +428,28 @@ def _normalize_snapshot_frame(df, source):
 def build_or_load_feature_snapshots(data_root, force=False):
     """Build or load the compact locus-feature snapshot table.
 
-    Returns ``(snapshots, coverage, manifest)``. The builder reads only
-    requested columns that are actually present in each nightly parquet.
+    Returns ``(snapshots, coverage, manifest)``. Source validation streams all
+    columns for readability; snapshot materialization retains only requested
+    columns that are actually present in each nightly parquet.
     """
     paths = _snapshot_paths(data_root)
     inventory = _source_inventory(data_root)
     inventory_hash = _inventory_hash(inventory)
     cached_manifest = _read_manifest(paths["manifest"])
+    existing_outputs = paths["parquet"].exists() or paths["manifest"].exists()
+    current_empty_cache = _is_valid_empty_snapshot_cache(
+        paths, cached_manifest, inventory_hash
+    )
+    if not inventory and existing_outputs and not current_empty_cache:
+        raise RuntimeError(
+            "No append-ready feature sources resolved; refusing to replace "
+            "existing snapshot products with an empty inventory."
+        )
     cache_current = (
         not force
-        and paths["parquet"].exists()
-        and cached_manifest.get("schema_version") == SCHEMA_VERSION
-        and cached_manifest.get("source_inventory_hash") == inventory_hash
+        and _is_current_snapshot_cache(
+            paths, cached_manifest, inventory_hash
+        )
     )
 
     if cache_current:
@@ -218,15 +460,55 @@ def build_or_load_feature_snapshots(data_root, force=False):
     frames = []
     coverage_rows = []
     for source in inventory:
-        parquet_file = pq.ParquetFile(source["path"])
-        schema_names = parquet_file.schema_arrow.names
+        source_path = _source_parquet_path(data_root, source)
+        if not source_path.is_file():
+            raise FileNotFoundError(
+                f"Missing inventoried sibling loci.parquet: {source_path}"
+            )
+        try:
+            parquet_file = pq.ParquetFile(source_path)
+            schema_names = parquet_file.schema_arrow.names
+        except Exception as exc:
+            raise ValueError(
+                f"Could not read inventoried sibling loci.parquet "
+                f"{source_path}: {exc}"
+            ) from exc
+        if int(parquet_file.metadata.num_rows) != source["row_count"]:
+            raise ValueError(
+                f"Inventoried loci row count changed while building "
+                f"{source_path}: inventory={source['row_count']}, "
+                f"current={parquet_file.metadata.num_rows}."
+            )
         columns = [col for col in REQUESTED_COLUMNS if col in schema_names]
         if LOCUS_ID not in columns:
-            coverage_rows.extend(
-                _coverage_rows(source, schema_names, parquet_file.metadata.num_rows)
+            raise ValueError(
+                f"Inventoried loci parquet {source_path} is missing required "
+                f"column {LOCUS_ID!r}."
             )
-            continue
-        frame = pd.read_parquet(source["path"], columns=columns)
+        try:
+            frame = pd.read_parquet(source_path, columns=columns)
+        except Exception as exc:
+            raise ValueError(
+                f"Could not read inventoried sibling loci.parquet "
+                f"{source_path}: {exc}"
+            ) from exc
+        if len(frame) != source["row_count"]:
+            raise ValueError(
+                f"Inventoried loci readback row mismatch for {source_path}: "
+                f"inventory={source['row_count']}, readback={len(frame)}."
+            )
+        try:
+            current_sha256 = _sha256_file(source_path)
+        except Exception as exc:
+            raise ValueError(
+                f"Could not re-check inventoried loci parquet {source_path}: "
+                f"{exc}"
+            ) from exc
+        if current_sha256 != source["sha256"]:
+            raise RuntimeError(
+                "Inventoried loci parquet changed while the feature snapshot "
+                f"was being built: {source_path}. Refusing promotion."
+            )
         coverage_rows.extend(
             _coverage_rows(
                 source, schema_names, parquet_file.metadata.num_rows, frame=frame
@@ -269,10 +551,29 @@ def build_or_load_feature_snapshots(data_root, force=False):
         "coverage": coverage.to_dict(orient="records"),
     }
 
-    rsp_permissions.ensure_group_shared_path(paths["root"])
-    snapshots.to_parquet(paths["parquet"], index=False)
-    rsp_permissions.mark_file_group_writable(paths["parquet"])
-    _write_json(paths["manifest"], manifest)
+    _ensure_storage_path(paths["root"])
+    with tempfile.TemporaryDirectory(
+        prefix=".feature-snapshot-stage-", dir=paths["root"]
+    ) as stage_name:
+        stage_root = Path(stage_name)
+        _ensure_storage_path(stage_root)
+        staged_parquet = stage_root / paths["parquet"].name
+        staged_manifest = stage_root / paths["manifest"].name
+
+        snapshots.to_parquet(staged_parquet, index=False)
+        _mark_file_for_storage(staged_parquet)
+        _write_json(staged_manifest, manifest)
+        _validate_staged_snapshot(
+            staged_parquet,
+            staged_manifest,
+            expected_rows=len(snapshots),
+            expected_inventory_hash=inventory_hash,
+        )
+
+        # Each replacement is atomic because staging is on the target
+        # filesystem. A saved copy of the existing pair permits rollback if
+        # the second individual replacement fails.
+        _promote_snapshot_products(staged_parquet, staged_manifest, paths)
     return snapshots, coverage, manifest
 
 
@@ -849,7 +1150,7 @@ def save_feature_coverage_audit(
 ):
     """Persist a coverage-only result when no requested plane is usable."""
     output_dir = Path(output_dir)
-    rsp_permissions.ensure_group_shared_path(output_dir)
+    _ensure_storage_path(output_dir)
     coverage_path = output_dir / "feature_coverage.csv"
     cohort_path = output_dir / "cohort_summary.csv"
     statistics_path = output_dir / "feature_statistics.csv"
@@ -861,7 +1162,7 @@ def save_feature_coverage_audit(
         tag_path, index=False
     )
     for path in [coverage_path, cohort_path, statistics_path, tag_path]:
-        rsp_permissions.mark_file_group_writable(path)
+        _mark_file_for_storage(path)
     metadata = {
         "created_at_utc": _now_utc(),
         "git_commit_sha": _git_sha(),
@@ -888,7 +1189,7 @@ def save_feature_products(
 ):
     """Save tables, metadata, and main/tag figure sets."""
     output_dir = Path(output_dir)
-    rsp_permissions.ensure_group_shared_path(output_dir)
+    _ensure_storage_path(output_dir)
     coverage = coverage if coverage is not None else pd.DataFrame()
     coverage_path = output_dir / "feature_coverage.csv"
     cohort_path = output_dir / "cohort_summary.csv"
@@ -908,7 +1209,7 @@ def save_feature_products(
         )
     tag_output.to_csv(tag_path, index=False)
     for path in [coverage_path, cohort_path, statistics_path, tag_path]:
-        rsp_permissions.mark_file_group_writable(path)
+        _mark_file_for_storage(path)
 
     figure_paths = []
     figures = [
@@ -934,7 +1235,7 @@ def save_feature_products(
     for filename, figure in figures:
         path = output_dir / filename
         figure.savefig(path, dpi=180, bbox_inches="tight")
-        rsp_permissions.mark_file_group_writable(path)
+        _mark_file_for_storage(path)
         figure_paths.append(str(path))
         plt.close(figure)
 

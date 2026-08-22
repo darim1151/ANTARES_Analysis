@@ -108,10 +108,11 @@ def save_cache(paths, df1, df2, df1_alerts, df2_alerts):
     ]:
         path = paths[name]
         if not df.empty:
-            # Ensure the shared cache directory exists and remains group-writeable.
-            rsp_permissions.ensure_group_shared_path(os.path.dirname(path) or '.')
+            # The caller selects the cache root; the configured storage policy
+            # controls only how newly written paths are created and marked.
+            rsp_permissions.ensure_storage_path(os.path.dirname(path) or '.')
             df.to_parquet(path, index=False)
-            rsp_permissions.mark_file_group_writable(path)
+            rsp_permissions.mark_file_for_storage(path)
             print(f"  Saved {name:12s} -> {path}  ({len(df):,} rows)")
         else:
             print(f"  Skipped {name:12s} (empty DataFrame)")

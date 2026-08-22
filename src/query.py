@@ -20,7 +20,6 @@ expensive one (one HTTP request per locus).
 """
 
 import pandas as pd
-from antares_client.search import search as antares_search
 
 LSST_DIA_FIELD = "properties.survey.lsst.dia_object_id"
 LSST_SS_FIELD = "properties.survey.lsst.ss_object_id"
@@ -218,6 +217,17 @@ def query_range(label, mjd_min, mjd_max, n_samples,
         if verbose:
             print(f"  Skipping '{label}': MJDmin > MJDmax.")
         return pd.DataFrame()
+
+    # Keep the broker client optional for offline operations such as
+    # validating existing Parquet partitions and rebuilding cumulative
+    # indexes. Live query calls still fail clearly when the client is absent.
+    try:
+        from antares_client.search import search as antares_search
+    except ImportError as exc:
+        raise RuntimeError(
+            "antares_client is required for live ANTARES queries but is not "
+            "installed in this environment."
+        ) from exc
 
     def _collect(q, limit):
         """Iterate the ANTARES generator until we have `limit` records."""

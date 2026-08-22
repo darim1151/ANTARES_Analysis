@@ -12,7 +12,7 @@ Module map:
     chunked_query - Adaptive chunked ingestion for complete nightly updates
     history      - Platform-backed cumulative nightly history pipeline
     feature_analysis - Locus feature snapshots, statistics, and figures
-    rsp_permissions - Shared RSP data-root preflight and chmod helpers
+    rsp_permissions - Portable private/shared storage preflight and permissions
     lightcurves  - Parallel per-locus lightcurve fetching
     cache        - Parquet load/save keyed by query parameters
     summary      - Human-readable summary statistics
@@ -20,23 +20,15 @@ Module map:
     validation   - Eight-test data-integrity suite
 """
 
-from . import (
-    cache,
-    chunked_query,
-    config,
-    feature_analysis,
-    figures,
-    history,
-    lightcurves,
-    query,
-    rsp_permissions,
-    summary,
-    validation,
-)
+from __future__ import annotations
+
+from importlib import import_module
+from types import ModuleType
 
 __all__ = [
     "cache",
     "chunked_query",
+    "cli",
     "config",
     "feature_analysis",
     "figures",
@@ -47,3 +39,23 @@ __all__ = [
     "summary",
     "validation",
 ]
+
+
+def __getattr__(name: str) -> ModuleType:
+    """Load public submodules on demand.
+
+    Keeping package initialization lightweight lets metadata-only commands such
+    as ``antares-analysis --version`` run without importing the scientific stack
+    or evaluating storage configuration. Existing ``from src import config``
+    style imports remain compatible through this lazy loader.
+    """
+    if name not in __all__:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(f".{name}", __name__)
+    globals()[name] = module
+    return module
+
+
+def __dir__() -> list[str]:
+    """Include lazily exposed modules in interactive discovery."""
+    return sorted(set(globals()) | set(__all__))
