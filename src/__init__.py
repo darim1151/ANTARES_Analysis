@@ -34,6 +34,7 @@ __all__ = [
     "figures",
     "history",
     "lightcurves",
+    "operations",
     "query",
     "rsp_permissions",
     "summary",

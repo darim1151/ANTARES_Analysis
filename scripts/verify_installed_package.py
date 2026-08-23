@@ -32,6 +32,18 @@ def main() -> int:
         raise RuntimeError("src.config was imported eagerly")
 
     module_names = ["src"] + [f"src.{name}" for name in package.__all__]
+    module_names.extend(
+        [
+            "src.operations.context",
+            "src.operations.locking",
+            "src.operations.plan",
+            "src.operations.report",
+            "src.operations.state",
+            "src.operations.storage",
+            "src.operations.transaction",
+            "src.operations.validation",
+        ]
+    )
     # Exercise the broker client's real import closure (including its BSON
     # dependency) without making a network request. Project modules import the
     # client lazily, so importing only src.* would not prove this closure.
@@ -55,6 +67,29 @@ def main() -> int:
         status = cli.main([])
     if status != 0 or "usage: antares-analysis" not in output.getvalue():
         raise RuntimeError("installed CLI help smoke test failed")
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        status = cli.main(["profile", "list", "--json"])
+    if status != 0 or '"middle-earth"' not in output.getvalue():
+        raise RuntimeError("installed Phase 2 profile smoke test failed")
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        status = cli.main(
+            [
+                "night",
+                "plan",
+                "2026-06-27",
+                "--data-root",
+                str(installed_prefix / "missing-data"),
+                "--cache-root",
+                str(installed_prefix / "missing-cache"),
+                "--json",
+            ]
+        )
+    if status != 0 or '"writer_not_enabled_in_this_release"' not in output.getvalue():
+        raise RuntimeError("installed Phase 3 planning smoke test failed")
 
     version = metadata.version("antares-analysis")
     print(f"Installed package verified: antares-analysis {version}")

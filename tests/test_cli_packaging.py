@@ -65,7 +65,7 @@ class CliPackagingTests(unittest.TestCase):
             'antares-analysis = "src.cli:main"',
             metadata_text,
         )
-        self.assertIn('packages = ["src"]', metadata_text)
+        self.assertIn('packages = ["src", "src.operations"]', metadata_text)
 
     def test_runtime_versions_are_explicitly_pinned(self):
         metadata_text = PYPROJECT_PATH.read_text(encoding="utf-8")

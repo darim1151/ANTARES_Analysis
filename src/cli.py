@@ -1,8 +1,9 @@
 """Command-line control plane for ANTARES Analysis.
 
-The Phase 2 command surface is intentionally read-only. It resolves storage
+The supported command surface is intentionally read-only. It resolves storage
 profiles, inspects the migrated dataset, diagnoses the execution environment,
-and renders Jupyter commands without starting processes or modifying storage.
+renders Jupyter commands, and produces future-writer plans without starting
+processes, querying ANTARES, or modifying storage.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from src.cli_profiles import (
     render_shell_environment,
     resolve_profile,
 )
+from src.operations import context_from_profile, plan_backfill, plan_night
 
 
 DIST_NAME = "antares-analysis"
@@ -245,17 +247,49 @@ def _handle_jupyter_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _render_operation_report(report, *, json_output: bool) -> int:
+    if json_output:
+        print(report.to_json())
+    else:
+        print(report.render_human())
+        plan_id = report.details.get("plan_id")
+        if plan_id:
+            print(f"Plan ID:   {plan_id}")
+    return int(report.exit_code)
+
+
+def _operation_context_from_args(args: argparse.Namespace):
+    profile = _profile_from_args(args)
+    return context_from_profile(
+        profile,
+        execution_metadata={"interface": "cli", "version": package_version()},
+    )
+
+
+def _handle_night_plan(args: argparse.Namespace) -> int:
+    report = plan_night(_operation_context_from_args(args), args.date)
+    return _render_operation_report(report, json_output=args.json)
+
+
+def _handle_backfill_plan(args: argparse.Namespace) -> int:
+    report = plan_backfill(
+        _operation_context_from_args(args), args.start_date, args.end_date
+    )
+    return _render_operation_report(report, json_output=args.json)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the stable, navigable parser used by the console entry point."""
     parser = argparse.ArgumentParser(
         prog=DIST_NAME,
         description=(
             "Read-only ANTARES Analysis control plane for Middle Earth storage, "
-            "dataset diagnostics, and Jupyter navigation."
+            "dataset diagnostics, future-writer planning, and Jupyter navigation."
         ),
         epilog=(
             "Examples: antares-analysis doctor --profile middle-earth; "
             "antares-analysis data status --profile middle-earth; "
+            "antares-analysis night plan 2026-06-27 --profile middle-earth; "
             "antares-analysis jupyter command setup --profile middle-earth"
         ),
     )
@@ -312,6 +346,35 @@ def build_parser() -> argparse.ArgumentParser:
     _add_profile_options(data_status)
     data_status.add_argument("--json", action="store_true", help="emit JSON")
     data_status.set_defaults(handler=_handle_data_status)
+
+    night_parser = commands.add_parser(
+        "night", help="plan future nightly operations without executing them"
+    )
+    night_commands = night_parser.add_subparsers(dest="night_command", metavar="COMMAND")
+    night_parser.set_defaults(handler=_help_handler(night_parser))
+    night_plan = night_commands.add_parser(
+        "plan", help="build a side-effect-free future-writer plan for one UTC date"
+    )
+    night_plan.add_argument("date", help="UTC night in canonical YYYY-MM-DD form")
+    _add_profile_options(night_plan)
+    night_plan.add_argument("--json", action="store_true", help="emit versioned JSON")
+    night_plan.set_defaults(handler=_handle_night_plan)
+
+    backfill_parser = commands.add_parser(
+        "backfill", help="plan sequential backlog handling without executing it"
+    )
+    backfill_commands = backfill_parser.add_subparsers(
+        dest="backfill_command", metavar="COMMAND"
+    )
+    backfill_parser.set_defaults(handler=_help_handler(backfill_parser))
+    backfill_plan = backfill_commands.add_parser(
+        "plan", help="plan an inclusive sequential UTC-date range"
+    )
+    backfill_plan.add_argument("start_date", help="inclusive start YYYY-MM-DD")
+    backfill_plan.add_argument("end_date", help="inclusive end YYYY-MM-DD")
+    _add_profile_options(backfill_plan)
+    backfill_plan.add_argument("--json", action="store_true", help="emit versioned JSON")
+    backfill_plan.set_defaults(handler=_handle_backfill_plan)
 
     jupyter = commands.add_parser("jupyter", help="discover notebooks and render launch commands")
     jupyter_commands = jupyter.add_subparsers(dest="jupyter_command", metavar="COMMAND")

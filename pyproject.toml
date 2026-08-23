@@ -45,4 +45,4 @@ dev = [
 antares-analysis = "src.cli:main"
 
 [tool.setuptools]
-packages = ["src"]
+packages = ["src", "src.operations"]

@@ -35,8 +35,8 @@ python3.11 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The Phase 2 console is a read-only control plane for the migrated Middle Earth
-dataset and the repository's Jupyter workflows:
+The console is a read-only control plane for the migrated Middle Earth dataset,
+future-writer planning, and the repository's Jupyter workflows:
 
 ```bash
 antares-analysis --version
@@ -46,23 +46,46 @@ antares-analysis profile show --profile middle-earth
 antares-analysis profile export --profile middle-earth
 antares-analysis doctor --profile middle-earth
 antares-analysis data status --profile middle-earth
+antares-analysis night plan 2026-06-27 --profile middle-earth
+antares-analysis backfill plan 2026-06-27 2026-06-29 --profile middle-earth
 antares-analysis jupyter list
 antares-analysis jupyter command setup --profile middle-earth
 ```
 
-Add `--json` to profile inspection, `doctor`, `data status`, `jupyter list`, or
-`jupyter command` for stable machine-readable output. `profile export` and
+Add `--json` to profile inspection, `doctor`, `data status`, `night plan`,
+`backfill plan`, `jupyter list`, or `jupyter command` for stable
+machine-readable output. `profile export` and
 `jupyter env` render copy/paste-safe shell exports. `jupyter command` renders a
 shell-safe launch command but deliberately does not execute it. Exit status 0
 means the requested inspection passed, 1 means a health/status gate failed,
 and 2 means the request or configuration is invalid.
 
-Every Phase 2 command is non-mutating: it does not create data or cache
+Every supported command is non-mutating: it does not create data or cache
 directories, launch Jupyter, query ANTARES, update manifests, or rebuild
-cumulative products. Production writer commands remain disabled until their
-locking, strict error propagation, resume, rollback, and transactional
-publication contracts are implemented and tested. The implementation sequence
-and acceptance gates are in `docs/cli/PHASED_ROADMAP.md`.
+cumulative products. Planning reports the current partition state, prerequisites,
+blockers, conceptual lock resource, validation gates, unknown estimates, and
+separate derived reconciliation. Production writer commands remain disabled;
+plans say `writer_not_enabled_in_this_release` rather than implying execution.
+The operations decision and acceptance gates are in
+`docs/architecture/ADR-0001-operations-and-writer-contracts.md` and
+`docs/cli/PHASED_ROADMAP.md`.
+
+The reusable Python API is the same path used by the CLI and is safe to import
+from Jupyter without invoking a subprocess:
+
+```python
+from src import operations
+
+ctx = operations.context_from_environment()
+report = operations.plan_night(ctx, "2026-06-27")
+```
+
+Planning/report schema `1.0` is deterministic for the same explicit context and
+filesystem fixture. Phase 2 exit codes remain `0` success, `1` failed
+health/validation gate, and `2` invalid request/configuration. The operations
+contract reserves `3` for operational failure, `4` for refusal/authorization,
+and `5` for unexpected internal failure. A valid read-only plan returns `0`
+while carrying the separate writer refusal in its report.
 
 See `requirements/README.md` for the mandatory Linux x86_64 hashed-lock and
 fresh-wheel verification procedure. Neither a macOS `pip freeze` nor
@@ -332,11 +355,18 @@ Do not pull `notebooks/alerts_time_comparison.ipynb` unless you intentionally wa
 
 ## Current Safety Boundary
 
-The Phase 2 CLI implements read-only profiles, diagnostics, data inventory, and
-Jupyter navigation. It does not implement daily ingestion or deployment. Phase
-3 must add and verify writer locking, immutable run plans, dry runs, strict
-fetch-error propagation, staged validation, atomic publication, interruption
-recovery, and rollback before notebook ingestion logic becomes a supported CLI
-writer. Middle Earth job execution and managed Jupyter launch remain later,
-separately gated integrations. Cache rebuilding and warming also remain
-separate, explicitly authorized work.
+The Phase 3 foundation adds reusable operation contexts/reports, deterministic
+night/backfill planning, legal writer states, contained storage paths,
+single-writer ownership, strict query/fetch evidence, guarded staging,
+validation-before-publication, and reconciliation-after-publication semantics.
+Executable lock/transaction proofs are restricted to local temporary fixtures.
+There is no production capability and no ingestion, backfill-run, reconcile, or
+deployment command.
+
+`historical_backfill.ipynb` and `alerts_time_comparison.ipynb` still contain
+operational publication/reconciliation logic. They are retained unchanged to
+avoid silently migrating accepted science behavior, but they are not the
+future production-writer authority. Read-only Arnor acceptance must verify
+`/astro/store/shire` locking and atomic-rename behavior before transactional
+writer implementation or canary preparation begins. Cache rebuilding/warming
+and managed Jupyter execution remain separately authorized later work.

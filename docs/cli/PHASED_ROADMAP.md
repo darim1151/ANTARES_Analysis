@@ -43,7 +43,7 @@ to display CLI metadata.
 
 ## Phase 2 — read-only Middle Earth control plane
 
-Status: current delivery.
+Status: complete in local commit `c74977c`.
 
 ### User surface
 
@@ -76,10 +76,41 @@ non-zero status when required conditions fail.
 - The full Python suite, source compilation, build, installed-wheel smoke, and
   exact staged-diff review pass before commit.
 
-## Phase 3 — guarded data operator engine
+## Phase 3 — operations architecture and writer-contract foundation
 
-Goal: move ingestion/backfill mechanics from notebooks into supported CLI
-commands without risking the migrated store.
+Status: complete locally; production writer intentionally disabled pending
+read-only Arnor acceptance.
+
+Delivered foundation:
+
+- immutable/effectively immutable operation context with one-time profile
+  resolution, explicit clock/logger/run metadata, and no path creation;
+- versioned unified operation reports with deterministic JSON and human output;
+- explicit writer state machine and legal transitions;
+- side-effect-free `night plan` and inclusive sequential `backfill plan`;
+- contained storage layout, cache separation, sibling-manifest science paths,
+  and symlink/path-injection refusal;
+- conservative single-writer lock ownership and stale-lock inspection contracts;
+- same-filesystem staging, validation-before-publication, overwrite refusal,
+  manifest-last staging, atomic directory promotion, and pre-publication abort
+  behavior restricted to local temporary fixtures;
+- strict query/fetch and zero-row evidence contracts;
+- publication preserved when separate derived reconciliation fails;
+- Jupyter-facing Python API shared with the CLI.
+
+Current supported surface:
+
+```text
+antares-analysis night plan YYYY-MM-DD
+antares-analysis backfill plan START END
+```
+
+Both commands are read-only. Reports explicitly state
+`writer_not_enabled_in_this_release`; there is no production writer command or
+capability.
+
+The original guarded-engine proposal remains the next implementation work,
+after read-only Arnor acceptance:
 
 Proposed surface:
 
@@ -92,7 +123,7 @@ antares-analysis data verify RUN_ID
 antares-analysis data rebuild-index --dry-run
 ```
 
-Execution order:
+Future execution order:
 
 1. Extract pure planning and validation functions from notebooks; do not expose
    writes yet.
@@ -111,7 +142,15 @@ Execution order:
 8. Add idempotent resume and evidence-backed rollback that cannot delete a
    pre-existing valid night.
 
-Exit gate: concurrent-writer, stale-lock, network failure, partial fetch, disk
+Local foundation exit gate: context/report/state/planner/storage/lock/transaction
+tests; failure injection; zero-row regressions; full existing suite; reproducible
+build; installed-wheel import and CLI smoke; and exact diff review.
+
+Arnor acceptance gate: verify root containment, private ownership, disk/inode
+observability, lock-directory atomicity, same-filesystem staging, atomic rename,
+and interruption semantics read-only before any writer activation.
+
+Transactional writer exit gate: concurrent-writer, stale-lock, network failure, partial fetch, disk
 full, SIGINT, corrupt stage, duplicate run, resume, and rollback tests all pass
 in temporary stores; a dry-run on Middle Earth matches the expected plan; one
 authorized canary night passes validation before broader use.
