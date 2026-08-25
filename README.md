@@ -63,11 +63,15 @@ and 2 means the request or configuration is invalid.
 Every supported command is non-mutating: it does not create data or cache
 directories, launch Jupyter, query ANTARES, update manifests, or rebuild
 cumulative products. Planning reports the current partition state, prerequisites,
-blockers, conceptual lock resource, validation gates, unknown estimates, and
+blockers, the explicitly unconfigured production operations/lock root,
+validation gates, unknown estimates, and
 separate derived reconciliation. Production writer commands remain disabled;
 plans say `writer_not_enabled_in_this_release` rather than implying execution.
 The operations decision and acceptance gates are in
-`docs/architecture/ADR-0001-operations-and-writer-contracts.md` and
+`docs/architecture/ADR-0001-operations-and-writer-contracts.md`, the empirical
+Arnor filesystem/publication contract is in
+`docs/architecture/ADR-0002-arnor-filesystem-qualification.md`, and sequencing
+is tracked in
 `docs/cli/PHASED_ROADMAP.md`.
 
 The reusable Python API is the same path used by the CLI and is safe to import
@@ -80,9 +84,10 @@ ctx = operations.context_from_environment()
 report = operations.plan_night(ctx, "2026-06-27")
 ```
 
-Planning/report schema `1.0` is deterministic for the same explicit context and
-filesystem fixture. Phase 2 exit codes remain `0` success, `1` failed
-health/validation gate, and `2` invalid request/configuration. The operations
+Plan schema `1.1` and operation-report schema `1.0` are deterministic for the
+same explicit context and filesystem fixture. Phase 2 exit codes remain `0`
+success, `1` failed health/validation gate, and `2` invalid
+request/configuration. The operations
 contract reserves `3` for operational failure, `4` for refusal/authorization,
 and `5` for unexpected internal failure. A valid read-only plan returns `0`
 while carrying the separate writer refusal in its report.
@@ -94,7 +99,12 @@ fresh-wheel verification procedure. Neither a macOS `pip freeze` nor
 The wheel contains the importable `src` package and the read-only CLI.
 Operational notebooks and repository scripts remain versioned companion
 material; the CLI discovers notebooks from a checkout and does not package or
-execute them. `environment.yml` is an interactive convenience input; the
+execute them. When `doctor` runs from an installed wheel without a discoverable
+checkout, it reports the skipped repository/notebook check as informational and
+continues to enforce the installed runtime, profile, storage, dataset, and
+dependency gates. Passing `--repo-root` makes the requested checkout mandatory;
+every discovered checkout must still contain all supported notebooks.
+`environment.yml` is an interactive convenience input; the
 accepted Linux pip locks and verified wheelhouse are the supported release
 artifacts.
 

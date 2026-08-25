@@ -1,9 +1,14 @@
+import errno
 import json
 import os
+import stat
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
+
+import src.operations.transaction as transaction_module
 
 from src.cli_profiles import StorageProfile
 from src.operations import (
@@ -337,9 +342,23 @@ class PlannerTests(unittest.TestCase):
             self.assertEqual(first.to_json(), second.to_json())
             self.assertEqual(before, after)
             self.assertTrue(first.success)
+            self.assertEqual(first.details["plan_version"], "1.1")
             self.assertEqual(first.details["current_partition"]["state"], "missing")
             self.assertFalse(first.details["future_execution"]["authorized"])
             self.assertIsNone(first.details["storage"]["estimated_bytes"])
+            self.assertIsNone(first.details["target"]["lock_resource"])
+            self.assertEqual(
+                first.details["target"]["operations_root_status"], "unconfigured"
+            )
+            lock_evidence = next(
+                item for item in first.evidence if item.code == "lock-availability"
+            )
+            self.assertTrue(
+                lock_evidence.details["arnor_shire_canary_contract_recorded"]
+            )
+            self.assertFalse(
+                lock_evidence.details["configured_operations_root_qualified"]
+            )
 
     def test_existing_complete_and_incomplete_nights_are_distinguished(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -368,6 +387,26 @@ class PlannerTests(unittest.TestCase):
             )
             self.assertIn("target-partition", incomplete_report.details["blockers"])
             self.assertTrue(complete.manifest.is_file())
+
+    def test_plan_ignores_legacy_in_root_operations_symlink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "data"
+            cache = Path(temporary) / "cache"
+            outside = Path(temporary) / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (root / ".antares-operations").symlink_to(
+                outside, target_is_directory=True
+            )
+
+            report = plan_night(self._context(root, cache), "2026-06-27")
+
+            self.assertTrue(report.success)
+            self.assertIsNone(report.details["target"]["lock_resource"])
+            self.assertEqual(
+                report.details["target"]["operations_root_status"],
+                "unconfigured",
+            )
 
     def test_conflicting_partition_is_blocked(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -604,6 +643,586 @@ class LockAndTransactionTests(unittest.TestCase):
             with self.assertRaisesRegex(TransactionError, "overwrite refused"):
                 transaction.prepare()
             self.assertEqual(marker.read_text(encoding="utf-8"), "preserve")
+            lock.release()
+
+    def test_lock_identity_must_match_transaction_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = WriterLock(capability, "different/target", "run-mismatch")
+            lock.acquire(at=FIXED_TIME)
+
+            with self.assertRaisesRegex(TransactionError, "lock identity"):
+                PublicationTransaction(
+                    capability, lock, self.TARGET, lock.run_id
+                )
+
+            lock.release()
+
+    def test_preexisting_foreign_stage_is_never_deleted_by_abort(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = PublicationTransaction(
+                capability, lock, self.TARGET, lock.run_id
+            )
+            transaction.stage.mkdir(parents=True)
+            marker = transaction.stage / "foreign.marker"
+            marker.write_text("preserve", encoding="utf-8")
+
+            with self.assertRaisesRegex(TransactionError, "Staging target"):
+                transaction.prepare()
+            transaction.abort()
+
+            self.assertEqual(marker.read_text(encoding="utf-8"), "preserve")
+            lock.release()
+
+    def test_abort_preserves_owned_stage_with_unexpected_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = self._staged(capability, lock)
+            marker = transaction.stage / "foreign.marker"
+            marker.write_text("preserve", encoding="utf-8")
+
+            transaction.abort("operator_requested")
+
+            self.assertTrue(transaction.stage.is_dir())
+            self.assertEqual(marker.read_text(encoding="utf-8"), "preserve")
+            lock.release()
+
+    def test_validated_artifact_replacement_is_refused_and_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = self._staged(capability, lock)
+            transaction.validate(lambda stage: True)
+            replacement = transaction.stage / "replacement"
+            replacement.write_bytes(b"TAMPERED_AFTER_VALIDATION")
+            os.replace(replacement, transaction.stage / "loci.parquet")
+
+            with self.assertRaisesRegex(TransactionError, "changed before"):
+                transaction.publish()
+
+            snapshot = transaction.state_machine.snapshot()
+            self.assertFalse(snapshot.published)
+            self.assertFalse(transaction.target.exists())
+            transaction.abort()
+            self.assertTrue(transaction.stage.is_dir())
+            self.assertEqual(
+                (transaction.stage / "loci.parquet").read_bytes(),
+                b"TAMPERED_AFTER_VALIDATION",
+            )
+            lock.release()
+
+    def test_replaced_writer_lock_is_refused_before_publication(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            first = self._lock(capability, run_id="run-first")
+            transaction = self._staged(capability, first)
+            transaction.validate(lambda stage: True)
+            first.metadata_path.unlink()
+            first.path.rmdir()
+            second = self._lock(capability, run_id="run-second")
+
+            with self.assertRaisesRegex(TransactionError, "lock was lost"):
+                transaction.publish()
+
+            self.assertFalse(transaction.target.exists())
+            transaction.abort()
+            self.assertFalse(transaction.stage.exists())
+            second.release()
+
+    def test_private_modes_do_not_depend_on_ambient_umask(self):
+        previous_umask = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                capability = self._capability(temporary)
+                lock = self._lock(capability)
+                transaction = self._staged(capability, lock)
+                self.assertEqual(stat.S_IMODE(lock.path.stat().st_mode), 0o700)
+                self.assertEqual(
+                    stat.S_IMODE(lock.metadata_path.stat().st_mode), 0o600
+                )
+                self.assertEqual(
+                    stat.S_IMODE(transaction.stage.stat().st_mode), 0o700
+                )
+                for name in transaction.REQUIRED_ARTIFACTS:
+                    self.assertEqual(
+                        stat.S_IMODE((transaction.stage / name).stat().st_mode),
+                        0o600,
+                    )
+                transaction.validate(lambda stage: True)
+                transaction.publish()
+                self.assertEqual(
+                    stat.S_IMODE(transaction.target.stat().st_mode), 0o700
+                )
+                for name in transaction.REQUIRED_ARTIFACTS:
+                    self.assertEqual(
+                        stat.S_IMODE((transaction.target / name).stat().st_mode),
+                        0o600,
+                    )
+                transaction.release_writer_lock()
+        finally:
+            os.umask(previous_umask)
+
+    def test_target_substitution_after_reservation_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = self._staged(capability, lock)
+            transaction.validate(lambda stage: True)
+            foreign = capability.root / "synthetic-foreign-target"
+            foreign.mkdir()
+            real_link = os.link
+            substituted = []
+
+            def substitute_target(source, target, *args, **kwargs):
+                if os.fspath(target) == "loci.parquet" and not substituted:
+                    transaction.target.rmdir()
+                    transaction.target.symlink_to(
+                        foreign, target_is_directory=True
+                    )
+                    substituted.append(True)
+                return real_link(source, target, *args, **kwargs)
+
+            with mock.patch.object(
+                transaction_module.os, "link", substitute_target
+            ):
+                with self.assertRaisesRegex(
+                    TransactionError, "manual recovery classification"
+                ):
+                    transaction.publish()
+
+            self.assertTrue(substituted)
+            self.assertTrue(transaction.target.is_symlink())
+            self.assertEqual(list(foreign.iterdir()), [])
+            self.assertFalse((foreign / "manifest.json").exists())
+            transaction.abort()
+            self.assertTrue(transaction.stage.is_dir())
+            lock.release()
+
+    def test_target_created_in_publication_window_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = self._staged(capability, lock)
+            transaction.validate(lambda stage: True)
+            injected_identity = []
+            real_publish = transaction_module._publish_noreplace
+
+            def inject_conflict(stage, target, validated):
+                target.mkdir()
+                injected_identity.append((target.stat().st_dev, target.stat().st_ino))
+                return real_publish(stage, target, validated)
+
+            with mock.patch.object(
+                transaction_module, "_publish_noreplace", inject_conflict
+            ):
+                with self.assertRaisesRegex(TransactionError, "overwrite refused"):
+                    transaction.publish()
+
+            self.assertEqual(transaction.state, ExecutionState.FAILED)
+            self.assertEqual(
+                (transaction.target.stat().st_dev, transaction.target.stat().st_ino),
+                injected_identity[0],
+            )
+            self.assertEqual(list(transaction.target.iterdir()), [])
+            transaction.abort()
+            self.assertTrue(transaction.stage.is_dir())
+            lock.release()
+
+    def test_publication_is_hardlinked_manifest_last_and_fsynced_in_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            events = []
+            real_fsync = os.fsync
+            real_link = os.link
+            real_unlink = os.unlink
+            real_publish = transaction_module._publish_noreplace
+
+            def tracked_fsync(descriptor):
+                descriptor_stat = os.fstat(descriptor)
+                events.append(("fsync", descriptor_stat.st_dev, descriptor_stat.st_ino))
+                return real_fsync(descriptor)
+
+            def tracked_publish(stage, target, validated):
+                events.append(("publish", str(stage), str(target)))
+                return real_publish(stage, target, validated)
+
+            def tracked_link(source, target, *args, **kwargs):
+                result = real_link(source, target, *args, **kwargs)
+                events.append(("link", os.fspath(source), os.fspath(target)))
+                return result
+
+            def tracked_unlink(path, *args, **kwargs):
+                result = real_unlink(path, *args, **kwargs)
+                events.append(("unlink", os.fspath(path)))
+                return result
+
+            with mock.patch.object(
+                transaction_module.os, "fsync", tracked_fsync
+            ), mock.patch.object(
+                transaction_module.os, "link", tracked_link
+            ), mock.patch.object(
+                transaction_module.os, "unlink", tracked_unlink
+            ), mock.patch.object(
+                transaction_module, "_publish_noreplace", tracked_publish
+            ):
+                transaction = self._staged(capability, lock)
+                transaction.validate(lambda stage: True)
+                artifact_identities = {
+                    name: (
+                        (transaction.stage / name).stat().st_dev,
+                        (transaction.stage / name).stat().st_ino,
+                    )
+                    for name in transaction.REQUIRED_ARTIFACTS
+                }
+                stage_identity = (
+                    transaction.stage.stat().st_dev,
+                    transaction.stage.stat().st_ino,
+                )
+                staging_parent_identity = (
+                    transaction.stage.parent.stat().st_dev,
+                    transaction.stage.parent.stat().st_ino,
+                )
+                transaction.publish()
+
+            target_identity = (
+                transaction.target.stat().st_dev,
+                transaction.target.stat().st_ino,
+            )
+            fsync_events = [
+                (index, (event[1], event[2]))
+                for index, event in enumerate(events)
+                if event[0] == "fsync"
+            ]
+            artifact_indexes = [
+                min(
+                    index
+                    for index, identity in fsync_events
+                    if identity == artifact_identities[name]
+                )
+                for name in transaction.REQUIRED_ARTIFACTS
+            ]
+            publish_index = next(
+                index for index, event in enumerate(events) if event[0] == "publish"
+            )
+            final_parent_identity = (
+                transaction.target.parent.stat().st_dev,
+                transaction.target.parent.stat().st_ino,
+            )
+            target_fsync_indexes = [
+                index
+                for index, identity in fsync_events
+                if identity == target_identity
+            ]
+            final_parent_fsync_indexes = [
+                index
+                for index, identity in fsync_events
+                if identity == final_parent_identity
+            ]
+            staging_parent_fsync_indexes = [
+                index
+                for index, identity in fsync_events
+                if identity == staging_parent_identity
+            ]
+            link_indexes = {
+                destination: [
+                    index
+                    for index, event in enumerate(events)
+                    if event[0] == "link" and event[2] == destination
+                ]
+                for destination in (
+                    "loci.parquet",
+                    "alerts.parquet",
+                    ".manifest.pending",
+                    "manifest.json",
+                )
+            }
+            loci_link = link_indexes["loci.parquet"][0]
+            alerts_link = link_indexes["alerts.parquet"][0]
+            pending_link = link_indexes[".manifest.pending"][0]
+            manifest_link = link_indexes["manifest.json"][0]
+            pending_unlink = next(
+                index
+                for index, event in enumerate(events)
+                if event[0] == "unlink" and event[1] == ".manifest.pending"
+            )
+
+            self.assertLess(artifact_indexes[0], artifact_indexes[1])
+            self.assertLess(artifact_indexes[1], artifact_indexes[2])
+            self.assertTrue(
+                any(
+                    max(artifact_indexes) < index < publish_index
+                    and identity == stage_identity
+                    for index, identity in fsync_events
+                )
+            )
+            self.assertTrue(
+                publish_index < loci_link < alerts_link < pending_link < manifest_link
+            )
+            self.assertTrue(
+                any(
+                    alerts_link < index < pending_link
+                    for index in target_fsync_indexes
+                )
+            )
+            self.assertTrue(
+                any(
+                    pending_link < index < manifest_link
+                    for index in target_fsync_indexes
+                )
+            )
+            self.assertTrue(
+                any(
+                    manifest_link < index < pending_unlink
+                    for index in target_fsync_indexes
+                )
+            )
+            self.assertTrue(
+                any(
+                    manifest_link < index < pending_unlink
+                    for index in final_parent_fsync_indexes
+                )
+            )
+            self.assertTrue(
+                any(index > pending_unlink for index in target_fsync_indexes)
+            )
+            self.assertTrue(
+                any(index > manifest_link for index in staging_parent_fsync_indexes)
+            )
+            for name in transaction.REQUIRED_ARTIFACTS:
+                self.assertEqual(
+                    (
+                        (transaction.target / name).stat().st_dev,
+                        (transaction.target / name).stat().st_ino,
+                    ),
+                    artifact_identities[name],
+                )
+            self.assertFalse(transaction.stage.exists())
+            self.assertFalse(
+                (transaction.target / ".manifest.pending").exists()
+            )
+            transaction.release_writer_lock()
+
+    def test_failed_data_link_preserves_stage_and_never_advertises(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = self._staged(capability, lock)
+            transaction.validate(lambda stage: True)
+            real_link = os.link
+
+            def fail_alert_link(source, target, *args, **kwargs):
+                if Path(target).name == "alerts.parquet":
+                    raise OSError(errno.EIO, "synthetic link failure")
+                return real_link(source, target, *args, **kwargs)
+
+            with mock.patch.object(transaction_module.os, "link", fail_alert_link):
+                with self.assertRaisesRegex(
+                    TransactionError, "manual recovery classification"
+                ):
+                    transaction.publish()
+
+            self.assertEqual(transaction.state, ExecutionState.FAILED)
+            self.assertTrue((transaction.target / "loci.parquet").is_file())
+            self.assertFalse((transaction.target / "alerts.parquet").exists())
+            self.assertFalse((transaction.target / "manifest.json").exists())
+            transaction.abort()
+            self.assertTrue(transaction.stage.is_dir())
+            self.assertTrue(
+                all(
+                    (transaction.stage / name).is_file()
+                    for name in transaction.REQUIRED_ARTIFACTS
+                )
+            )
+            lock.release()
+
+    def test_failed_manifest_link_leaves_data_unpublished_and_preserves_stage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = self._staged(capability, lock)
+            transaction.validate(lambda stage: True)
+            real_link = os.link
+
+            def fail_manifest_link(source, target, *args, **kwargs):
+                if os.fspath(target) == "manifest.json":
+                    raise PermissionError(errno.EACCES, "synthetic manifest failure")
+                return real_link(source, target, *args, **kwargs)
+
+            with mock.patch.object(transaction_module.os, "link", fail_manifest_link):
+                with self.assertRaisesRegex(
+                    TransactionError, "manual recovery classification"
+                ):
+                    transaction.publish()
+
+            snapshot = transaction.state_machine.snapshot()
+            self.assertEqual(snapshot.state, ExecutionState.FAILED)
+            self.assertFalse(snapshot.published)
+            self.assertFalse(snapshot.reconciliation_required)
+            self.assertTrue((transaction.target / "loci.parquet").is_file())
+            self.assertTrue((transaction.target / "alerts.parquet").is_file())
+            self.assertTrue((transaction.target / ".manifest.pending").is_file())
+            self.assertFalse((transaction.target / "manifest.json").exists())
+            transaction.abort()
+            self.assertTrue(transaction.stage.is_dir())
+            self.assertTrue(transaction.target.is_dir())
+            lock.release()
+
+    def test_manifest_link_success_then_error_is_commit_ambiguous(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = self._staged(capability, lock)
+            transaction.validate(lambda stage: True)
+            real_link = os.link
+
+            def commit_then_error(source, target, *args, **kwargs):
+                result = real_link(source, target, *args, **kwargs)
+                if os.fspath(target) == "manifest.json":
+                    raise OSError(errno.EIO, "synthetic ambiguous response")
+                return result
+
+            with mock.patch.object(transaction_module.os, "link", commit_then_error):
+                with self.assertRaisesRegex(
+                    TransactionError, "may be visible"
+                ):
+                    transaction.publish()
+
+            snapshot = transaction.state_machine.snapshot()
+            self.assertEqual(snapshot.state, ExecutionState.FAILED)
+            self.assertTrue(snapshot.published)
+            self.assertTrue(snapshot.reconciliation_required)
+            self.assertEqual(
+                snapshot.failure_reason, "published_durability_uncertain"
+            )
+            self.assertTrue((transaction.target / "manifest.json").is_file())
+            self.assertTrue(transaction.stage.is_dir())
+            transaction.abort()
+            self.assertTrue(transaction.target.is_dir())
+            lock.release()
+
+    def test_visible_validated_manifest_proves_commit_without_pending_link(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = self._staged(capability, lock)
+            transaction.validate(lambda stage: True)
+            real_link = os.link
+
+            def commit_remove_pending_then_error(source, target, *args, **kwargs):
+                result = real_link(source, target, *args, **kwargs)
+                if os.fspath(target) == "manifest.json":
+                    os.unlink(".manifest.pending", dir_fd=kwargs["dst_dir_fd"])
+                    raise PermissionError(
+                        errno.EACCES, "synthetic response after visible commit"
+                    )
+                return result
+
+            with mock.patch.object(
+                transaction_module.os, "link", commit_remove_pending_then_error
+            ):
+                with self.assertRaisesRegex(TransactionError, "may be visible"):
+                    transaction.publish()
+
+            snapshot = transaction.state_machine.snapshot()
+            self.assertTrue(snapshot.published)
+            self.assertTrue(snapshot.reconciliation_required)
+            self.assertTrue((transaction.target / "manifest.json").is_file())
+            self.assertFalse(
+                (transaction.target / ".manifest.pending").exists()
+            )
+            transaction.abort()
+            self.assertTrue(transaction.target.is_dir())
+            lock.release()
+
+    def test_indeterminate_manifest_link_error_is_never_classified_unpublished(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = self._staged(capability, lock)
+            transaction.validate(lambda stage: True)
+            real_link = os.link
+
+            def indeterminate_manifest_link(source, target, *args, **kwargs):
+                if os.fspath(target) == "manifest.json":
+                    raise OSError(errno.EIO, "synthetic remote ambiguity")
+                return real_link(source, target, *args, **kwargs)
+
+            with mock.patch.object(
+                transaction_module.os, "link", indeterminate_manifest_link
+            ):
+                with self.assertRaisesRegex(
+                    TransactionError, "may be visible"
+                ):
+                    transaction.publish()
+
+            snapshot = transaction.state_machine.snapshot()
+            self.assertEqual(snapshot.state, ExecutionState.FAILED)
+            self.assertTrue(snapshot.published)
+            self.assertTrue(snapshot.reconciliation_required)
+            self.assertFalse((transaction.target / "manifest.json").exists())
+            self.assertTrue(transaction.stage.is_dir())
+            transaction.abort()
+            self.assertTrue(transaction.target.is_dir())
+            lock.release()
+
+    def test_post_manifest_fsync_failure_is_published_and_requires_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = self._staged(capability, lock)
+            transaction.validate(lambda stage: True)
+            real_link = os.link
+            real_fsync = os.fsync
+            manifest_linked = []
+            target_directory_identity = []
+
+            def tracked_link(source, target, *args, **kwargs):
+                result = real_link(source, target, *args, **kwargs)
+                if os.fspath(target) == "manifest.json":
+                    manifest_linked.append(True)
+                    observed = os.fstat(kwargs["dst_dir_fd"])
+                    target_directory_identity.append(
+                        (observed.st_dev, observed.st_ino)
+                    )
+                return result
+
+            def fail_after_manifest(descriptor):
+                observed = os.fstat(descriptor)
+                identity = (observed.st_dev, observed.st_ino)
+                if (
+                    manifest_linked
+                    and target_directory_identity
+                    and identity == target_directory_identity[0]
+                ):
+                    raise OSError(errno.EIO, "synthetic post-commit fsync failure")
+                return real_fsync(descriptor)
+
+            with mock.patch.object(
+                transaction_module.os, "link", tracked_link
+            ), mock.patch.object(
+                transaction_module.os, "fsync", fail_after_manifest
+            ):
+                with self.assertRaisesRegex(
+                    TransactionError, "requires operator recovery"
+                ):
+                    transaction.publish()
+
+            snapshot = transaction.state_machine.snapshot()
+            self.assertEqual(snapshot.state, ExecutionState.FAILED)
+            self.assertTrue(snapshot.published)
+            self.assertTrue(snapshot.reconciliation_required)
+            self.assertEqual(
+                snapshot.failure_reason, "published_durability_uncertain"
+            )
+            self.assertTrue((transaction.target / "manifest.json").is_file())
+            self.assertTrue(transaction.stage.is_dir())
+            transaction.abort("cleanup_requested")
+            self.assertTrue(transaction.target.is_dir())
+            self.assertTrue(transaction.stage.is_dir())
             lock.release()
 
     def test_abort_before_publication_removes_only_stage(self):

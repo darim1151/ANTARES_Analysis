@@ -195,6 +195,7 @@ class StorageLayout:
         )
 
     def lock_resource(self, target: NightLocation) -> Path:
+        """Return the legacy temporary-fixture lock path, never production config."""
         relative = (
             Path(OPERATIONS_DIRECTORY)
             / "locks"
@@ -203,6 +204,7 @@ class StorageLayout:
         return contained_path(self.data_root, relative)
 
     def staging_parent(self) -> Path:
+        """Return the legacy temporary-fixture stage path, never production config."""
         return contained_path(
             self.data_root, Path(OPERATIONS_DIRECTORY) / "staging"
         )

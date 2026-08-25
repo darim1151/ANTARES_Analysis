@@ -330,6 +330,117 @@ class CliPhase2Tests(unittest.TestCase):
         self.assertIn("notebooks", codes)
         self.assertIn("private-owner", codes)
 
+    def test_doctor_installed_runtime_without_checkout_is_informational(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._dataset(temporary)
+            before = self._snapshot(root)
+            with mock.patch.object(
+                cli_diagnostics.sys,
+                "version_info",
+                _PythonVersion((3, 11, 9)),
+            ), mock.patch.object(
+                cli_diagnostics,
+                "discover_repo_root",
+                side_effect=ValueError("no checkout beside the installed wheel"),
+            ) as discover:
+                status, stdout, stderr = self._run(
+                    [
+                        "doctor",
+                        "--data-root",
+                        str(root),
+                        "--cache-root",
+                        str(Path(temporary) / "external-cache"),
+                        "--no-dependencies",
+                        "--no-jupyter",
+                        "--json",
+                    ]
+                )
+            after = self._snapshot(root)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(after, before)
+        discover.assert_called_once_with(None)
+        payload = json.loads(stdout)
+        repository = next(
+            check for check in payload["checks"] if check["code"] == "repository"
+        )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["counts"]["fail"], 0)
+        self.assertEqual(repository["status"], "info")
+        self.assertIn("notebook checks were skipped", repository["summary"])
+        self.assertIn("--repo-root", repository["detail"])
+
+    def test_doctor_explicit_missing_checkout_remains_a_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._dataset(temporary)
+            missing_checkout = Path(temporary) / "missing-checkout"
+            with mock.patch.object(
+                cli_diagnostics.sys,
+                "version_info",
+                _PythonVersion((3, 11, 9)),
+            ):
+                status, stdout, stderr = self._run(
+                    [
+                        "doctor",
+                        "--data-root",
+                        str(root),
+                        "--cache-root",
+                        str(Path(temporary) / "external-cache"),
+                        "--repo-root",
+                        str(missing_checkout),
+                        "--no-dependencies",
+                        "--no-jupyter",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        repository = next(
+            check for check in payload["checks"] if check["code"] == "repository"
+        )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(repository["status"], "fail")
+        self.assertIn("Requested source checkout", repository["summary"])
+
+    def test_doctor_explicit_checkout_still_validates_notebooks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._dataset(temporary)
+            checkout = self._notebook_checkout(temporary)
+            missing_name = cli.NOTEBOOKS[-1].filename
+            (checkout / "notebooks" / missing_name).unlink()
+            with mock.patch.object(
+                cli_diagnostics.sys,
+                "version_info",
+                _PythonVersion((3, 11, 9)),
+            ):
+                status, stdout, stderr = self._run(
+                    [
+                        "doctor",
+                        "--data-root",
+                        str(root),
+                        "--cache-root",
+                        str(Path(temporary) / "external-cache"),
+                        "--repo-root",
+                        str(checkout),
+                        "--no-dependencies",
+                        "--no-jupyter",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(stderr, "")
+        payload = json.loads(stdout)
+        notebooks = next(
+            check for check in payload["checks"] if check["code"] == "notebooks"
+        )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(notebooks["status"], "fail")
+        self.assertIn(missing_name, notebooks["detail"])
+
     def test_doctor_rejects_regular_file_as_cache_root(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = self._dataset(temporary)

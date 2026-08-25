@@ -458,7 +458,25 @@ def collect_doctor_checks(
     try:
         root = discover_repo_root(repo_root)
     except ValueError as exc:
-        checks.append(DiagnosticCheck("repository", "fail", "Checkout not found.", str(exc)))
+        if repo_root is not None:
+            checks.append(
+                DiagnosticCheck(
+                    "repository",
+                    "fail",
+                    "Requested source checkout was not found.",
+                    str(exc),
+                )
+            )
+        else:
+            checks.append(
+                DiagnosticCheck(
+                    "repository",
+                    "info",
+                    "Source checkout is unavailable; notebook checks were skipped.",
+                    "Installed runtime and storage checks remain valid. Pass "
+                    "--repo-root to require and validate a source checkout.",
+                )
+            )
     else:
         missing_notebooks = [
             spec.filename

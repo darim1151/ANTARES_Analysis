@@ -52,7 +52,7 @@ Status: complete in local commit `c74977c`.
 | `profile list` | Lists built-in Middle Earth and RSP compatibility profiles | None |
 | `profile show` | Resolves auto, environment, or explicit configuration | None |
 | `profile export` | Renders copy/paste-safe environment variables | None |
-| `doctor` | Checks Python, storage, policy, dataset layout, dependencies, notebooks, and Jupyter discovery | None |
+| `doctor` | Checks Python, storage, policy, dataset layout, dependencies, optional checkout notebooks, and Jupyter discovery | None |
 | `data status` | Summarizes nightly manifests and cumulative-product presence | None |
 | `jupyter list` | Discovers supported notebooks in a checkout | None |
 | `jupyter env` | Renders the environment a notebook process should inherit | None |
@@ -69,6 +69,8 @@ non-zero status when required conditions fail.
 - Manifest inventory validates dates, directory membership, statuses, counts,
   append-ready types, duplicate dates, cumulative products, and cache separation.
 - Diagnostics never create a missing cache or data root.
+- An installed runtime without a discoverable checkout reports notebook checks
+  as informational; an explicit or discovered checkout remains fully validated.
 - Rendered shell commands quote spaces and shell metacharacters.
 - Tests cover human help, JSON, overrides, environment selection, missing data,
   malformed manifests, private permissions, path safety, no-write behavior,
@@ -78,8 +80,8 @@ non-zero status when required conditions fail.
 
 ## Phase 3 — operations architecture and writer-contract foundation
 
-Status: complete locally; production writer intentionally disabled pending
-read-only Arnor acceptance.
+Status: complete locally; its read-only Arnor acceptance gate was satisfied in
+Phase 4, while the production writer remains intentionally disabled.
 
 Delivered foundation:
 
@@ -92,8 +94,9 @@ Delivered foundation:
   and symlink/path-injection refusal;
 - conservative single-writer lock ownership and stale-lock inspection contracts;
 - same-filesystem staging, validation-before-publication, overwrite refusal,
-  manifest-last staging, atomic directory promotion, and pre-publication abort
-  behavior restricted to local temporary fixtures;
+  manifest-last staging, proof-only directory promotion, and pre-publication
+  abort behavior restricted to local temporary fixtures; Phase 4 superseded
+  the promotion primitive with ADR-0002's empirically qualified contract;
 - strict query/fetch and zero-row evidence contracts;
 - publication preserved when separate derived reconciliation fails;
 - Jupyter-facing Python API shared with the CLI.
@@ -109,8 +112,8 @@ Both commands are read-only. Reports explicitly state
 `writer_not_enabled_in_this_release`; there is no production writer command or
 capability.
 
-The original guarded-engine proposal remains the next implementation work,
-after read-only Arnor acceptance:
+With the read-only Arnor acceptance gate now satisfied by Phase 4, the original
+guarded-engine proposal remains the next local implementation work:
 
 Proposed surface:
 
@@ -137,8 +140,8 @@ Future execution order:
    scientific outcomes, never silent success.
 6. Validate schema, counts, coordinates, locus/alert linkage, LSST association,
    manifest paths, checksums, and cumulative reconciliation before publication.
-7. Publish with same-filesystem atomic renames and a journal that makes
-   interruption recovery deterministic.
+7. Publish with the empirically qualified Shire manifest-commit protocol and a
+   journal that makes interruption recovery deterministic.
 8. Add idempotent resume and evidence-backed rollback that cannot delete a
    pre-existing valid night.
 
@@ -147,15 +150,79 @@ tests; failure injection; zero-row regressions; full existing suite; reproducibl
 build; installed-wheel import and CLI smoke; and exact diff review.
 
 Arnor acceptance gate: verify root containment, private ownership, disk/inode
-observability, lock-directory atomicity, same-filesystem staging, atomic rename,
-and interruption semantics read-only before any writer activation.
+observability, lock-directory atomicity, same-filesystem staging, publication
+primitives, durability calls, and interruption semantics before any writer
+activation.
 
-Transactional writer exit gate: concurrent-writer, stale-lock, network failure, partial fetch, disk
-full, SIGINT, corrupt stage, duplicate run, resume, and rollback tests all pass
-in temporary stores; a dry-run on Middle Earth matches the expected plan; one
-authorized canary night passes validation before broader use.
+Transactional writer exit gate: concurrent-writer, stale-lock, network failure,
+partial fetch, disk full, SIGINT, corrupt stage, duplicate run, recovery, and
+manifest-commit failure tests all pass in temporary and explicitly authorized
+synthetic canary stores. Production execution remains a later authorization.
 
-## Phase 4 — Middle Earth execution and Jupyter integration
+## Phase 4 — Arnor qualification and environment hardening
+
+Status: filesystem and runtime qualification complete in evidence run
+`phase4-20260823T103930Z`; production activation remains disabled.
+
+Delivered gates:
+
+- exact immutable installed-release execution on Arnor;
+- read-only production inventory, checksum, permission, ACL, CLI, and planner
+  acceptance;
+- real NFS mount/device/capacity/inode/quota characterization;
+- controlled Shire canary rename, fsync, contention, process-death, containment,
+  failure-injection, zero-row, and recovery-state tests;
+- empirical rejection of race-prone plain rename and unsupported
+  `renameat2(RENAME_NOREPLACE)`;
+- empirical qualification of atomic target reservation, same-filesystem hard
+  links, and manifest-last logical commit;
+- installed-runtime `doctor` hardening without weakening explicit-checkout
+  validation;
+- plan schema `1.1`, which reports the production operations/lock root as
+  explicitly unconfigured instead of exposing a superseded in-data-root path;
+- preservation of the writer-disabled CLI and production/cache boundaries.
+
+The authoritative filesystem/publication decision is
+`docs/architecture/ADR-0002-arnor-filesystem-qualification.md`.
+
+## Phase 5 — transactional writer and recovery implementation
+
+Goal: implement the proven contract locally and in synthetic canaries without
+exposing a production write capability.
+
+Execution order:
+
+1. Persist an immutable, versioned run plan with science/configuration,
+   dependency, release, target, baseline, and resource fingerprints.
+2. Model a separately configured operations root on the qualified Shire mount;
+   do not provision its production path yet.
+3. Configure an operations root explicitly, unify planner, writer, journal, and
+   recovery lock identity, and add durable, PID-reuse-safe lock metadata. The
+   read-only planner reports the production lock location as unconfigured until
+   then; its in-data-root path is legacy test-only.
+4. Stream and fsync staged artifacts, write the manifest last, and independently
+   validate every scientific and query/fetch invariant.
+5. Implement descriptor-pinned atomic final-target reservation, re-prove
+   validated data hard links, then commit via a verified pending-manifest inode
+   linked to `manifest.json` with ADR-0002's fsync and ambiguity rules.
+6. Persist every transition and distinguish uncommitted partial targets from
+   committed-but-durability-uncertain and published-unreconciled states.
+7. Implement a read-only recovery inspector before any destructive recovery
+   action. No stale, ambiguous, or canonical-target state is auto-deleted.
+8. Add independent post-commit verification and idempotent derived
+   reconciliation under its own lock.
+9. Exercise every crash boundary, short write, disk/inode exhaustion, malformed
+   lock, target race, link/fsync failure, SIGINT, zero-row outcome, and
+   reconciliation failure using synthetic data.
+10. Build and deploy an immutable writer-disabled Arnor release and repeat
+    installed-package, CLI, Jupyter-import, canary, and production-sentinel
+    acceptance.
+
+Exit gate: all local and synthetic-Arnor writer/recovery tests pass; no ANTARES
+query, production operations/cache-root creation, science publication,
+reconciliation, scheduler, or production writer command is enabled.
+
+## Phase 6 — Middle Earth execution and Jupyter integration
 
 Goal: offer one interface for interactive and scheduled execution while keeping
 platform-specific details behind inspected adapters.
@@ -191,10 +258,10 @@ Execution order:
 
 Exit gate: probe, submit, status, log, cancellation, authentication failure,
 resource rejection, reconnect, kernel identity, and notebook-open flows pass on
-Middle Earth without changing durable data except through an authorized Phase 3
-transaction.
+Middle Earth without changing durable data except through a separately
+authorized Phase 5 transaction.
 
-## Phase 5 — science workflow and UX completion
+## Phase 7 — science workflow and UX completion
 
 Goal: make common analysis tasks discoverable, composable, and observable.
 
@@ -214,7 +281,7 @@ open the correct notebook, plan a run, inspect its status, and recover a failed
 run from the CLI documentation alone. JSON compatibility and performance budgets
 pass in CI and on Middle Earth.
 
-## Phase 6 — controlled production rollout
+## Phase 8 — controlled production rollout
 
 Goal: convert the validated CLI into a supportable service/operator workflow.
 
@@ -229,10 +296,9 @@ Goal: convert the validated CLI into a supportable service/operator workflow.
 5. Promote only after science reconciliation and operational service-level gates
    pass for the agreed observation period.
 
-## Immediate next decision after Phase 2
+## Immediate next decision after Phase 4
 
-Phase 3 begins with the immutable run-plan and locking contracts, not with a
-writer command. The first implementation milestone should end at a fully tested
-`data plan`/`--dry-run` path. No durable Middle Earth write should be enabled
-until that plan can be reviewed, reproduced, locked, staged, validated, resumed,
-and rolled back under failure injection.
+Phase 5 begins with the durable journal and read-only recovery inspector, not a
+production writer command. No durable science write is enabled until a plan can
+be reviewed, reproduced, locked, staged, validated, manifest-committed,
+independently revalidated, and recovered under every qualified failure boundary.

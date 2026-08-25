@@ -13,7 +13,7 @@ from .storage import StorageContractError, StorageLayout
 from .validation import PreflightCheck, inspect_writer_preflight
 
 
-PLAN_SCHEMA_VERSION = "1.0"
+PLAN_SCHEMA_VERSION = "1.1"
 ACCEPTED_BASELINE_LAST_NIGHT = date(2026, 6, 26)
 EXPECTED_STAGES = (
     "plan",
@@ -199,9 +199,8 @@ def plan_night(context: OperationContext, night: str) -> OperationReport:
             "target": {
                 "destination": target.relative_directory.as_posix(),
                 "manifest": (target.relative_directory / "manifest.json").as_posix(),
-                "lock_resource": layout.lock_resource(target).relative_to(
-                    layout.data_root
-                ).as_posix(),
+                "lock_resource": None,
+                "operations_root_status": "unconfigured",
                 "lock_location_enabled_for_production": False,
             },
             "current_partition": inspection.as_dict(),

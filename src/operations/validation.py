@@ -163,17 +163,18 @@ def inspect_writer_preflight(
                 )
             )
 
-    lock_path = layout.lock_resource(target)
     checks.append(
         PreflightCheck(
             "lock-availability",
-            "fail" if lock_path.exists() or lock_path.is_symlink() else "pass",
-            "A conceptual writer lock already exists."
-            if lock_path.exists() or lock_path.is_symlink()
-            else "No conceptual writer lock is currently present.",
+            "unknown",
+            "Production operations root is not configured; lock availability "
+            "cannot be evaluated.",
             {
-                "resource": lock_path.relative_to(layout.data_root).as_posix(),
-                "filesystem_semantics_verified_on_arnor": False,
+                "resource": None,
+                "operations_root_configured": False,
+                "arnor_shire_canary_contract_recorded": True,
+                "configured_operations_root_qualified": False,
+                "production_lock_provisioned": False,
             },
         )
     )

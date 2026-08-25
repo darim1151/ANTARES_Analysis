@@ -97,8 +97,9 @@ ctx = operations.context_from_environment()
 report = operations.plan_night(ctx, "2026-06-27")
 ```
 
-Production ingestion, lock placement, stale-lock recovery, staging cleanup,
-atomic publication, resumability, and canary execution remain disabled. The
-next gate is read-only Arnor acceptance of path, ownership, filesystem,
-locking, and rename assumptions. Only after that evidence is reviewed may a
-transactional writer/canary phase be implemented and separately authorized.
+Production ingestion, lock placement, stale-lock recovery, resumability, and
+production execution remain disabled. Phase 4's Arnor evidence and the
+manifest-commit publication decision superseding the proof-only rename detail
+are recorded in `ADR-0002-arnor-filesystem-qualification.md`. The next gate is
+local transactional-writer and recovery implementation under synthetic-only
+authority; production activation remains separately authorized.
