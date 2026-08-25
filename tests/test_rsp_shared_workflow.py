@@ -418,6 +418,7 @@ class StoragePortabilityTests(unittest.TestCase):
             "os.umask(0o002)",
             "/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data",
             "/astro/store/shire/ANTARES_Analysis_Data",
+            "/astro/store/shire/ANTARES/data",
         ]
         direct_cache = re.compile(r"DATA_ROOT\s*/\s*['\"]cache['\"]")
         manifest_authority = re.compile(

@@ -54,6 +54,28 @@ class PackageInitializationTests(unittest.TestCase):
             self.assertFalse((root / "data").exists())
             self.assertFalse((root / "cache").exists())
 
+    def test_middle_earth_data_override_uses_canonical_sibling_cache_without_io(self):
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(REPO_ROOT)
+        environment["ANTARES_ANALYSIS_DATA_ROOT"] = "/astro/store/shire/ANTARES/data"
+        environment.pop("ANTARES_ANALYSIS_CACHE_ROOT", None)
+        environment["ANTARES_STORAGE_POLICY"] = "private"
+        code = (
+            "from src import config; "
+            "assert str(config.DATA_ROOT) == '/astro/store/shire/ANTARES/data'; "
+            "assert str(config.CACHE_ROOT) == '/astro/store/shire/ANTARES/cache'"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=tempfile.gettempdir(),
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

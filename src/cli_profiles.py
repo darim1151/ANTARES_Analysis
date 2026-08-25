@@ -15,11 +15,44 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 
-MIDDLE_EARTH_DATA_ROOT = Path("/astro/store/shire/ANTARES_Analysis_Data")
-MIDDLE_EARTH_CACHE_ROOT = Path("/astro/store/shire/ANTARES_Analysis_cache")
+SHIRE_ROOT = Path("/astro/store/shire")
+MIDDLE_EARTH_PROJECT_ROOT = SHIRE_ROOT / "ANTARES"
+MIDDLE_EARTH_DATA_ROOT = MIDDLE_EARTH_PROJECT_ROOT / "data"
+MIDDLE_EARTH_CACHE_ROOT = MIDDLE_EARTH_PROJECT_ROOT / "cache"
+MIDDLE_EARTH_MIGRATION_AUDITS_ROOT = (
+    MIDDLE_EARTH_PROJECT_ROOT / "migration_audits"
+)
+MIDDLE_EARTH_WORK_ROOT = MIDDLE_EARTH_PROJECT_ROOT / "work"
+MIDDLE_EARTH_CANARY_ROOT = MIDDLE_EARTH_WORK_ROOT / "canary"
 RSP_DATA_ROOT = Path("/home/ivezic/AntaresAlerts/ANTARES_Analysis_Data")
 RSP_SHARED_GROUP = "g_antares_analysis"
 VALID_STORAGE_POLICIES = ("private", "shared-group")
+
+
+def middle_earth_work_path(path: Path) -> Path:
+    """Return a lexical operational path confined beneath ``ANTARES/work``.
+
+    This pure validator performs no filesystem I/O and creates nothing.  Any
+    future Shire canary or experiment must pass its proposed path through this
+    boundary before a separate, explicitly authorized writer may use it.
+    """
+    proposed = Path(path)
+    candidate = (
+        proposed if proposed.is_absolute() else MIDDLE_EARTH_WORK_ROOT / proposed
+    )
+    normalized = Path(os.path.normpath(str(candidate)))
+    try:
+        relative = normalized.relative_to(MIDDLE_EARTH_WORK_ROOT)
+    except ValueError as error:
+        raise ValueError(
+            "Middle Earth operational paths must remain beneath "
+            f"{MIDDLE_EARTH_WORK_ROOT}; refused {proposed}."
+        ) from error
+    if not relative.parts:
+        raise ValueError(
+            "A run-specific path beneath the Middle Earth work root is required."
+        )
+    return normalized
 
 
 @dataclass(frozen=True)

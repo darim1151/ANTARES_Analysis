@@ -11,6 +11,11 @@ from unittest import mock
 
 from src import cli
 from src import cli_diagnostics
+from src.cli_profiles import (
+    MIDDLE_EARTH_CANARY_ROOT,
+    MIDDLE_EARTH_WORK_ROOT,
+    middle_earth_work_path,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -110,11 +115,11 @@ class CliPhase2Tests(unittest.TestCase):
         middle_earth = profiles["middle-earth"]
         self.assertEqual(
             middle_earth["data_root"],
-            "/astro/store/shire/ANTARES_Analysis_Data",
+            "/astro/store/shire/ANTARES/data",
         )
         self.assertEqual(
             middle_earth["cache_root"],
-            "/astro/store/shire/ANTARES_Analysis_cache",
+            "/astro/store/shire/ANTARES/cache",
         )
         self.assertEqual(middle_earth["storage_policy"], "private")
         self.assertTrue(payload["read_only"])
@@ -127,11 +132,36 @@ class CliPhase2Tests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertIn(
-            "export ANTARES_ANALYSIS_DATA_ROOT=/astro/store/shire/ANTARES_Analysis_Data",
+            "export ANTARES_ANALYSIS_DATA_ROOT=/astro/store/shire/ANTARES/data",
+            stdout,
+        )
+        self.assertIn(
+            "export ANTARES_ANALYSIS_CACHE_ROOT=/astro/store/shire/ANTARES/cache",
             stdout,
         )
         self.assertIn("export ANTARES_STORAGE_POLICY=private", stdout)
         self.assertIn("unset ANTARES_SHARED_GROUP", stdout)
+
+    def test_middle_earth_operational_paths_are_confined_to_work(self):
+        self.assertEqual(
+            middle_earth_work_path(Path("canary") / "run-20260825T000000Z"),
+            MIDDLE_EARTH_CANARY_ROOT / "run-20260825T000000Z",
+        )
+        self.assertEqual(
+            middle_earth_work_path(
+                MIDDLE_EARTH_WORK_ROOT / "qualification" / "run-1"
+            ),
+            MIDDLE_EARTH_WORK_ROOT / "qualification" / "run-1",
+        )
+        refused = (
+            Path("/astro/store/shire/ANTARES_canary_run-1"),
+            Path("/astro/store/shire/ANTARES_Analysis_infra_canary_run-1"),
+            Path("../cache"),
+            MIDDLE_EARTH_WORK_ROOT,
+        )
+        for path in refused:
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                middle_earth_work_path(path)
 
     def test_environment_profile_uses_explicit_process_configuration(self):
         values = {

@@ -19,6 +19,8 @@ from pathlib import Path
 
 from astropy.time import Time
 
+from .cli_profiles import MIDDLE_EARTH_CACHE_ROOT, MIDDLE_EARTH_DATA_ROOT
+
 # ---------------------------------------------------------------------------
 # STORAGE / REPOSITORY PATHS
 # ---------------------------------------------------------------------------
@@ -45,7 +47,11 @@ def _configured_data_root():
 def _configured_cache_root(data_root):
     """Return the independently configurable cache root without creating it."""
     override = os.getenv("ANTARES_ANALYSIS_CACHE_ROOT")
-    return Path(override).expanduser() if override else Path(data_root) / "cache"
+    if override:
+        return Path(override).expanduser()
+    if Path(data_root) == MIDDLE_EARTH_DATA_ROOT:
+        return MIDDLE_EARTH_CACHE_ROOT
+    return Path(data_root) / "cache"
 
 
 def normalize_storage_policy(value):

@@ -136,8 +136,8 @@ restart the kernel so the module is imported with the new values.
 The selected Middle Earth profile is:
 
 ```bash
-export ANTARES_ANALYSIS_DATA_ROOT=/astro/store/shire/ANTARES_Analysis_Data
-export ANTARES_ANALYSIS_CACHE_ROOT=/astro/store/shire/ANTARES_Analysis_cache
+export ANTARES_ANALYSIS_DATA_ROOT=/astro/store/shire/ANTARES/data
+export ANTARES_ANALYSIS_CACHE_ROOT=/astro/store/shire/ANTARES/cache
 export ANTARES_STORAGE_POLICY=private
 ```
 
@@ -145,8 +145,15 @@ The migrated Middle Earth dataset is private (`mdarim:mdarim`, mode `0700`).
 Private mode does not require an RSP group and does not add group-write, setgid,
 `chgrp`, or ACL changes. Configuring `ANTARES_ANALYSIS_CACHE_ROOT` only selects a
 path: it does not create, authorize, copy, rebuild, warm, or delete a cache. The
-durable root must not acquire an `ANTARES_Analysis_Data/cache` directory on
+durable root must not acquire an `ANTARES/data/cache` directory on
 Middle Earth.
+
+ANTARES owns one top-level Shire namespace: `/astro/store/shire/ANTARES`.
+Authoritative science is beneath `data/`, historical migration evidence is
+beneath `migration_audits/`, and any future disposable qualification run must
+use `work/canary/<RUN_ID>`. Project code must not create another top-level
+`/astro/store/shire/ANTARES_*` sibling. The reserved `cache/` path remains
+absent until cache rollout is separately authorized.
 
 RSP remains available as an explicit shared-group compatibility profile:
 

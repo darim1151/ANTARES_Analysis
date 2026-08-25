@@ -14,8 +14,11 @@ data products, and unrelated deployment work are outside scope.
 
 Every phase preserves these rules:
 
-1. `/astro/store/shire/ANTARES_Analysis_Data` is durable migrated data, and
-   `/astro/store/shire/ANTARES_Analysis_cache` is a separate rebuildable cache.
+1. ANTARES owns exactly one top-level Shire namespace,
+   `/astro/store/shire/ANTARES`. Durable migrated data is beneath `data/`,
+   migration evidence is beneath `migration_audits/`, operational work is
+   beneath `work/`, and the separate rebuildable cache is reserved at `cache/`.
+   No project code may create a top-level `/astro/store/shire/ANTARES_*` sibling.
 2. Middle Earth defaults to private storage. No command silently changes owner,
    group, ACLs, permission policy, or cache placement.
 3. Read-only commands never create paths or update access/content timestamps by
