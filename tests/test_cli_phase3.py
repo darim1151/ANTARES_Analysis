@@ -25,14 +25,14 @@ class CliPhase3Tests(unittest.TestCase):
             snapshot.append((path.relative_to(root).as_posix(), digest))
         return snapshot
 
-    def test_help_adds_planning_without_writer_commands(self):
+    def test_help_adds_planning_and_fail_closed_writer_surface(self):
         status, stdout, stderr = self._run([])
 
         self.assertEqual(status, 0)
         self.assertEqual(stderr, "")
         self.assertIn("night", stdout)
         self.assertIn("backfill", stdout)
-        self.assertNotIn("ingest", stdout)
+        self.assertIn("ingest", self._run(["night"])[1])
         self.assertNotIn("backfill run", stdout)
 
     def test_night_plan_json_is_read_only_and_versioned(self):

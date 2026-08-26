@@ -190,6 +190,9 @@ The authoritative filesystem/publication decision is
 
 ## Phase 5 — transactional writer and recovery implementation
 
+Status: implemented locally as release candidate `0.3.0`; final exact-candidate
+Arnor canary and production read-only revalidation are the acceptance gates.
+
 Goal: implement the proven contract locally and in synthetic canaries without
 exposing a production write capability.
 
@@ -224,6 +227,23 @@ Execution order:
 Exit gate: all local and synthetic-Arnor writer/recovery tests pass; no ANTARES
 query, production operations/cache-root creation, science publication,
 reconciliation, scheduler, or production writer command is enabled.
+
+Implemented architecture:
+
+- sealed synthetic-only local and Arnor-canary capabilities with separate
+  publication, same-device staging, lock, journal, evidence, and cache-free
+  roots;
+- lifecycle-enforced planning, preflight, lock, query, fetch, stage,
+  validation, pre-commit reproving, manifest-last publication, durability,
+  independent reopen, unlock, reconciliation, and completion;
+- atomic-replace journal schema `1.0` with publication-aware outcomes;
+- read-only physical-evidence recovery inspection with no automatic stale-lock
+  stealing, target deletion, or resume;
+- deterministic synthetic success, zero-row, provider-failure, fault,
+  process-death, late-target, and concurrency qualification;
+- fail-closed `night ingest` plus read-only `recovery inspect` CLI surfaces;
+- unconditional sealing of the legacy direct-query/direct-publication history
+  entry point.
 
 ## Phase 6 — Middle Earth execution and Jupyter integration
 

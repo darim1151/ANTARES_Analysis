@@ -3,10 +3,9 @@
 Status: accepted for Phase 5 local implementation. Production writing,
 production operations-root provisioning, and cache creation remain disabled.
 
-Administrative update (2026-08-25): Phase 5 is paused pending human review of
-the single-root Shire correction in ADR-0003. Phase 4 qualification evidence
-remains valid historical evidence; current project paths are governed by
-ADR-0003.
+Administrative update (2026-08-26): the single-root correction in ADR-0003 was
+accepted and Phase 5 resumed. Phase 4 qualification evidence remains valid
+historical evidence; current project paths are governed by ADR-0003.
 
 ## Context
 

@@ -35,13 +35,18 @@ def main() -> int:
     module_names.extend(
         [
             "src.operations.context",
+            "src.operations.journal",
             "src.operations.locking",
             "src.operations.plan",
+            "src.operations.recovery",
             "src.operations.report",
+            "src.operations.science",
             "src.operations.state",
             "src.operations.storage",
             "src.operations.transaction",
             "src.operations.validation",
+            "src.operations.writer",
+            "src.operations.canary",
         ]
     )
     # Exercise the broker client's real import closure (including its BSON
@@ -90,6 +95,16 @@ def main() -> int:
         )
     if status != 0 or '"writer_not_enabled_in_this_release"' not in output.getvalue():
         raise RuntimeError("installed Phase 3 planning smoke test failed")
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        status = cli.main(["night", "ingest", "2026-06-27", "--json"])
+    if (
+        status != 4
+        or '"production_authorization_unavailable"' not in output.getvalue()
+        or '"provider_constructed": false' not in output.getvalue()
+    ):
+        raise RuntimeError("installed Phase 5 authorization smoke test failed")
 
     version = metadata.version("antares-analysis")
     print(f"Installed package verified: antares-analysis {version}")

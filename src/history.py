@@ -91,6 +91,10 @@ ZERO_ROW_ALERTS_REQUIRED_COLUMNS = {
 ZERO_ROW_REVALIDATION_POLICY = "valid_zero_row_lsst_only_v1"
 
 
+class ProductionWriterUnavailable(RuntimeError):
+    """Direct live-query publication is absent from the Phase 5 release."""
+
+
 def _ensure_storage_path(path):
     """Create a storage directory using the configured portability policy."""
     path = Path(path)
@@ -614,6 +618,16 @@ def ingest_night(
     and `skipped`. In resume mode, existing complete partitions are loaded and
     returned without live ANTARES calls.
     """
+    # This legacy notebook-era entry point combined live ANTARES access and
+    # direct filesystem publication without the transaction capability.  It
+    # is deliberately sealed before validating paths or invoking any provider.
+    # The guarded operations writer uses extracted preparation/validation
+    # functions and cannot construct a live provider in this release.
+    raise ProductionWriterUnavailable(
+        "Direct history.ingest_night execution is disabled. Use the operations "
+        "planner; production execution requires a future authorization release."
+    )
+
     if mjd_min is None or mjd_max is None:
         raise ValueError("mjd_min and mjd_max are required")
 

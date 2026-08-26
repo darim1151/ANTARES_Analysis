@@ -2,8 +2,9 @@
 
 The supported command surface is intentionally read-only. It resolves storage
 profiles, inspects the migrated dataset, diagnoses the execution environment,
-renders Jupyter commands, and produces future-writer plans without starting
-processes, querying ANTARES, or modifying storage.
+renders Jupyter commands, produces future-writer plans, and inspects recovery
+evidence.  The structural ``night ingest`` surface refuses before provider
+construction because production authority is absent in this release.
 """
 
 from __future__ import annotations
@@ -34,10 +35,15 @@ from src.cli_profiles import (
     resolve_profile,
 )
 from src.operations import context_from_profile, plan_backfill, plan_night
+from src.operations.recovery import (
+    RecoveryDisposition,
+    inspect_recovery,
+)
+from src.operations.writer import WriterError, production_ingest_refusal
 
 
 DIST_NAME = "antares-analysis"
-SOURCE_VERSION = "0.2.0"
+SOURCE_VERSION = "0.3.0"
 PROFILE_CHOICES = ("auto", "environment", *sorted(BUILTIN_PROFILES))
 
 
@@ -271,6 +277,36 @@ def _handle_night_plan(args: argparse.Namespace) -> int:
     return _render_operation_report(report, json_output=args.json)
 
 
+def _handle_night_ingest(args: argparse.Namespace) -> int:
+    report = production_ingest_refusal(args.date)
+    return _render_operation_report(report, json_output=args.json)
+
+
+def _handle_recovery_inspect(args: argparse.Namespace) -> int:
+    assessment = inspect_recovery(
+        args.journal,
+        target_path=args.target,
+        stage_path=args.stage,
+        lock_path=args.lock,
+    )
+    if args.json:
+        _print_json(assessment.as_dict())
+    else:
+        print(f"Recovery: {assessment.summary}")
+        print("Disposition: " + ", ".join(
+            item.value for item in assessment.dispositions
+        ))
+        print(f"Lock owner: {assessment.lock_owner_status}")
+        for disagreement in assessment.disagreements:
+            print(f"[WARN] {disagreement}")
+    return (
+        1
+        if RecoveryDisposition.REQUIRES_OPERATOR_DECISION
+        in assessment.dispositions
+        else 0
+    )
+
+
 def _handle_backfill_plan(args: argparse.Namespace) -> int:
     report = plan_backfill(
         _operation_context_from_args(args), args.start_date, args.end_date
@@ -359,6 +395,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_profile_options(night_plan)
     night_plan.add_argument("--json", action="store_true", help="emit versioned JSON")
     night_plan.set_defaults(handler=_handle_night_plan)
+    night_ingest = night_commands.add_parser(
+        "ingest",
+        help="show the fail-closed production authorization refusal",
+    )
+    night_ingest.add_argument("date", help="UTC night in canonical YYYY-MM-DD form")
+    night_ingest.add_argument("--json", action="store_true", help="emit versioned JSON")
+    night_ingest.set_defaults(handler=_handle_night_ingest)
 
     backfill_parser = commands.add_parser(
         "backfill", help="plan sequential backlog handling without executing it"
@@ -375,6 +418,23 @@ def build_parser() -> argparse.ArgumentParser:
     _add_profile_options(backfill_plan)
     backfill_plan.add_argument("--json", action="store_true", help="emit versioned JSON")
     backfill_plan.set_defaults(handler=_handle_backfill_plan)
+
+    recovery = commands.add_parser(
+        "recovery", help="inspect durable interrupted-writer evidence read-only"
+    )
+    recovery_commands = recovery.add_subparsers(
+        dest="recovery_command", metavar="COMMAND"
+    )
+    recovery.set_defaults(handler=_help_handler(recovery))
+    recovery_inspect = recovery_commands.add_parser(
+        "inspect", help="classify one journal/target/stage/lock evidence set"
+    )
+    recovery_inspect.add_argument("journal", type=Path, help="transaction journal JSON")
+    recovery_inspect.add_argument("--target", type=Path, required=True)
+    recovery_inspect.add_argument("--stage", type=Path, required=True)
+    recovery_inspect.add_argument("--lock", type=Path, required=True)
+    recovery_inspect.add_argument("--json", action="store_true", help="emit JSON")
+    recovery_inspect.set_defaults(handler=_handle_recovery_inspect)
 
     jupyter = commands.add_parser("jupyter", help="discover notebooks and render launch commands")
     jupyter_commands = jupyter.add_subparsers(dest="jupyter_command", metavar="COMMAND")
@@ -415,7 +475,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         handler = args.handler
         return int(handler(args))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, WriterError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 2
 

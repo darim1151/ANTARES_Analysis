@@ -1,7 +1,7 @@
 # ADR-0003: Single ANTARES Shire Project Namespace
 
-Status: accepted as an administrative governance correction. Phase 5 remains
-paused pending human review of the corrected namespace.
+Status: accepted as the active Shire namespace contract. Phase 5 execution
+resumed against this corrected namespace on 2026-08-26.
 
 ## Context
 

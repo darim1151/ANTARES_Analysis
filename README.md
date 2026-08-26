@@ -47,32 +47,46 @@ antares-analysis profile export --profile middle-earth
 antares-analysis doctor --profile middle-earth
 antares-analysis data status --profile middle-earth
 antares-analysis night plan 2026-06-27 --profile middle-earth
+antares-analysis night ingest 2026-06-27 --json
+antares-analysis recovery inspect JOURNAL --target TARGET --stage STAGE --lock LOCK --json
 antares-analysis backfill plan 2026-06-27 2026-06-29 --profile middle-earth
 antares-analysis jupyter list
 antares-analysis jupyter command setup --profile middle-earth
 ```
 
 Add `--json` to profile inspection, `doctor`, `data status`, `night plan`,
-`backfill plan`, `jupyter list`, or `jupyter command` for stable
+`night ingest`, `recovery inspect`, `backfill plan`, `jupyter list`, or
+`jupyter command` for stable
 machine-readable output. `profile export` and
 `jupyter env` render copy/paste-safe shell exports. `jupyter command` renders a
 shell-safe launch command but deliberately does not execute it. Exit status 0
 means the requested inspection passed, 1 means a health/status gate failed,
 and 2 means the request or configuration is invalid.
 
-Every supported command is non-mutating: it does not create data or cache
+Every supported CLI command is non-mutating: it does not create data or cache
 directories, launch Jupyter, query ANTARES, update manifests, or rebuild
 cumulative products. Planning reports the current partition state, prerequisites,
 blockers, the explicitly unconfigured production operations/lock root,
 validation gates, unknown estimates, and
 separate derived reconciliation. Production writer commands remain disabled;
 plans say `writer_not_enabled_in_this_release` rather than implying execution.
+`night ingest` is a structural surface that returns exit code `4` before any
+provider or write capability can be constructed. `recovery inspect` classifies
+explicit journal, target, stage, and lock evidence without modifying it.
 The operations decision and acceptance gates are in
 `docs/architecture/ADR-0001-operations-and-writer-contracts.md`, the empirical
 Arnor filesystem/publication contract is in
 `docs/architecture/ADR-0002-arnor-filesystem-qualification.md`, and sequencing
 is tracked in
 `docs/cli/PHASED_ROADMAP.md`.
+
+Phase 5 adds one production-shaped transactional writer implementation for
+synthetic qualification. It is available to Python/Jupyter clients only when
+they hold an exact sealed `SyntheticWriteCapability` and use the exact
+deterministic synthetic provider. There is no production capability factory
+and no live-provider adapter. The durable journal/recovery decision is recorded
+in `docs/architecture/ADR-0004-transactional-writer-and-recovery.md`; operator
+interpretation is in `docs/operations/PHASE5_RECOVERY_RUNBOOK.md`.
 
 The reusable Python API is the same path used by the CLI and is safe to import
 from Jupyter without invoking a subprocess:

@@ -11,9 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Mapping, Optional, Protocol, Tuple
 
-from .locking import LockOwnershipError, WriterLock
+from .locking import LockOwnershipError, WriteCapability, WriterLock
 from .state import ExecutionState, ExecutionStateMachine, StateSnapshot
-from .storage import DevelopmentWriteCapability, OPERATIONS_DIRECTORY, contained_path
+from .storage import contained_path
 
 
 class TransactionError(RuntimeError):
@@ -22,6 +22,19 @@ class TransactionError(RuntimeError):
 
 class _PublicationCommittedError(TransactionError):
     """The manifest committed or its remote outcome cannot be proven absent."""
+
+
+PublicationEventHook = Callable[[str, Mapping[str, object]], None]
+
+
+def _emit_publication_event(
+    hook: Optional[PublicationEventHook],
+    event: str,
+    **details: object,
+) -> None:
+    """Expose deterministic fault/trace boundaries without changing semantics."""
+    if hook is not None:
+        hook(event, details)
 
 
 @dataclass(frozen=True)
@@ -160,7 +173,16 @@ def _ensure_directory_tree_fsynced(path: Path, root: Path) -> None:
     if cursor.is_symlink() or not cursor.is_dir():
         raise TransactionError("Directory ancestor is missing, unsafe, or not a directory.")
     for directory in reversed(missing):
-        directory.mkdir(mode=0o700)
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            # Different-target writers may legitimately converge on a shared
+            # canonical ancestor. Re-prove it instead of treating the race as
+            # a transaction failure.
+            if directory.is_symlink() or not directory.is_dir():
+                raise TransactionError(
+                    "Concurrent directory ancestor is unsafe or not a directory."
+                )
         descriptor = os.open(
             str(directory),
             os.O_RDONLY
@@ -301,6 +323,7 @@ def _publish_noreplace(
     stage: Path,
     target: Path,
     validated: Mapping[str, _ArtifactSnapshot],
+    event_hook: Optional[PublicationEventHook] = None,
 ) -> None:
     """Reserve a target atomically and publish hard-linked artifacts manifest-last.
 
@@ -310,6 +333,12 @@ def _publish_noreplace(
     manifest link is the logical commit marker and is created only after both
     data links persist.
     """
+    _emit_publication_event(
+        event_hook,
+        "before_target_reservation",
+        stage=str(stage),
+        target=str(target),
+    )
     stage_fd = _directory_fd(stage)
     try:
         parent_fd = _directory_fd(target.parent)
@@ -333,6 +362,12 @@ def _publish_noreplace(
             dir_fd=parent_fd,
         )
         target_identity = _fd_identity(target_fd)
+        _emit_publication_event(
+            event_hook,
+            "after_target_reservation",
+            target_device=target_identity[0],
+            target_inode=target_identity[1],
+        )
         try:
             os.fchmod(target_fd, 0o700)
             os.fsync(target_fd)
@@ -351,6 +386,7 @@ def _publish_noreplace(
                 _assert_link_pair_at(
                     stage_fd, name, target_fd, name, validated[name]
                 )
+            _emit_publication_event(event_hook, "after_data_links")
             _link_validated_artifact_at(
                 stage_fd,
                 "manifest.json",
@@ -371,6 +407,7 @@ def _publish_noreplace(
                 ".manifest.pending",
                 validated["manifest.json"],
             )
+            _emit_publication_event(event_hook, "after_pending_manifest")
         except Exception as exc:
             raise TransactionError(
                 "Manifest-last publication failed after target reservation; "
@@ -378,6 +415,7 @@ def _publish_noreplace(
             ) from exc
 
         try:
+            _emit_publication_event(event_hook, "before_manifest_commit")
             os.link(
                 ".manifest.pending",
                 "manifest.json",
@@ -385,6 +423,7 @@ def _publish_noreplace(
                 dst_dir_fd=target_fd,
                 follow_symlinks=False,
             )
+            _emit_publication_event(event_hook, "after_manifest_commit")
         except Exception as exc:
             if _manifest_link_committed_at(
                 target_fd, validated["manifest.json"]
@@ -412,8 +451,10 @@ def _publish_noreplace(
             _assert_target_entry(parent_fd, target.name, target_identity)
             os.fsync(target_fd)
             os.fsync(parent_fd)
+            _emit_publication_event(event_hook, "after_publication_fsync")
             os.unlink(".manifest.pending", dir_fd=target_fd)
             os.fsync(target_fd)
+            _emit_publication_event(event_hook, "after_pending_unlink")
         except Exception as exc:
             raise _PublicationCommittedError(
                 "Manifest commit is visible but post-commit durability is uncertain."
@@ -506,10 +547,12 @@ class PublicationTransaction:
 
     def __init__(
         self,
-        capability: DevelopmentWriteCapability,
+        capability: WriteCapability,
         writer_lock: WriterLock,
         target_relative: Path,
         run_id: str,
+        *,
+        publication_event_hook: Optional[PublicationEventHook] = None,
     ) -> None:
         if not writer_lock.held or writer_lock.run_id != run_id:
             raise TransactionError("A held writer lock owned by this run is required.")
@@ -519,16 +562,19 @@ class PublicationTransaction:
         self.writer_lock = writer_lock
         self.run_id = run_id
         self.target_relative = Path(target_relative)
-        self.target = contained_path(capability.root, self.target_relative)
+        self.target = contained_path(
+            capability.published_root, self.target_relative
+        )
         if writer_lock.target_identity != self.target_relative.as_posix():
             raise TransactionError(
                 "Writer lock identity does not match the publication target."
             )
         stage_identity = writer_lock.path.name.removesuffix(".lock")
         self.stage = contained_path(
-            capability.root,
-            Path(OPERATIONS_DIRECTORY) / "staging" / run_id / stage_identity,
+            capability.staging_root,
+            Path(run_id) / stage_identity,
         )
+        self.publication_event_hook = publication_event_hook
         self.state_machine = ExecutionStateMachine()
         self.evidence: Optional[QueryFetchEvidence] = None
         self._publication_attempted = False
@@ -697,9 +743,25 @@ class PublicationTransaction:
         self._validated_artifacts = before
         return self.state_machine.transition(ExecutionState.VALIDATED)
 
-    def publish(self) -> StateSnapshot:
+    def validated_artifact_identities(self) -> Mapping[str, Mapping[str, object]]:
+        """Return the immutable evidence captured at validation."""
+        if self._validated_artifacts is None:
+            raise TransactionError("Validated artifact identity is missing.")
+        return {
+            name: {
+                "device": snapshot.device,
+                "inode": snapshot.inode,
+                "size": snapshot.size,
+                "mode": snapshot.mode,
+                "sha256": snapshot.sha256,
+            }
+            for name, snapshot in sorted(self._validated_artifacts.items())
+        }
+
+    def precommit_reprove(self) -> Mapping[str, Mapping[str, object]]:
+        """Re-prove lock, exact staged bytes, target absence, and mount identity."""
         if self.state != ExecutionState.VALIDATED:
-            raise TransactionError("Publication requires a validated stage.")
+            raise TransactionError("Pre-commit reproving requires a validated stage.")
         try:
             self.writer_lock.assert_owned()
         except LockOwnershipError as exc:
@@ -714,6 +776,14 @@ class PublicationTransaction:
         ):
             self._fail("staging_identity_changed")
             raise TransactionError("Staging directory identity changed.")
+        observed_names = {
+            path.name for path in self.stage.iterdir()
+        }
+        if observed_names != set(self.REQUIRED_ARTIFACTS):
+            self._fail("staged_artifact_set_changed_before_publication")
+            raise TransactionError(
+                "Staged artifact set changed before publication."
+            )
         try:
             for name, expected in self._validated_artifacts.items():
                 _assert_artifact_snapshot(self.stage / name, expected)
@@ -736,11 +806,25 @@ class PublicationTransaction:
         except LockOwnershipError as exc:
             self._fail("writer_lock_lost")
             raise TransactionError("Writer lock was lost before publication.") from exc
+        return self.validated_artifact_identities()
+
+    def publish(self) -> StateSnapshot:
+        if self.state != ExecutionState.VALIDATED:
+            raise TransactionError("Publication requires a validated stage.")
+        self.precommit_reprove()
         self._publication_attempted = True
         try:
-            _publish_noreplace(
-                self.stage, self.target, self._validated_artifacts
-            )
+            if self.publication_event_hook is None:
+                _publish_noreplace(
+                    self.stage, self.target, self._validated_artifacts
+                )
+            else:
+                _publish_noreplace(
+                    self.stage,
+                    self.target,
+                    self._validated_artifacts,
+                    self.publication_event_hook,
+                )
         except _PublicationCommittedError as exc:
             self.state_machine.transition(ExecutionState.PUBLISHED)
             self._fail("published_durability_uncertain")
@@ -752,11 +836,17 @@ class PublicationTransaction:
             raise
         published = self.state_machine.transition(ExecutionState.PUBLISHED)
         try:
+            _emit_publication_event(
+                self.publication_event_hook, "before_stage_cleanup"
+            )
             _cleanup_committed_stage(
                 self.stage,
                 self.target,
                 self._validated_artifacts,
                 self._owned_stage_identity,
+            )
+            _emit_publication_event(
+                self.publication_event_hook, "after_stage_cleanup"
             )
         except Exception as exc:
             self._fail("published_stage_cleanup_failed")

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional, Tuple
+
+from src.cli_profiles import MIDDLE_EARTH_CANARY_ROOT
 
 from .context import OperationContext
 
@@ -15,6 +19,8 @@ APPENDABLE_STATUSES = frozenset({"complete", "under_target", "saturated_unresolv
 ACCEPTED_ZERO_ROW_NIGHTS = frozenset({"2026-03-05", "2026-03-11"})
 OPERATIONS_DIRECTORY = ".antares-operations"
 _DEVELOPMENT_CAPABILITY_TOKEN = object()
+_SYNTHETIC_CAPABILITY_TOKEN = object()
+ARNOR_CANARY_ROOT = MIDDLE_EARTH_CANARY_ROOT
 
 
 class StorageContractError(ValueError):
@@ -318,6 +324,33 @@ class DevelopmentWriteCapability:
                 "temporary-root factory."
             )
 
+    @property
+    def published_root(self) -> Path:
+        """Return the legacy fixture publication root."""
+        return self.root
+
+    @property
+    def staging_root(self) -> Path:
+        return contained_path(
+            self.root, Path(OPERATIONS_DIRECTORY) / "staging"
+        )
+
+    @property
+    def lock_root(self) -> Path:
+        return contained_path(self.root, Path(OPERATIONS_DIRECTORY) / "locks")
+
+    @property
+    def journal_root(self) -> Path:
+        return contained_path(
+            self.root, Path(OPERATIONS_DIRECTORY) / "journals"
+        )
+
+    @property
+    def evidence_root(self) -> Path:
+        return contained_path(
+            self.root, Path(OPERATIONS_DIRECTORY) / "evidence"
+        )
+
     @classmethod
     def for_temporary_root(cls, root: Path) -> "DevelopmentWriteCapability":
         resolved = _resolved(root)
@@ -332,3 +365,154 @@ class DevelopmentWriteCapability:
                 "Development write capability requires an existing real directory."
             )
         return cls(resolved, _DEVELOPMENT_CAPABILITY_TOKEN)
+
+
+def _validated_run_id(value: object) -> str:
+    run_id = str(value).strip()
+    if (
+        not run_id
+        or run_id in {".", ".."}
+        or Path(run_id).name != run_id
+        or len(Path(run_id).parts) != 1
+    ):
+        raise StorageContractError(
+            "Synthetic write capability requires one safe run-id path component."
+        )
+    return run_id
+
+
+def _existing_real_directory(root: Path, *, label: str) -> Path:
+    lexical = Path(root).expanduser()
+    if lexical.is_symlink() or not lexical.is_dir():
+        raise StorageContractError(f"{label} requires an existing real directory.")
+    return lexical.resolve(strict=True)
+
+
+@dataclass(frozen=True)
+class SyntheticWriteCapability:
+    """Sealed authority for one synthetic run; never production science.
+
+    The capability only describes already-created, run-scoped roots. Factories
+    perform no filesystem mutation. There is deliberately no production-data
+    factory.
+    """
+
+    root: Path
+    run_id: str
+    environment: str
+    _token: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._token is not _SYNTHETIC_CAPABILITY_TOKEN:
+            raise StorageContractError(
+                "Synthetic write capabilities must be issued by a sealed "
+                "synthetic-run factory."
+            )
+        if self.environment not in {"local-temporary", "arnor-canary"}:
+            raise StorageContractError("Unknown synthetic capability environment.")
+        _validated_run_id(self.run_id)
+
+    @property
+    def published_root(self) -> Path:
+        return contained_path(self.root, Path("published"))
+
+    @property
+    def staging_root(self) -> Path:
+        return contained_path(self.root, Path("staging"))
+
+    @property
+    def lock_root(self) -> Path:
+        return contained_path(self.root, Path("control") / "locks")
+
+    @property
+    def journal_root(self) -> Path:
+        return contained_path(self.root, Path("control") / "journals")
+
+    @property
+    def evidence_root(self) -> Path:
+        return contained_path(self.root, Path("evidence"))
+
+    @classmethod
+    def for_local_run_root(
+        cls,
+        root: Path,
+        run_id: Optional[str] = None,
+    ) -> "SyntheticWriteCapability":
+        """Issue authority for one existing run root below the local temp root."""
+        resolved = _existing_real_directory(root, label="Local synthetic run root")
+        temporary = _resolved(Path(tempfile.gettempdir()))
+        if resolved == temporary or _relative_to(resolved, temporary) is None:
+            raise StorageContractError(
+                "Local synthetic write capability is restricted to a child of "
+                "the local temporary directory."
+            )
+        identity = _validated_run_id(run_id if run_id is not None else resolved.name)
+        if run_id is not None and resolved.name != identity:
+            raise StorageContractError(
+                "Local synthetic run root must be named for its run id."
+            )
+        return cls(
+            resolved,
+            identity,
+            "local-temporary",
+            _SYNTHETIC_CAPABILITY_TOKEN,
+        )
+
+    @classmethod
+    def for_temporary_run_root(
+        cls,
+        root: Path,
+        run_id: Optional[str] = None,
+    ) -> "SyntheticWriteCapability":
+        """Compatibility alias for :meth:`for_local_run_root`."""
+        return cls.for_local_run_root(root, run_id)
+
+    @classmethod
+    def for_arnor_canary_root(
+        cls,
+        root: Path,
+        run_id: Optional[str] = None,
+        *,
+        hostname: Optional[str] = None,
+    ) -> "SyntheticWriteCapability":
+        """Issue authority for one exact existing Arnor canary run directory.
+
+        ``hostname`` exists solely so tests can prove the host gate without
+        pretending to run on Arnor.
+        """
+        observed_hostname = hostname or socket.gethostname()
+        if observed_hostname.strip().lower().split(".", 1)[0] != "arnor":
+            raise StorageContractError(
+                "Arnor canary capability may only be issued on host arnor."
+            )
+
+        proposed = Path(root).expanduser()
+        identity = _validated_run_id(
+            run_id if run_id is not None else proposed.name
+        )
+        expected = ARNOR_CANARY_ROOT / identity
+        lexical = Path(os.path.abspath(os.fspath(proposed)))
+        if lexical != expected or lexical.parent != ARNOR_CANARY_ROOT:
+            raise StorageContractError(
+                "Arnor canary capability requires the exact direct child "
+                f"{expected}."
+            )
+        resolved = _existing_real_directory(
+            lexical, label="Arnor canary run root"
+        )
+        try:
+            canonical_canary = ARNOR_CANARY_ROOT.resolve(strict=True)
+        except OSError as exc:
+            raise StorageContractError(
+                "Canonical Arnor canary parent is missing or inaccessible."
+            ) from exc
+        if canonical_canary != ARNOR_CANARY_ROOT or resolved != expected:
+            raise StorageContractError(
+                "Arnor canary root must not use symlink or path aliases."
+            )
+        return cls(
+            resolved,
+            identity,
+            "arnor-canary",
+            _SYNTHETIC_CAPABILITY_TOKEN,
+        )
