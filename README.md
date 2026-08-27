@@ -35,8 +35,9 @@ python3.11 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The console is a read-only control plane for the migrated Middle Earth dataset,
-future-writer planning, and the repository's Jupyter workflows:
+The console is read-only by default. It also exposes one deliberately named
+Phase 6 commissioning command that can read live ANTARES and retain a validated
+candidate beneath an exact canary run root; it cannot publish production data:
 
 ```bash
 antares-analysis --version
@@ -48,6 +49,8 @@ antares-analysis doctor --profile middle-earth
 antares-analysis data status --profile middle-earth
 antares-analysis night plan 2026-06-27 --profile middle-earth
 antares-analysis night ingest 2026-06-27 --json
+antares-analysis night qualify 2026-06-27 --run-id RUN_ID \
+  --release-sha FULL_COMMIT_SHA --authorize-live-read --profile middle-earth --json
 antares-analysis recovery inspect JOURNAL --target TARGET --stage STAGE --lock LOCK --json
 antares-analysis backfill plan 2026-06-27 2026-06-29 --profile middle-earth
 antares-analysis jupyter list
@@ -55,7 +58,7 @@ antares-analysis jupyter command setup --profile middle-earth
 ```
 
 Add `--json` to profile inspection, `doctor`, `data status`, `night plan`,
-`night ingest`, `recovery inspect`, `backfill plan`, `jupyter list`, or
+`night ingest`, `night qualify`, `recovery inspect`, `backfill plan`, `jupyter list`, or
 `jupyter command` for stable
 machine-readable output. `profile export` and
 `jupyter env` render copy/paste-safe shell exports. `jupyter command` renders a
@@ -63,9 +66,9 @@ shell-safe launch command but deliberately does not execute it. Exit status 0
 means the requested inspection passed, 1 means a health/status gate failed,
 and 2 means the request or configuration is invalid.
 
-Every supported CLI command is non-mutating: it does not create data or cache
-directories, launch Jupyter, query ANTARES, update manifests, or rebuild
-cumulative products. Planning reports the current partition state, prerequisites,
+Inspection, planning, recovery, and Jupyter-navigation commands are non-mutating:
+they do not create data or cache directories, launch Jupyter, query ANTARES,
+update manifests, or rebuild cumulative products. Planning reports the current partition state, prerequisites,
 blockers, the explicitly unconfigured production operations/lock root,
 validation gates, unknown estimates, and
 separate derived reconciliation. Production writer commands remain disabled;
@@ -73,6 +76,16 @@ plans say `writer_not_enabled_in_this_release` rather than implying execution.
 `night ingest` is a structural surface that returns exit code `4` before any
 provider or write capability can be constructed. `recovery inspect` classifies
 explicit journal, target, stage, and lock evidence without modifying it.
+`night qualify` is the sole explicit exception. It requires a pre-created Arnor
+canary run, the full installed release SHA, and `--authorize-live-read`. It uses
+the public ANTARES search API and the accepted `probe_first_time_ra_dec`
+extractor to prove complete 3-D coverage of MJD `[61218.0, 61219.0)` across
+6,912 initial time/RA/declination tiles. Saturated 50-row probes split at the
+historical floors; accepted tiles require normal iterator exhaustion. It then
+fetches every deduplicated locus with at most four workers, stages and validates
+the result, runs the existing pre-commit reproof, and stops. Its write capability
+is confined to `work/canary/<RUN_ID>`; production publication, cumulative
+reconciliation, and cache mutation are structurally absent.
 The operations decision and acceptance gates are in
 `docs/architecture/ADR-0001-operations-and-writer-contracts.md`, the empirical
 Arnor filesystem/publication contract is in
@@ -83,10 +96,13 @@ is tracked in
 Phase 5 adds one production-shaped transactional writer implementation for
 synthetic qualification. It is available to Python/Jupyter clients only when
 they hold an exact sealed `SyntheticWriteCapability` and use the exact
-deterministic synthetic provider. There is no production capability factory
-and no live-provider adapter. The durable journal/recovery decision is recorded
+deterministic synthetic provider. Phase 6 adds a separate sealed
+`LIVE_ANTARES_READ` provider and a non-publication commissioning coordinator;
+neither introduces a production capability factory. The durable journal/recovery decision is recorded
 in `docs/architecture/ADR-0004-transactional-writer-and-recovery.md`; operator
-interpretation is in `docs/operations/PHASE5_RECOVERY_RUNBOOK.md`.
+interpretation is in `docs/operations/PHASE5_RECOVERY_RUNBOOK.md`, and the live
+completeness boundary is in
+`docs/architecture/ADR-0005-live-commissioning-boundary.md`.
 
 The reusable Python API is the same path used by the CLI and is safe to import
 from Jupyter without invoking a subprocess:
@@ -110,7 +126,7 @@ See `requirements/README.md` for the mandatory Linux x86_64 hashed-lock and
 fresh-wheel verification procedure. Neither a macOS `pip freeze` nor
 `environment.yml` alone is a production deployment lock.
 
-The wheel contains the importable `src` package and the read-only CLI.
+The wheel contains the importable `src` package and the safe-by-default CLI.
 Operational notebooks and repository scripts remain versioned companion
 material; the CLI discovers notebooks from a checkout and does not package or
 execute them. When `doctor` runs from an installed wheel without a discoverable
@@ -386,18 +402,17 @@ Do not pull `notebooks/alerts_time_comparison.ipynb` unless you intentionally wa
 
 ## Current Safety Boundary
 
-The Phase 3 foundation adds reusable operation contexts/reports, deterministic
-night/backfill planning, legal writer states, contained storage paths,
-single-writer ownership, strict query/fetch evidence, guarded staging,
-validation-before-publication, and reconciliation-after-publication semantics.
-Executable lock/transaction proofs are restricted to local temporary fixtures.
-There is no production capability and no ingestion, backfill-run, reconcile, or
+Phases 3–5 established reusable operation reports, deterministic planning,
+legal writer states, contained storage paths, durable journals, single-writer
+ownership, guarded staging, validation-before-publication, and synthetic
+transaction/recovery qualification on Arnor. Phase 6 adds only the sealed
+`LIVE_ANTARES_READ` commissioning path described above. There is still no
+production write capability and no ingestion, backfill-run, reconcile, or
 deployment command.
 
 `historical_backfill.ipynb` and `alerts_time_comparison.ipynb` still contain
 operational publication/reconciliation logic. They are retained unchanged to
 avoid silently migrating accepted science behavior, but they are not the
-future production-writer authority. Read-only Arnor acceptance must verify
-`/astro/store/shire` locking and atomic-rename behavior before transactional
-writer implementation or canary preparation begins. Cache rebuilding/warming
-and managed Jupyter execution remain separately authorized later work.
+future production-writer authority. Cache rebuilding/warming, publication,
+cumulative reconciliation, and managed Jupyter execution remain separately
+authorized later work.

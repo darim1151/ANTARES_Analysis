@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import stat
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,9 @@ from .transaction import PublicationTransaction, TransactionError
 
 WRITER_CONTRACT_VERSION = "phase5-writer-v1"
 EXPECTED_ARTIFACTS = ("loci.parquet", "alerts.parquet", "manifest.json")
+SHARED_RECONCILIATION_LOCK_IDENTITY = "derived/cumulative/nightly-summary"
+RECONCILIATION_LOCK_WAIT_SECONDS = 30.0
+RECONCILIATION_LOCK_POLL_SECONDS = 0.02
 
 
 class WriterError(RuntimeError):
@@ -902,9 +906,10 @@ class TransactionalNightWriter:
             journal.update(publication={"writer_lock_released": True})
             transaction.begin_reconciliation()
 
-            reconciliation_identity = (
-                Path("derived") / "nightly" / request.date_utc
-            ).as_posix()
+            # Distinct nightly transactions update one shared cumulative
+            # product family.  Lock that shared target, never merely the
+            # originating night, so cross-night reconciliation serializes.
+            reconciliation_identity = SHARED_RECONCILIATION_LOCK_IDENTITY
             reconciliation_lock = WriterLock(
                 self.capability,
                 reconciliation_identity,
@@ -915,12 +920,39 @@ class TransactionalNightWriter:
                 config_hash=config_hash,
                 artifact_hashes=self._hashes(published_identities),
             )
-            reconciliation_lock.acquire(at=self.clock())
+            wait_started = time.monotonic()
+            wait_attempts = 0
+            while True:
+                try:
+                    reconciliation_lock.acquire(at=self.clock())
+                    break
+                except LockUnavailable:
+                    wait_attempts += 1
+                    elapsed = time.monotonic() - wait_started
+                    if elapsed >= RECONCILIATION_LOCK_WAIT_SECONDS:
+                        raise
+                    journal.update(
+                        reconciliation={
+                            "status": "waiting_for_shared_target_lock",
+                            "lock_path": str(reconciliation_lock.path),
+                            "wait_attempts": wait_attempts,
+                            "wait_timeout_seconds": RECONCILIATION_LOCK_WAIT_SECONDS,
+                            "nightly_publication_independent": True,
+                        }
+                    )
+                    self._checkpoint(
+                        "waiting_for_reconciliation_lock",
+                        wait_attempts=wait_attempts,
+                        lock_path=str(reconciliation_lock.path),
+                    )
+                    time.sleep(RECONCILIATION_LOCK_POLL_SECONDS)
             journal.transition(
                 ExecutionState.RECONCILING,
                 reconciliation={
                     "status": "running",
                     "lock_path": str(reconciliation_lock.path),
+                    "wait_attempts": wait_attempts,
+                    "wait_seconds": round(time.monotonic() - wait_started, 6),
                     "nightly_publication_independent": True,
                 },
             )
@@ -1130,4 +1162,6 @@ __all__ = [
     "independent_reopen",
     "nightly_target_relative",
     "production_ingest_refusal",
+    "SHARED_RECONCILIATION_LOCK_IDENTITY",
+    "RECONCILIATION_LOCK_WAIT_SECONDS",
 ]

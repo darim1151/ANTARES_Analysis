@@ -226,7 +226,14 @@ def _empty_alerts_frame():
     })
 
 
-def prepare_loci(df_loci, date_utc, mjd_min, mjd_max, ingested_at_utc):
+def prepare_loci(
+    df_loci,
+    date_utc,
+    mjd_min,
+    mjd_max,
+    ingested_at_utc,
+    source_query_mode=SOURCE_QUERY_MODE,
+):
     """Attach nightly provenance columns to a loci table."""
     df = df_loci.copy()
     if df.empty and len(df.columns) == 0:
@@ -240,7 +247,7 @@ def prepare_loci(df_loci, date_utc, mjd_min, mjd_max, ingested_at_utc):
     df["night_mjd_min"] = float(mjd_min)
     df["night_mjd_max"] = float(mjd_max)
     df["ingested_at_utc"] = ingested_at_utc
-    df["source_query_mode"] = SOURCE_QUERY_MODE
+    df["source_query_mode"] = str(source_query_mode)
     return df.reset_index(drop=True)
 
 
@@ -266,6 +273,7 @@ def validation_summary(
     lsst_only=LSST_ONLY,
     query_completed=True,
     query_fetch_clean=True,
+    mjd_upper_exclusive=False,
 ):
     """Return machine-readable validation fields for a nightly manifest."""
     zero_row_night = bool(
@@ -284,6 +292,7 @@ def validation_summary(
         "mjd_missing_column": MJD_COL not in df_loci.columns,
         "mjd_below_count": 0,
         "mjd_above_count": 0,
+        "mjd_upper_bound": "exclusive" if mjd_upper_exclusive else "inclusive",
         "duplicate_locus_count": 0,
         "coordinate_pass": True,
         "coordinate_missing_columns": not {"ra", "dec"}.issubset(df_loci.columns),
@@ -321,7 +330,12 @@ def validation_summary(
     if not df_loci.empty and MJD_COL in df_loci.columns:
         mjds = df_loci[MJD_COL].dropna()
         validation["mjd_below_count"] = int((mjds < float(mjd_min)).sum())
-        validation["mjd_above_count"] = int((mjds > float(mjd_max)).sum())
+        above = (
+            mjds >= float(mjd_max)
+            if mjd_upper_exclusive
+            else mjds > float(mjd_max)
+        )
+        validation["mjd_above_count"] = int(above.sum())
         validation["mjd_pass"] = (
             validation["mjd_below_count"] == 0 and validation["mjd_above_count"] == 0
         )

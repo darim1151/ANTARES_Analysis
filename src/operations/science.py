@@ -11,7 +11,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Mapping, Optional, Protocol, Tuple, runtime_checkable
@@ -46,6 +47,7 @@ class ProviderOutcome(str, Enum):
     PARTIAL_FETCH = "partial_fetch"
     MALFORMED_RESULT = "malformed_result"
     VALIDATION_FAILURE = "validation_failure"
+    INCOMPLETE = "incomplete"
 
 
 class SyntheticScenario(str, Enum):
@@ -162,7 +164,7 @@ class NightScienceRequest:
     mjd_max: float
     ingested_at_utc: Optional[str] = None
     query_tag: Optional[str] = None
-    target_loci: int = 2
+    target_loci: Optional[int] = 2
     range_label: Optional[str] = None
     lsst_only: bool = True
     prior_locus_ids: Tuple[str, ...] = ()
@@ -187,10 +189,11 @@ class NightScienceRequest:
         object.__setattr__(self, "mjd_min", lower)
         object.__setattr__(self, "mjd_max", upper)
 
-        if isinstance(self.target_loci, bool) or not isinstance(self.target_loci, int):
-            raise ValueError("target_loci must be a positive integer.")
-        if self.target_loci <= 0:
-            raise ValueError("target_loci must be a positive integer.")
+        if self.target_loci is not None:
+            if isinstance(self.target_loci, bool) or not isinstance(self.target_loci, int):
+                raise ValueError("target_loci must be a positive integer or null.")
+            if self.target_loci <= 0:
+                raise ValueError("target_loci must be a positive integer or null.")
         if self.lsst_only is not True:
             raise ValueError("The nightly science-provider contract is LSST-only.")
 
@@ -219,6 +222,7 @@ class QueryStageEvidence:
     partial: bool
     returned_loci: int
     errors: Tuple[ProviderIssue, ...] = ()
+    details: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def clean(self) -> bool:
@@ -235,6 +239,7 @@ class QueryStageEvidence:
             "partial": self.partial,
             "returned_loci": self.returned_loci,
             "errors": [issue.as_dict() for issue in self.errors],
+            "details": dict(self.details),
         }
 
 
@@ -247,6 +252,7 @@ class FetchStageEvidence:
     loci_rows: int
     alert_rows: int
     errors: Tuple[ProviderIssue, ...] = ()
+    details: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def clean(self) -> bool:
@@ -265,6 +271,7 @@ class FetchStageEvidence:
             "loci_rows": self.loci_rows,
             "alert_rows": self.alert_rows,
             "errors": [issue.as_dict() for issue in self.errors],
+            "details": dict(self.details),
         }
 
 
@@ -385,6 +392,7 @@ class NightScienceResult:
             ProviderOutcome.PARTIAL_FETCH: PartialFetchError,
             ProviderOutcome.MALFORMED_RESULT: MalformedResultError,
             ProviderOutcome.VALIDATION_FAILURE: ScienceValidationError,
+            ProviderOutcome.INCOMPLETE: ProviderError,
         }.get(self.outcome, ProviderError)
         raise error_type(issue, result=self)
 
@@ -895,11 +903,19 @@ def build_night_artifacts(result: NightScienceResult) -> Dict[str, bytes]:
     alerts_bytes = _parquet_bytes(result.alerts)
     request = result.request
     validation = dict(result.validation)
+    synthetic = result.provider_name == "synthetic"
+    query_details = dict(result.query_evidence.details)
+    fetch_details = dict(result.fetch_evidence.details)
+    schema_version = (
+        "phase5.synthetic-night.v1"
+        if synthetic
+        else "phase6.commissioning-candidate.v1"
+    )
     manifest: Dict[str, Any] = {
-        "schema_version": "phase5.synthetic-night.v1",
+        "schema_version": schema_version,
         "provider": result.provider_name,
         "provider_scenario": result.scenario,
-        "synthetic": result.provider_name == "synthetic",
+        "synthetic": synthetic,
         "date_utc": request.date_utc,
         "mjd_min": request.mjd_min,
         "mjd_max": request.mjd_max,
@@ -907,9 +923,18 @@ def build_night_artifacts(result: NightScienceResult) -> Dict[str, bytes]:
         "target_loci": request.target_loci,
         "actual_loci": len(result.loci),
         "alert_rows": len(result.alerts),
-        "chunk_count": 1,
-        "split_count": 0,
-        "saturated_chunk_count": 0,
+        "chunk_count": int(
+            query_details.get(
+                "accepted_tile_count",
+                query_details.get(
+                    "accepted_chunk_count", query_details.get("logical_chunk_count", 1)
+                ),
+            )
+        ),
+        "split_count": int(query_details.get("split_count", 0)),
+        "saturated_chunk_count": int(
+            query_details.get("unresolved_saturated_chunk_count", 0)
+        ),
         "status": "complete",
         "survey_mode": "lsst",
         "lsst_filter_used": True,
@@ -917,9 +942,20 @@ def build_night_artifacts(result: NightScienceResult) -> Dict[str, bytes]:
         "lsst_dia_count": int(validation.get("lsst_dia_count", 0)),
         "lsst_ss_count": int(validation.get("lsst_ss_count", 0)),
         "ztf_object_id_count": int(validation.get("ztf_object_id_count", 0)),
-        "started_at_utc": request.ingested_at_utc,
-        "finished_at_utc": request.ingested_at_utc,
-        "runtime_seconds": 0.0,
+        "started_at_utc": query_details.get(
+            "request_started_at_utc", request.ingested_at_utc
+        ),
+        "ingested_at_utc": query_details.get(
+            "request_completed_at_utc", request.ingested_at_utc
+        ),
+        "finished_at_utc": fetch_details.get(
+            "request_completed_at_utc", request.ingested_at_utc
+        ),
+        "runtime_seconds": round(
+            float(query_details.get("runtime_seconds", 0.0))
+            + float(fetch_details.get("runtime_seconds", 0.0)),
+            6,
+        ),
         "validation": validation,
         "validation_inputs": {
             "prior_locus_ids": list(request.prior_locus_ids),
@@ -951,6 +987,20 @@ def build_night_artifacts(result: NightScienceResult) -> Dict[str, bytes]:
             },
         },
     }
+    if not synthetic:
+        manifest.update(
+            {
+                "lsst_filter": query_details.get("lsst_filter"),
+                "extraction_method": query_details.get("extraction_method"),
+                "source_query_mode": (
+                    query_details.get("extraction_method", {}).get("name")
+                    if isinstance(query_details.get("extraction_method"), dict)
+                    else None
+                ),
+                "deduplication": query_details.get("deduplication"),
+                "cache_used": query_details.get("cache_used"),
+            }
+        )
     try:
         manifest_bytes = (
             json.dumps(
@@ -987,6 +1037,693 @@ class ReopenedNightArtifacts:
 
 def _raise_artifact(code: str, message: str) -> None:
     raise ArtifactValidationError(_artifact_issue(code, message))
+
+
+_PHASE6_EXTRACTION_METHOD = {
+    "name": "probe_first_time_ra_dec",
+    "probe_limit": 50,
+    "probe_threshold": 50,
+    "time_bin_minutes": 30,
+    "ra_bins": 24,
+    "dec_bins": 6,
+    "min_time_seconds": 30.0,
+    "min_ra_degrees": 0.05,
+    "min_dec_degrees": 0.05,
+    "cache_version": "probe50_time_ra_dec_v1",
+}
+_PHASE6_TILE_KEYS = (
+    "mjd_min",
+    "mjd_max",
+    "ra_min",
+    "ra_max",
+    "dec_min",
+    "dec_max",
+)
+
+
+def _phase6_initial_tiles() -> list[Dict[str, float]]:
+    step = 30.0 / 1440.0
+    time_count = int(math.ceil((61219.0 - 61218.0) / step))
+    time_edges = [
+        round(min(61218.0 + index * step, 61219.0), 12)
+        for index in range(time_count + 1)
+    ]
+    time_edges[-1] = 61219.0
+    ra_edges = [360.0 * index / 24 for index in range(25)]
+    dec_edges = [-90.0 + 180.0 * index / 6 for index in range(7)]
+    return [
+        {
+            "mjd_min": float(time_start),
+            "mjd_max": float(time_end),
+            "ra_min": float(ra_min),
+            "ra_max": float(ra_max),
+            "dec_min": float(dec_min),
+            "dec_max": float(dec_max),
+        }
+        for time_start, time_end in zip(time_edges[:-1], time_edges[1:])
+        if time_end > time_start
+        for ra_min, ra_max in zip(ra_edges[:-1], ra_edges[1:])
+        for dec_min, dec_max in zip(dec_edges[:-1], dec_edges[1:])
+    ]
+
+
+def _phase6_split_tile(tile: Mapping[str, float]) -> Tuple[Dict[str, float], ...]:
+    ratios = {
+        "time": (tile["mjd_max"] - tile["mjd_min"]) * 86400.0 / 30.0,
+        "ra": (tile["ra_max"] - tile["ra_min"]) / 0.05,
+        "dec": (tile["dec_max"] - tile["dec_min"]) / 0.05,
+    }
+    dimension = max(ratios, key=ratios.get)
+    if ratios[dimension] <= 1.0:
+        return ()
+    first = dict(tile)
+    second = dict(tile)
+    if dimension == "time":
+        midpoint = (tile["mjd_min"] + tile["mjd_max"]) / 2.0
+        first["mjd_max"] = midpoint
+        second["mjd_min"] = midpoint
+    elif dimension == "ra":
+        midpoint = (tile["ra_min"] + tile["ra_max"]) / 2.0
+        first["ra_max"] = midpoint
+        second["ra_min"] = midpoint
+    else:
+        midpoint = (tile["dec_min"] + tile["dec_max"]) / 2.0
+        first["dec_max"] = midpoint
+        second["dec_min"] = midpoint
+    return first, second
+
+
+def _phase6_tile_query(tile: Mapping[str, float]) -> Mapping[str, Any]:
+    from .. import query as historical_query
+
+    dec_upper = "lte" if tile["dec_max"] >= 90.0 else "lt"
+    return {
+        "query": {
+            "bool": {
+                "filter": [
+                    {
+                        "range": {
+                            "properties.newest_alert_observation_time": {
+                                "gte": tile["mjd_min"],
+                                "lt": tile["mjd_max"],
+                            }
+                        }
+                    },
+                    {
+                        "range": {
+                            "ra": {"gte": tile["ra_min"], "lt": tile["ra_max"]}
+                        }
+                    },
+                    {
+                        "range": {
+                            "dec": {
+                                "gte": tile["dec_min"],
+                                dec_upper: tile["dec_max"],
+                            }
+                        }
+                    },
+                    historical_query.lsst_identifier_filter(),
+                ]
+            }
+        }
+    }
+
+
+def _phase6_json_hash(value: Mapping[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _phase6_trace_tile(row: Mapping[str, Any]) -> Dict[str, float]:
+    try:
+        raw = {key: row[key] for key in _PHASE6_TILE_KEYS}
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            for value in raw.values()
+        ):
+            raise TypeError("Tile boundaries must be JSON numbers.")
+        tile = {key: float(value) for key, value in raw.items()}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ArtifactValidationError(
+            _artifact_issue(
+                "phase6_tile_trace_invalid",
+                "A tile trace row has invalid boundaries.",
+            )
+        ) from exc
+    if not all(math.isfinite(value) for value in tile.values()):
+        _raise_artifact(
+            "phase6_tile_trace_invalid", "A tile trace row has non-finite boundaries."
+        )
+    return tile
+
+
+def _phase6_replay_trace(trace: list[Any]) -> Mapping[str, Any]:
+    """Independently replay the canonical queue and every binary split."""
+    initial = _phase6_initial_tiles()
+    if len(initial) != 6912:
+        _raise_artifact(
+            "phase6_initial_tiling_invalid", "Canonical initial tiling is not 6,912 tiles."
+        )
+    pending = deque(initial)
+    current: Optional[Dict[str, float]] = None
+    accepted = 0
+    splits = 0
+    attempts = 0
+    raw_rows = 0
+    discarded_rows = 0
+    retried_current = False
+    retry_exception_types = set()
+    for row in trace:
+        if not isinstance(row, dict):
+            _raise_artifact(
+                "phase6_tile_trace_invalid", "A tile trace entry is not an object."
+            )
+        if current is None:
+            if not pending:
+                _raise_artifact(
+                    "phase6_tile_trace_invalid", "Tile trace extends past exact coverage."
+                )
+            current = pending.popleft()
+            retried_current = False
+        tile = _phase6_trace_tile(row)
+        if tile != current:
+            _raise_artifact(
+                "phase6_tile_lineage_invalid",
+                "Tile trace order or binary split lineage is invalid.",
+            )
+        if row.get("query_sha256") != _phase6_json_hash(_phase6_tile_query(tile)):
+            _raise_artifact(
+                "phase6_tile_query_hash_invalid", "A tile query hash disagrees."
+            )
+        status = row.get("status")
+        if status == "attempt_error":
+            partial = row.get("partial_rows_discarded")
+            if (
+                retried_current
+                or row.get("attempt") != 1
+                or row.get("iterator_exhausted") is not False
+                or row.get("retryable") is not True
+                or type(partial) is not int
+                or partial < 0
+                or partial >= 50
+                or not isinstance(row.get("exception_type"), str)
+                or not row.get("exception_type")
+            ):
+                _raise_artifact(
+                    "phase6_retry_trace_invalid", "A successful-run retry row is invalid."
+                )
+            attempts += 1
+            discarded_rows += partial
+            retried_current = True
+            retry_exception_types.add(row["exception_type"])
+            continue
+        if status == "accepted_exhausted":
+            rows = row.get("returned_loci")
+            if (
+                row.get("attempt") != (2 if retried_current else 1)
+                or row.get("iterator_exhausted") is not True
+                or type(rows) is not int
+                or rows < 0
+                or rows >= 50
+            ):
+                _raise_artifact(
+                    "phase6_tile_terminal_invalid",
+                    "An accepted tile lacks positive sub-threshold exhaustion.",
+                )
+            accepted += 1
+            raw_rows += rows
+            current = None
+            continue
+        if status == "split_saturated":
+            if (
+                row.get("attempt") != (2 if retried_current else 1)
+                or row.get("iterator_exhausted") is not False
+                or row.get("returned_before_split") != 50
+            ):
+                _raise_artifact(
+                    "phase6_tile_split_invalid", "A split tile lacks exact saturation."
+                )
+            children = _phase6_split_tile(tile)
+            if len(children) != 2:
+                _raise_artifact(
+                    "phase6_tile_split_invalid", "A floor tile was recorded as split."
+                )
+            pending.appendleft(children[1])
+            pending.appendleft(children[0])
+            splits += 1
+            discarded_rows += 50
+            current = None
+            continue
+        _raise_artifact(
+            "phase6_tile_trace_invalid", "Successful trace has an unknown tile status."
+        )
+    if current is not None or pending:
+        _raise_artifact(
+            "phase6_tile_coverage_invalid", "Tile trace does not exhaust exact 3-D coverage."
+        )
+    return {
+        "initial": len(initial),
+        "accepted": accepted,
+        "splits": splits,
+        "attempt_errors": attempts,
+        "raw_rows": raw_rows,
+        "discarded_rows": discarded_rows,
+        "retry_exception_types": sorted(retry_exception_types),
+    }
+
+
+def _validate_phase6_manifest_evidence(
+    manifest: Mapping[str, Any],
+    loci: pd.DataFrame,
+    alerts: pd.DataFrame,
+) -> None:
+    """Fail closed on missing or contradictory live completion evidence."""
+    from .. import query as historical_query
+
+    expected_filter = historical_query.lsst_identifier_filter()
+    expected_interval = {
+        "mjd_min": 61218.0,
+        "mjd_max": 61219.0,
+        "lower_bound": "inclusive",
+        "upper_bound": "exclusive",
+        "timezone": "UTC",
+    }
+    expected_spatial_domain = {
+        "ra_min": 0.0,
+        "ra_max": 360.0,
+        "ra_lower_bound": "inclusive",
+        "ra_upper_bound": "exclusive",
+        "dec_min": -90.0,
+        "dec_max": 90.0,
+        "dec_lower_bound": "inclusive",
+        "dec_upper_bound": "inclusive_at_90_only",
+    }
+    expected_contract = {
+        "target_date_utc": "2026-06-27",
+        "interval": expected_interval,
+        "spatial_domain": expected_spatial_domain,
+        "query_tag": None,
+        "lsst_only": True,
+        "lsst_filter": expected_filter,
+        "sort_requested": None,
+        "parallel_parent_shards": 1,
+        "extraction_method": _PHASE6_EXTRACTION_METHOD,
+        "deduplication": {
+            "key": "locus_id",
+            "keep": "last",
+            "scope": "accepted_tiles",
+        },
+    }
+    expected_paths = {
+        "loci": "loci.parquet",
+        "alerts": "alerts.parquet",
+        "manifest": "manifest.json",
+    }
+    if (
+        manifest.get("provider") != "live-antares"
+        or manifest.get("provider_scenario") != "commissioning-v1"
+        or manifest.get("status") != "complete"
+        or manifest.get("survey_mode") != "lsst"
+        or manifest.get("paths") != expected_paths
+        or manifest.get("date_utc") != "2026-06-27"
+        or manifest.get("mjd_min") != 61218.0
+        or manifest.get("mjd_max") != 61219.0
+        or manifest.get("query_tag") is not None
+        or manifest.get("target_loci") is not None
+        or manifest.get("parallel_shards") != 1
+        or manifest.get("saturated_chunk_count") != 0
+        or manifest.get("lsst_filter") != expected_filter
+        or manifest.get("extraction_method") != _PHASE6_EXTRACTION_METHOD
+        or manifest.get("source_query_mode") != "probe_first_time_ra_dec"
+        or manifest.get("cache_used") is not False
+    ):
+        _raise_artifact(
+            "phase6_request_evidence_invalid",
+            "Phase 6 manifest does not describe the exact exhaustive target request.",
+        )
+
+    query_evidence = manifest.get("query_evidence")
+    if not isinstance(query_evidence, dict):
+        _raise_artifact("phase6_query_evidence_missing", "Live query evidence is missing.")
+    query_details = query_evidence.get("details")
+    expected_query_class = "COMPLETE_ZERO" if loci.empty else "COMPLETE_NONZERO"
+    if (
+        query_evidence.get("completed") is not True
+        or query_evidence.get("partial") is not False
+        or query_evidence.get("returned_loci") != len(loci)
+        or query_evidence.get("errors") != []
+        or not isinstance(query_details, dict)
+        or query_details.get("completion_classification") != expected_query_class
+        or query_details.get("target_date_utc") != "2026-06-27"
+        or query_details.get("query_tag") is not None
+        or query_details.get("lsst_only") is not True
+        or query_details.get("lsst_filter") != expected_filter
+        or query_details.get("sort_requested") is not None
+        or query_details.get("service_ordering") != "ANTARES client/API default"
+        or query_details.get("pagination_mode")
+        != "antares-client-jsonapi-links-next"
+        or query_details.get("interval") != expected_interval
+        or query_details.get("spatial_domain") != expected_spatial_domain
+        or query_details.get("extraction_method") != _PHASE6_EXTRACTION_METHOD
+        or query_details.get("cache_used") is not False
+        or query_details.get("initial_tile_override") is not False
+        or query_details.get("coverage_complete") is not True
+        or query_details.get("coverage_lineage_complete") is not True
+        or query_details.get("all_accepted_iterators_exhausted") is not True
+        or query_details.get("iterator_exhausted") is not True
+        or query_details.get("unresolved_saturated_chunk_count") != 0
+        or query_details.get("unresolved_saturated_tile_count") != 0
+        or query_details.get("terminal_pending_tile_count") != 0
+        or query_details.get("returned_loci") != len(loci)
+        or query_details.get("secret_material_recorded") is not False
+    ):
+        _raise_artifact(
+            "phase6_query_evidence_invalid",
+            "Live query completion evidence is missing or contradictory.",
+        )
+    execution_policy = query_details.get("execution_policy")
+    max_query_attempts = (
+        execution_policy.get("max_query_attempts")
+        if isinstance(execution_policy, dict)
+        else None
+    )
+    max_fetch_attempts_policy = (
+        execution_policy.get("max_fetch_attempts_per_object")
+        if isinstance(execution_policy, dict)
+        else None
+    )
+    max_fetch_workers_policy = (
+        execution_policy.get("max_fetch_workers")
+        if isinstance(execution_policy, dict)
+        else None
+    )
+    retry_delay = (
+        execution_policy.get("retry_delay_seconds")
+        if isinstance(execution_policy, dict)
+        else None
+    )
+    if (
+        not isinstance(execution_policy, dict)
+        or type(max_query_attempts) is not int
+        or not 1 <= max_query_attempts <= 2
+        or type(max_fetch_attempts_policy) is not int
+        or not 1 <= max_fetch_attempts_policy <= 3
+        or type(max_fetch_workers_policy) is not int
+        or not 1 <= max_fetch_workers_policy <= 4
+        or isinstance(retry_delay, bool)
+        or not isinstance(retry_delay, (int, float))
+        or not 0 <= float(retry_delay) <= 5
+        or execution_policy.get("api_timeout_seconds") != 60
+        or execution_policy.get("probe_limit") != 50
+        or execution_policy.get("probe_threshold") != 50
+        or execution_policy.get("extraction_method") != _PHASE6_EXTRACTION_METHOD
+        or execution_policy.get("tile_cache") is not False
+        or execution_policy.get("lightcurve_cache") is not False
+        or execution_policy.get("parallel_parent_shards") != 1
+    ):
+        _raise_artifact(
+            "phase6_execution_policy_invalid",
+            "Live execution policy exceeds or contradicts the sealed transport bounds.",
+        )
+    contract_hash = _phase6_json_hash(expected_contract)
+    if (
+        query_details.get("query_sha256") != contract_hash
+        or query_details.get("query_contract_sha256") != contract_hash
+        or query_details.get("lsst_filter_sha256")
+        != _phase6_json_hash({"filter": expected_filter})
+    ):
+        _raise_artifact(
+            "phase6_query_contract_hash_invalid",
+            "Live query contract identity differs from the accepted extractor.",
+        )
+
+    accepted_count = query_details.get("accepted_tile_count")
+    split_count = query_details.get("split_count")
+    retry_count = query_details.get("retry_count")
+    processed_count = query_details.get("processed_tile_count")
+    search_request_count = query_details.get("search_request_count")
+    trace = query_details.get("tile_trace")
+    if (
+        type(accepted_count) is not int
+        or accepted_count <= 0
+        or type(split_count) is not int
+        or split_count < 0
+        or type(retry_count) is not int
+        or retry_count < 0
+        or (retry_count > 0 and max_query_attempts < 2)
+        or type(processed_count) is not int
+        or processed_count < 0
+        or retry_count > processed_count
+        or type(search_request_count) is not int
+        or search_request_count < 0
+        or query_details.get("initial_tile_count") != 6912
+        or accepted_count != 6912 + split_count
+        or query_details.get("accepted_chunk_count") != accepted_count
+        or query_details.get("logical_chunk_count") != accepted_count
+        or query_details.get("iterator_exhausted_accepted_chunks") != accepted_count
+        or query_details.get("iterator_exhausted_accepted_tiles") != accepted_count
+        or processed_count != accepted_count + split_count
+        or search_request_count != accepted_count + split_count + retry_count
+        or manifest.get("chunk_count") != accepted_count
+        or manifest.get("split_count") != split_count
+        or not isinstance(trace, list)
+    ):
+        _raise_artifact(
+            "phase6_chunk_evidence_invalid",
+            "Probe-first tile counts or terminal evidence are invalid.",
+        )
+
+    replay = _phase6_replay_trace(trace)
+    if (
+        replay["initial"] != 6912
+        or replay["accepted"] != accepted_count
+        or replay["splits"] != split_count
+        or replay["attempt_errors"] != retry_count
+        or replay["raw_rows"] != query_details.get("raw_returned_loci")
+        or replay["discarded_rows"] != query_details.get("partial_rows_discarded")
+        or replay["retry_exception_types"]
+        != query_details.get("retry_exception_types")
+    ):
+        _raise_artifact(
+            "phase6_tile_terminal_invalid",
+            "Tile trace counts disagree with positive exhaustion evidence.",
+        )
+    trace_hash = _phase6_json_hash({"tiles": trace})
+    if query_details.get("tile_trace_sha256") != trace_hash:
+        _raise_artifact("phase6_tile_trace_hash_invalid", "Tile trace hash disagrees.")
+
+    deduplication = query_details.get("deduplication")
+    raw_rows = query_details.get("raw_returned_loci")
+    duplicate_rows_removed = (
+        deduplication.get("duplicate_rows_removed")
+        if isinstance(deduplication, dict)
+        else None
+    )
+    duplicate_identity_count = (
+        deduplication.get("duplicate_identity_count")
+        if isinstance(deduplication, dict)
+        else None
+    )
+    duplicate_identities = (
+        deduplication.get("duplicate_identities")
+        if isinstance(deduplication, dict)
+        else None
+    )
+    if (
+        not isinstance(deduplication, dict)
+        or deduplication.get("key") != "locus_id"
+        or deduplication.get("keep") != "last"
+        or deduplication.get("scope") != "accepted_tiles"
+        or deduplication.get("raw_rows") != raw_rows
+        or type(raw_rows) is not int
+        or raw_rows < len(loci)
+        or duplicate_rows_removed != raw_rows - len(loci)
+        or (raw_rows == 0) != bool(loci.empty)
+        or type(duplicate_identity_count) is not int
+        or duplicate_identity_count < 0
+        or duplicate_identity_count > duplicate_rows_removed
+        or (duplicate_identity_count == 0) != (duplicate_rows_removed == 0)
+        or not isinstance(duplicate_identities, list)
+        or any(not isinstance(value, str) or not value for value in duplicate_identities)
+        or duplicate_identities != sorted(set(duplicate_identities))
+        or len(duplicate_identities) != duplicate_identity_count
+        or manifest.get("deduplication") != deduplication
+    ):
+        _raise_artifact(
+            "phase6_deduplication_invalid",
+            "Historical locus-id keep-last deduplication evidence is invalid.",
+        )
+    duplicate_identity_hash = hashlib.sha256(
+        "".join(f"{value}\n" for value in duplicate_identities).encode("utf-8")
+    ).hexdigest()
+    if deduplication.get("duplicate_identity_sha256") != duplicate_identity_hash:
+        _raise_artifact(
+            "phase6_deduplication_hash_invalid", "Duplicate identity hash disagrees."
+        )
+    if (
+        "locus_id" not in loci.columns
+        or loci["locus_id"].isna().any()
+        or loci["locus_id"].astype(str).duplicated().any()
+        or query_details.get("locus_order_sha256")
+        != hashlib.sha256(
+            "".join(
+                f"{value}\n" for value in loci["locus_id"].astype(str).tolist()
+            ).encode("utf-8")
+        ).hexdigest()
+    ):
+        _raise_artifact(
+            "phase6_locus_identity_invalid", "Final locus identities are not canonical."
+        )
+
+    capability_environment = query_details.get("capability_environment")
+    client = query_details.get("client")
+    expected_client_identity = {
+        "arnor-commissioning": {
+            "distribution": "antares-client",
+            "pagination_contract": "jsonapi-links-next-until-null",
+        },
+        "local-mock": {
+            "distribution": "mock-antares-client",
+            "pagination_contract": "mocked-jsonapi-links-next-until-null",
+        },
+    }.get(capability_environment)
+    if not isinstance(client, dict) or (
+        expected_client_identity is None
+        or client.get("distribution") != expected_client_identity["distribution"]
+        or client.get("version") != "1.14.0"
+        or client.get("api_base_url") != "https://api.antares.noirlab.edu/v1/"
+        or client.get("api_timeout_seconds") != 60
+        or client.get("authentication") != "public-search-no-credentials"
+        or client.get("pagination_contract")
+        != expected_client_identity["pagination_contract"]
+    ):
+        _raise_artifact(
+            "phase6_client_identity_invalid", "Pinned ANTARES client evidence is invalid."
+        )
+
+    fetch_evidence = manifest.get("fetch_evidence")
+    if not isinstance(fetch_evidence, dict):
+        _raise_artifact("phase6_fetch_evidence_missing", "Live fetch evidence is missing.")
+    fetch_details = fetch_evidence.get("details")
+    expected_fetch_class = "COMPLETE_ZERO" if loci.empty else "COMPLETE_NONZERO"
+    fetch_retry_count = (
+        fetch_details.get("retry_count") if isinstance(fetch_details, dict) else None
+    )
+    lightcurves_with_rows = (
+        fetch_details.get("lightcurves_with_rows")
+        if isinstance(fetch_details, dict)
+        else None
+    )
+    lightcurves_empty = (
+        fetch_details.get("lightcurves_empty")
+        if isinstance(fetch_details, dict)
+        else None
+    )
+    fetch_retry_types = (
+        fetch_details.get("retry_exception_types")
+        if isinstance(fetch_details, dict)
+        else None
+    )
+    max_fetch_attempts = (
+        fetch_details.get("max_attempts_per_object")
+        if isinstance(fetch_details, dict)
+        else None
+    )
+    if (
+        fetch_evidence.get("completed") is not True
+        or fetch_evidence.get("partial") is not False
+        or fetch_evidence.get("loci_rows") != len(loci)
+        or fetch_evidence.get("alert_rows") != len(alerts)
+        or fetch_evidence.get("errors") != []
+        or not isinstance(fetch_details, dict)
+        or fetch_details.get("completion_classification") != expected_fetch_class
+        or fetch_details.get("requested_objects") != len(loci)
+        or fetch_details.get("completed_objects") != len(loci)
+        or fetch_details.get("failed_objects") != 0
+        or fetch_details.get("full_locus_history_requests") != len(loci)
+        or fetch_details.get("full_locus_history_completed") != len(loci)
+        or fetch_details.get("alert_rows") != len(alerts)
+        or fetch_details.get("max_workers") != max_fetch_workers_policy
+        or fetch_details.get("effective_workers")
+        != min(max_fetch_workers_policy, len(loci))
+        or fetch_details.get("max_in_flight_futures")
+        != min(len(loci), min(max_fetch_workers_policy, len(loci)) * 4)
+        or type(max_fetch_attempts) is not int
+        or max_fetch_attempts != max_fetch_attempts_policy
+        or type(fetch_retry_count) is not int
+        or fetch_retry_count < 0
+        or fetch_retry_count > len(loci) * (max_fetch_attempts - 1)
+        or not isinstance(fetch_retry_types, list)
+        or any(not isinstance(value, str) or not value for value in fetch_retry_types)
+        or (fetch_retry_count == 0) != (fetch_retry_types == [])
+        or type(lightcurves_with_rows) is not int
+        or lightcurves_with_rows < 0
+        or type(lightcurves_empty) is not int
+        or lightcurves_empty < 0
+        or lightcurves_with_rows + lightcurves_empty != len(loci)
+        or lightcurves_with_rows > len(alerts)
+        or fetch_details.get("failure_exception_types") != []
+        or fetch_details.get("failed_object_identity_sha256")
+        != hashlib.sha256(b"").hexdigest()
+        or fetch_details.get("cache_used") is not False
+        or fetch_details.get("secret_material_recorded") is not False
+    ):
+        _raise_artifact(
+            "phase6_fetch_evidence_invalid",
+            "Live fetch completion evidence is missing or contradictory.",
+        )
+    ingested = query_details.get("request_completed_at_utc")
+    if (
+        "ingested_at_utc" not in loci.columns
+        or not loci["ingested_at_utc"].eq(ingested).all()
+        or "source_query_mode" not in loci.columns
+        or not loci["source_query_mode"].eq("probe_first_time_ra_dec").all()
+    ):
+        _raise_artifact(
+            "phase6_locus_provenance_invalid",
+            "Live loci do not preserve probe-first ingestion provenance.",
+        )
+    if not loci.empty:
+        required = {"newest_alert_observation_time", "ra", "dec"}
+        if not required.issubset(loci.columns):
+            _raise_artifact(
+                "phase6_locus_domain_invalid", "Live loci lack exact-domain fields."
+            )
+        mjd = pd.to_numeric(loci["newest_alert_observation_time"], errors="coerce")
+        ra = pd.to_numeric(loci["ra"], errors="coerce")
+        dec = pd.to_numeric(loci["dec"], errors="coerce")
+        if (
+            mjd.isna().any()
+            or ra.isna().any()
+            or dec.isna().any()
+            or not ((mjd >= 61218.0) & (mjd < 61219.0)).all()
+            or not ((ra >= 0.0) & (ra < 360.0)).all()
+            or not ((dec >= -90.0) & (dec <= 90.0)).all()
+        ):
+            _raise_artifact(
+                "phase6_locus_domain_invalid", "Live loci escape the exact 3-D domain."
+            )
+    validation = manifest.get("validation")
+    if not isinstance(validation, dict) or (
+        validation.get("mjd_upper_bound") != "exclusive"
+        or validation.get("mjd_pass") is not True
+        or validation.get("append_ready") is not True
+        or manifest.get("lsst_dia_count") != validation.get("lsst_dia_count")
+        or manifest.get("lsst_ss_count") != validation.get("lsst_ss_count")
+        or manifest.get("ztf_object_id_count")
+        != validation.get("ztf_object_id_count")
+    ):
+        _raise_artifact(
+            "phase6_validation_boundary_invalid",
+            "Independent validation does not enforce the half-open night.",
+        )
 
 
 def _read_parquet_bytes(payload: bytes, name: str) -> pd.DataFrame:
@@ -1033,8 +1770,27 @@ def reopen_and_validate_artifacts(
         ) from exc
     if not isinstance(manifest, dict):
         _raise_artifact("manifest_type_invalid", "manifest.json is not a JSON object.")
-    if manifest.get("schema_version") != "phase5.synthetic-night.v1":
+    if manifest.get("schema_version") not in {
+        "phase5.synthetic-night.v1",
+        "phase6.commissioning-candidate.v1",
+    }:
         _raise_artifact("manifest_schema_invalid", "Unexpected manifest schema version.")
+    if (
+        manifest.get("schema_version") == "phase5.synthetic-night.v1"
+        and manifest.get("synthetic") is not True
+    ):
+        _raise_artifact(
+            "manifest_provider_invalid",
+            "The Phase 5 manifest schema is restricted to synthetic science.",
+        )
+    if (
+        manifest.get("schema_version") == "phase6.commissioning-candidate.v1"
+        and manifest.get("synthetic") is not False
+    ):
+        _raise_artifact(
+            "manifest_provider_invalid",
+            "The Phase 6 commissioning schema requires non-synthetic science.",
+        )
     if manifest.get("lsst_filter_used") is not True:
         _raise_artifact("manifest_lsst_filter_invalid", "Manifest is not LSST-only.")
 
@@ -1044,6 +1800,8 @@ def reopen_and_validate_artifacts(
         _raise_artifact("loci_count_mismatch", "Manifest and loci row counts differ.")
     if manifest.get("alert_rows") != len(alerts):
         _raise_artifact("alert_count_mismatch", "Manifest and alert row counts differ.")
+    if manifest.get("schema_version") == "phase6.commissioning-candidate.v1":
+        _validate_phase6_manifest_evidence(manifest, loci, alerts)
 
     recorded_artifacts = manifest.get("artifacts")
     if not isinstance(recorded_artifacts, dict):
@@ -1105,6 +1863,9 @@ def reopen_and_validate_artifacts(
             lsst_only=True,
             query_completed=True,
             query_fetch_clean=True,
+            mjd_upper_exclusive=(
+                manifest.get("schema_version") == "phase6.commissioning-candidate.v1"
+            ),
         )
     except Exception as exc:
         raise ArtifactValidationError(

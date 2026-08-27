@@ -1,10 +1,10 @@
 """Command-line control plane for ANTARES Analysis.
 
-The supported command surface is intentionally read-only. It resolves storage
-profiles, inspects the migrated dataset, diagnoses the execution environment,
-renders Jupyter commands, produces future-writer plans, and inspects recovery
-evidence.  The structural ``night ingest`` surface refuses before provider
-construction because production authority is absent in this release.
+Ordinary inspection, planning, recovery, and Jupyter-navigation commands are
+read-only.  ``night qualify`` is the single explicit Phase 6 exception: with
+deliberate LIVE_ANTARES_READ authority it may query ANTARES and retain a
+non-authoritative candidate under one exact canary run root.  Production
+publication, reconciliation, and cache mutation remain unavailable.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
 from typing import Optional, Sequence
@@ -43,7 +44,7 @@ from src.operations.writer import WriterError, production_ingest_refusal
 
 
 DIST_NAME = "antares-analysis"
-SOURCE_VERSION = "0.3.0"
+SOURCE_VERSION = "0.4.0"
 PROFILE_CHOICES = ("auto", "environment", *sorted(BUILTIN_PROFILES))
 
 
@@ -282,6 +283,74 @@ def _handle_night_ingest(args: argparse.Namespace) -> int:
     return _render_operation_report(report, json_output=args.json)
 
 
+def _handle_night_qualify(args: argparse.Namespace) -> int:
+    """Run the explicit Phase 6 live-read, non-publication path."""
+    from astropy.time import Time
+
+    from src.cli_profiles import MIDDLE_EARTH_CANARY_ROOT
+    from src.operations.commissioning import TARGET_DATE_UTC, qualify_live_night
+    from src.operations.live_antares import (
+        LIVE_ANTARES_READ,
+        LiveAntaresProvider,
+        LiveAntaresReadCapability,
+    )
+    from src.operations.science import NightScienceRequest
+    from src.operations.storage import SyntheticWriteCapability
+    from src.operations.writer import NightExecutionSpec
+
+    profile = _profile_from_args(args)
+    if args.date != TARGET_DATE_UTC:
+        raise ValueError(f"Phase 6 qualification is restricted to {TARGET_DATE_UTC}.")
+    if not args.authorize_live_read:
+        raise ValueError("--authorize-live-read is required for the live provider.")
+    run_root = MIDDLE_EARTH_CANARY_ROOT / args.run_id
+    write_capability = SyntheticWriteCapability.for_arnor_canary_root(
+        run_root, args.run_id
+    )
+    live_capability = LiveAntaresReadCapability.for_arnor_commissioning(
+        run_root,
+        run_id=args.run_id,
+        target_date_utc=args.date,
+        release_sha=args.release_sha,
+        authority=LIVE_ANTARES_READ,
+    )
+    start = float(
+        Time(f"{args.date}T00:00:00", format="isot", scale="utc").mjd
+    )
+    request = NightScienceRequest(
+        args.date,
+        start,
+        start + 1.0,
+        target_loci=None,
+        ingested_at_utc=datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat(),
+        range_label=f"ANTARES commissioning {args.date}",
+    )
+    provider = LiveAntaresProvider(
+        live_capability,
+        max_query_attempts=args.query_attempts,
+        max_fetch_attempts=args.fetch_attempts,
+        max_fetch_workers=args.fetch_workers,
+    )
+    spec = NightExecutionSpec(
+        args.run_id,
+        f"phase6-{args.date}",
+        args.release_sha,
+        "phase6-live-antares-commissioning-v1",
+        request,
+    )
+    result = qualify_live_night(
+        write_capability,
+        live_capability,
+        provider,
+        spec,
+        production_data_root=profile.data_root,
+        production_cache_root=profile.cache_root,
+    )
+    return _render_operation_report(result.report, json_output=args.json)
+
+
 def _handle_recovery_inspect(args: argparse.Namespace) -> int:
     assessment = inspect_recovery(
         args.journal,
@@ -319,8 +388,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=DIST_NAME,
         description=(
-            "Read-only ANTARES Analysis control plane for Middle Earth storage, "
-            "dataset diagnostics, future-writer planning, and Jupyter navigation."
+            "ANTARES Analysis control plane for Middle Earth diagnostics, planning, "
+            "Jupyter navigation, and explicit non-publication live qualification."
         ),
         epilog=(
             "Examples: antares-analysis doctor --profile middle-earth; "
@@ -384,7 +453,7 @@ def build_parser() -> argparse.ArgumentParser:
     data_status.set_defaults(handler=_handle_data_status)
 
     night_parser = commands.add_parser(
-        "night", help="plan future nightly operations without executing them"
+        "night", help="plan nights or run the sealed non-publication qualification"
     )
     night_commands = night_parser.add_subparsers(dest="night_command", metavar="COMMAND")
     night_parser.set_defaults(handler=_help_handler(night_parser))
@@ -402,6 +471,41 @@ def build_parser() -> argparse.ArgumentParser:
     night_ingest.add_argument("date", help="UTC night in canonical YYYY-MM-DD form")
     night_ingest.add_argument("--json", action="store_true", help="emit versioned JSON")
     night_ingest.set_defaults(handler=_handle_night_ingest)
+    night_qualify = night_commands.add_parser(
+        "qualify",
+        help="run the explicit Phase 6 live-read commissioning path without publication",
+    )
+    night_qualify.add_argument("date", help="UTC night in canonical YYYY-MM-DD form")
+    night_qualify.add_argument("--run-id", required=True, help="exact pre-created canary run id")
+    night_qualify.add_argument(
+        "--release-sha", required=True, help="full committed candidate SHA"
+    )
+    night_qualify.add_argument(
+        "--authorize-live-read",
+        action="store_true",
+        help="explicitly issue LIVE_ANTARES_READ for this run",
+    )
+    night_qualify.add_argument(
+        "--query-attempts",
+        type=int,
+        default=2,
+        help="whole-tile attempts (maximum 2)",
+    )
+    night_qualify.add_argument(
+        "--fetch-attempts",
+        type=int,
+        default=3,
+        help="attempts per locus (maximum 3)",
+    )
+    night_qualify.add_argument(
+        "--fetch-workers",
+        type=int,
+        default=4,
+        help="parallel locus fetches (maximum 4)",
+    )
+    _add_profile_options(night_qualify)
+    night_qualify.add_argument("--json", action="store_true", help="emit versioned JSON")
+    night_qualify.set_defaults(handler=_handle_night_qualify)
 
     backfill_parser = commands.add_parser(
         "backfill", help="plan sequential backlog handling without executing it"
