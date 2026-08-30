@@ -522,8 +522,8 @@ def release_environment_preflight(
         "imports_from_source_checkout": write_capability.environment != "arnor-canary",
     }
     if write_capability.environment == "arnor-canary":
-        if package_version != "0.4.0":
-            raise CommissioningError("Phase 6 requires installed antares-analysis 0.4.0.")
+        if package_version != "0.4.1":
+            raise CommissioningError("Phase 6 requires installed antares-analysis 0.4.1.")
         release_root = Path(
             f"/astro/users/mdarim/opt/antares-analysis/releases/{spec.release_sha}"
         )
