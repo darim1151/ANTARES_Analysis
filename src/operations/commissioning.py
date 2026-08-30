@@ -22,7 +22,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from importlib import metadata as distribution_metadata
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 from astropy.time import Time
@@ -30,12 +30,25 @@ from astropy.time import Time
 from .. import history, query as historical_query
 from ..cli_profiles import MIDDLE_EARTH_CACHE_ROOT, MIDDLE_EARTH_DATA_ROOT
 from .journal import ArtifactIdentity, TransactionDescriptor, TransactionJournal
+from .fetch_checkpoint import (
+    FetchCheckpointBinding,
+    FetchCheckpointIncomplete,
+    SegmentedFetchCheckpoint,
+)
 from .live_antares import (
     LiveAntaresProvider,
     LiveAntaresReadCapability,
     extraction_method_contract,
 )
 from .locking import WriterLock
+from .query_checkpoint import (
+    DEFAULT_CHECKPOINT_NAME,
+    LoadedQueryResultCheckpoint,
+    QueryCheckpointError,
+    QueryResultCheckpointBindings,
+    load_query_result_checkpoint,
+    seal_query_result_checkpoint,
+)
 from .report import Artifact, Evidence, ExitCode, Issue, OperationReport
 from .science import (
     NightScienceRequest,
@@ -84,6 +97,26 @@ def _utc_now() -> datetime:
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _safe_failure_fields(error: BaseException, checkpoint: str) -> Dict[str, Any]:
+    """Return non-message failure identity suitable for durable evidence."""
+
+    provider_error = error if isinstance(error, ProviderError) else None
+    cause = error.__cause__
+    return {
+        "error_type": type(error).__name__,
+        "error_code": (
+            provider_error.code if provider_error is not None else type(error).__name__
+        ),
+        "error_stage": (
+            provider_error.stage.value if provider_error is not None else checkpoint
+        ),
+        "outcome": (
+            provider_error.outcome.value if provider_error is not None else "failed"
+        ),
+        "cause_type": type(cause).__name__ if cause is not None else None,
+    }
 
 
 def _json_bytes(value: Mapping[str, Any], *, pretty: bool = True) -> bytes:
@@ -718,6 +751,9 @@ def qualify_live_night(
     production_data_root: Path,
     production_cache_root: Path,
     clock: Any = _utc_now,
+    checkpoint_event_hook: Optional[
+        Callable[[str, Mapping[str, Any]], None]
+    ] = None,
 ) -> CommissioningResult:
     """Run query through pre-commit reproof and stop without publication."""
     started = clock()
@@ -753,7 +789,10 @@ def qualify_live_night(
     ):
         raise CommissioningError("Arnor live commissioning requires canonical roots.")
 
-    evidence_root = write_capability.evidence_root
+    evidence_root = contained_path(
+        write_capability.evidence_root,
+        Path(spec.transaction_id),
+    )
     _ensure_private_tree(evidence_root, write_capability.root)
     target_relative = nightly_target_relative(spec.science_request.date_utc)
     candidate_target = contained_path(write_capability.published_root, target_relative)
@@ -788,6 +827,20 @@ def qualify_live_night(
             },
             "execution_policy": provider.execution_policy(),
         }
+    )
+    scientific_contract = dict(provider.scientific_contract(spec.science_request))
+    query_policy = {
+        "scientific_contract": scientific_contract,
+        "execution_policy": provider.execution_policy(),
+    }
+    query_checkpoint_bindings = QueryResultCheckpointBindings(
+        run_id=write_capability.run_id,
+        release_sha=spec.release_sha,
+        configuration_hash=config_hash,
+        target_date_utc=spec.science_request.date_utc,
+        provider_name=provider.provider_name,
+        provider_scenario=provider.scenario,
+        query_policy=query_policy,
     )
     writer_lock = WriterLock(
         write_capability,
@@ -835,8 +888,44 @@ def qualify_live_night(
     stage_validated = False
     query_result = None
     science_result = None
+    loaded_query_checkpoint: Optional[LoadedQueryResultCheckpoint] = None
+    fetch_checkpoint: Optional[SegmentedFetchCheckpoint] = None
+    fetch_checkpoint_prevalidated = False
+    query_checkpoint_reused = False
     before_sentinel = None
     checkpoint = "preflight"
+
+    def open_fetch_checkpoint(
+        loaded: LoadedQueryResultCheckpoint,
+    ) -> SegmentedFetchCheckpoint:
+        reopened_query = loaded.query_result
+        if not isinstance(reopened_query.loci, pd.DataFrame):
+            raise QueryCheckpointError(
+                "A sealed completed query checkpoint lacks its normalized frame."
+            )
+        details = reopened_query.evidence.details
+        locus_ids = (
+            reopened_query.loci["locus_id"].astype(str).tolist()
+            if not reopened_query.loci.empty
+            else []
+        )
+        binding = FetchCheckpointBinding(
+            run_id=write_capability.run_id,
+            release_sha=spec.release_sha,
+            configuration_sha256=config_hash,
+            target_date_utc=spec.science_request.date_utc,
+            mjd_min=spec.science_request.mjd_min,
+            mjd_max=spec.science_request.mjd_max,
+            provider_name=provider.provider_name,
+            provider_scenario=provider.scenario,
+            provider_policy_sha256=_canonical_digest(provider.execution_policy()),
+            query_contract_sha256=str(details.get("query_contract_sha256", "")),
+            query_identity_sha256=loaded.integrity_sha256,
+            query_locus_order_sha256=str(details.get("locus_order_sha256", "")),
+            expected_objects=len(locus_ids),
+        )
+        return SegmentedFetchCheckpoint.open(live_read_capability, binding)
+
     try:
         _write_json_atomic(evidence_root / "plan.json", plan)
         environment = release_environment_preflight(
@@ -851,7 +940,6 @@ def qualify_live_night(
         _write_json_atomic(
             evidence_root / "target-eligibility.json", eligibility
         )
-        scientific_contract = dict(provider.scientific_contract(spec.science_request))
         historical_semantics = {
             "passed": True,
             "target_date_utc": TARGET_DATE_UTC,
@@ -928,7 +1016,73 @@ def qualify_live_night(
         _write_json_atomic(
             evidence_root / "resource-preflight.json", capacity
         )
-        connectivity = provider.check_connectivity()
+        checkpoint = "query_checkpoint_validation"
+        checkpoint_parent = write_capability.root / "checkpoints"
+        query_checkpoint_path = checkpoint_parent / DEFAULT_CHECKPOINT_NAME
+        if checkpoint_parent.is_symlink() or (
+            checkpoint_parent.exists() and not checkpoint_parent.is_dir()
+        ):
+            raise QueryCheckpointError("Checkpoint parent is linked or not a directory.")
+        if query_checkpoint_path.exists() or query_checkpoint_path.is_symlink():
+            loaded_query_checkpoint = load_query_result_checkpoint(
+                write_capability.root,
+                spec.science_request,
+                query_checkpoint_bindings,
+            )
+            query_result = loaded_query_checkpoint.query_result
+            query_checkpoint_reused = True
+            fetch_checkpoint_path = checkpoint_parent / "live-fetch-v1"
+            if fetch_checkpoint_path.exists() or fetch_checkpoint_path.is_symlink():
+                fetch_checkpoint = open_fetch_checkpoint(loaded_query_checkpoint)
+                locus_ids = (
+                    query_result.loci["locus_id"].astype(str).tolist()
+                    if isinstance(query_result.loci, pd.DataFrame)
+                    and not query_result.loci.empty
+                    else []
+                )
+                try:
+                    fetch_checkpoint.inspect_complete(locus_ids)
+                    fetch_checkpoint_prevalidated = True
+                except FetchCheckpointIncomplete:
+                    fetch_checkpoint_prevalidated = False
+        elif checkpoint_parent.exists() and any(checkpoint_parent.iterdir()):
+            raise QueryCheckpointError(
+                "Run-local checkpoint state exists without a sealed query result."
+            )
+
+        _write_json_atomic(
+            evidence_root / "query-checkpoint.json",
+            {
+                "schema_version": "phase6.query-checkpoint-use.v1",
+                "present": loaded_query_checkpoint is not None,
+                "reused": query_checkpoint_reused,
+                "integrity_sha256": (
+                    loaded_query_checkpoint.integrity_sha256
+                    if loaded_query_checkpoint is not None
+                    else None
+                ),
+                "query_evidence_sha256": (
+                    loaded_query_checkpoint.query_evidence_sha256
+                    if loaded_query_checkpoint is not None
+                    else None
+                ),
+                "authoritative": False,
+                "production_eligible": False,
+            },
+        )
+        checkpoint = "connectivity"
+        connectivity = (
+            {
+                "schema_version": "phase6.checkpoint-connectivity-skip.v1",
+                "status": "skipped",
+                "reason": "validated_complete_fetch_checkpoint",
+                "network_attempted": False,
+                "credentials_consumed": False,
+                "secret_material_recorded": False,
+            }
+            if fetch_checkpoint_prevalidated
+            else provider.check_connectivity()
+        )
         _write_json_atomic(evidence_root / "connectivity.json", connectivity)
         before_sentinel = capture_production_sentinel(
             production_data_root,
@@ -988,24 +1142,71 @@ def qualify_live_night(
         )
         transaction.prepare()
 
-        checkpoint = "live_query"
+        checkpoint = "query_checkpoint_reopen" if query_checkpoint_reused else "live_query"
         journal.transition(ExecutionState.QUERYING)
         transaction.begin_query()
-        query_result = provider.query(spec.science_request)
+        if loaded_query_checkpoint is None:
+            query_result = provider.query(spec.science_request)
+            query_result.require_completed()
+            checkpoint = "query_checkpoint_seal"
+            seal_query_result_checkpoint(
+                write_capability.root,
+                query_result,
+                query_checkpoint_bindings,
+            )
+            loaded_query_checkpoint = load_query_result_checkpoint(
+                write_capability.root,
+                spec.science_request,
+                query_checkpoint_bindings,
+            )
+            query_result = loaded_query_checkpoint.query_result
+            _write_json_atomic(
+                evidence_root / "query-checkpoint.json",
+                {
+                    "schema_version": "phase6.query-checkpoint-use.v1",
+                    "present": True,
+                    "reused": False,
+                    "integrity_sha256": loaded_query_checkpoint.integrity_sha256,
+                    "query_evidence_sha256": (
+                        loaded_query_checkpoint.query_evidence_sha256
+                    ),
+                    "authoritative": False,
+                    "production_eligible": False,
+                },
+            )
+            if checkpoint_event_hook is not None:
+                checkpoint_event_hook(
+                    "after_query_checkpoint_commit",
+                    {"integrity_sha256": loaded_query_checkpoint.integrity_sha256},
+                )
+        assert loaded_query_checkpoint is not None
+        assert query_result is not None
         _write_json_atomic(
             evidence_root / "query-evidence.json",
-            {
-                "provider": query_result.provider_name,
-                "outcome": query_result.outcome.value,
-                "evidence": query_result.evidence.as_dict(),
-            },
+            loaded_query_checkpoint.query_evidence_document,
         )
         query_result.require_completed()
+        journal.update(
+            validation={
+                "query_checkpoint": {
+                    "identity_sha256": loaded_query_checkpoint.integrity_sha256,
+                    "reused": query_checkpoint_reused,
+                    "authoritative": False,
+                }
+            }
+        )
 
         checkpoint = "live_fetch"
         journal.transition(ExecutionState.FETCHING)
         transaction.begin_fetch()
-        science_result = provider.fetch(spec.science_request, query_result)
+        if fetch_checkpoint is None:
+            fetch_checkpoint = open_fetch_checkpoint(loaded_query_checkpoint)
+        science_result = provider.fetch_resumable(
+            spec.science_request,
+            query_result,
+            fetch_checkpoint,
+            event_hook=checkpoint_event_hook,
+        )
         _write_json_atomic(
             evidence_root / "fetch-evidence.json",
             {
@@ -1016,8 +1217,9 @@ def qualify_live_night(
             },
         )
         science_result.require_publishable()
-        checkpoint = "artifact_construction"
+        checkpoint = "artifact_build"
         artifacts = build_night_artifacts(science_result)
+        checkpoint = "artifact_reopen_validation"
         reopen_and_validate_artifacts(artifacts, expected=science_result)
 
         transaction.stage_artifacts(artifacts, science_result.evidence)
@@ -1219,6 +1421,14 @@ def qualify_live_night(
             "science_validation": dict(science_result.validation),
             "query_completion": science_result.query_evidence.as_dict(),
             "fetch_completion": science_result.fetch_evidence.as_dict(),
+            "query_checkpoint": {
+                "identity_sha256": loaded_query_checkpoint.integrity_sha256,
+                "reused": query_checkpoint_reused,
+                "authoritative": False,
+            },
+            "fetch_checkpoint": dict(
+                science_result.fetch_evidence.details.get("checkpoint", {})
+            ),
             "publication_invoked": False,
             "publication_attempted": False,
             "production_target_created": False,
@@ -1266,6 +1476,13 @@ def qualify_live_night(
                 "evidence_root": str(evidence_root),
                 "inventory": inventory,
                 "independent_reopen": True,
+                "query_checkpoint_reused": query_checkpoint_reused,
+                "query_checkpoint_identity_sha256": (
+                    loaded_query_checkpoint.integrity_sha256
+                ),
+                "fetch_checkpoint": dict(
+                    science_result.fetch_evidence.details.get("checkpoint", {})
+                ),
                 "publication_invoked": False,
                 "publication_attempted": False,
                 "production_publication_authority": False,
@@ -1318,13 +1535,15 @@ def qualify_live_night(
                     "cache_absent": None,
                     "post_failure_tripwire_error": True,
                 }
+        safe_failure = _safe_failure_fields(error, checkpoint)
         try:
             if journal.snapshot.state not in {ExecutionState.FAILED, ExecutionState.COMPLETE}:
                 journal.transition(
                     ExecutionState.FAILED,
                     reason="commissioning_failed",
                     failure={
-                        "error_type": type(error).__name__,
+                        **safe_failure,
+                        "failed_checkpoint": checkpoint,
                         "message": "Phase 6 failed closed; provider exception text was redacted.",
                     },
                     at=clock(),
@@ -1336,7 +1555,7 @@ def qualify_live_night(
         failure = {
             "schema_version": COMMISSIONING_SCHEMA_VERSION,
             "passed": False,
-            "error_type": type(error).__name__,
+            **safe_failure,
             "failed_checkpoint": checkpoint,
             "error_text_recorded": False,
             "stage_retained": bool(stage_validated and stage.exists()),
@@ -1354,6 +1573,12 @@ def qualify_live_night(
             ),
             "post_failure_production_tripwire": failure_comparison,
             "secret_material_recorded": False,
+            "query_checkpoint_reused": query_checkpoint_reused,
+            "query_checkpoint_identity_sha256": (
+                loaded_query_checkpoint.integrity_sha256
+                if loaded_query_checkpoint is not None
+                else None
+            ),
         }
         try:
             _write_json_atomic(evidence_root / "failure.json", failure)

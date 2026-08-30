@@ -334,7 +334,7 @@ def _handle_night_qualify(args: argparse.Namespace) -> int:
         max_fetch_workers=args.fetch_workers,
     )
     spec = NightExecutionSpec(
-        args.run_id,
+        args.attempt_id or args.run_id,
         f"phase6-{args.date}",
         args.release_sha,
         "phase6-live-antares-commissioning-v1",
@@ -477,6 +477,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     night_qualify.add_argument("date", help="UTC night in canonical YYYY-MM-DD form")
     night_qualify.add_argument("--run-id", required=True, help="exact pre-created canary run id")
+    night_qualify.add_argument(
+        "--attempt-id",
+        help=(
+            "unique transaction identity inside the same run root; use a new value "
+            "to resume validated Phase 6 checkpoints after a failed attempt"
+        ),
+    )
     night_qualify.add_argument(
         "--release-sha", required=True, help="full committed candidate SHA"
     )

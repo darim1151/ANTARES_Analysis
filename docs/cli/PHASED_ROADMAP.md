@@ -298,6 +298,11 @@ Goal: make common analysis tasks discoverable, composable, and observable.
   runbooks for first use, daily use, incidents, and recovery.
 - Add performance budgets for startup, manifest inventory, planning, and
   large-run memory use; optimize only against recorded profiles.
+- Profile and budget the accepted live extractor's fixed 6,912 base-cell
+  probes (48 30-minute time bins, 24 RA bins, and 6 declination bins at probe
+  threshold 50) before considering adaptive spatial or temporal query-count
+  reduction. Preserve Phase 6 query semantics until that optimization is
+  independently qualified.
 
 Exit gate: representative new users can discover profiles, diagnose setup,
 open the correct notebook, plan a run, inspect its status, and recover a failed

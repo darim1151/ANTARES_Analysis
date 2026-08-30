@@ -1741,6 +1741,77 @@ def _read_parquet_bytes(payload: bytes, name: str) -> pd.DataFrame:
         ) from exc
 
 
+_OPTIONAL_SURVEY_NULL_PATHS = frozenset(
+    {
+        ("lsst", "dia_object_id"),
+        ("lsst", "ss_object_id"),
+        ("ztf",),
+        ("ztf", "id"),
+    }
+)
+
+
+def _align_optional_survey_nulls(
+    reopened: Any,
+    expected: Any,
+    *,
+    path: Tuple[str, ...] = (),
+) -> Tuple[Any, Any]:
+    """Align only schema-declared Arrow null padding in one survey pair."""
+
+    if not isinstance(reopened, Mapping) or not isinstance(expected, Mapping):
+        return reopened, expected
+    aligned_reopened = dict(reopened)
+    aligned_expected = dict(expected)
+    for key in set(reopened) | set(expected):
+        if not isinstance(key, str):
+            continue
+        child_path = path + (key,)
+        in_reopened = key in reopened
+        in_expected = key in expected
+        if in_reopened and in_expected:
+            left, right = _align_optional_survey_nulls(
+                reopened[key], expected[key], path=child_path
+            )
+            aligned_reopened[key] = left
+            aligned_expected[key] = right
+        elif child_path in _OPTIONAL_SURVEY_NULL_PATHS:
+            present = reopened[key] if in_reopened else expected[key]
+            if present is None:
+                aligned_reopened[key] = None
+                aligned_expected[key] = None
+    return aligned_reopened, aligned_expected
+
+
+def _align_frame_optional_survey_nulls(
+    reopened: pd.DataFrame,
+    expected: pd.DataFrame,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Return comparison copies aligned only for the declared survey schema."""
+
+    if (
+        "survey" not in reopened.columns
+        or "survey" not in expected.columns
+        or reopened["survey"].dtype != object
+        or expected["survey"].dtype != object
+        or not reopened.index.equals(expected.index)
+    ):
+        return reopened, expected
+    aligned_reopened = reopened.copy(deep=False)
+    aligned_expected = expected.copy(deep=False)
+    pairs = [
+        _align_optional_survey_nulls(left, right)
+        for left, right in zip(reopened["survey"], expected["survey"])
+    ]
+    aligned_reopened["survey"] = pd.Series(
+        [left for left, _right in pairs], index=reopened.index, dtype="object"
+    )
+    aligned_expected["survey"] = pd.Series(
+        [right for _left, right in pairs], index=expected.index, dtype="object"
+    )
+    return aligned_reopened, aligned_expected
+
+
 def reopen_and_validate_artifacts(
     artifacts: Mapping[str, bytes],
     expected: Optional[NightScienceResult] = None,
@@ -1885,8 +1956,22 @@ def reopen_and_validate_artifacts(
         assert expected.loci is not None
         assert expected.alerts is not None
         try:
-            pd.testing.assert_frame_equal(loci, expected.loci, check_exact=True)
-            pd.testing.assert_frame_equal(alerts, expected.alerts, check_exact=True)
+            comparable_loci, comparable_expected_loci = (
+                _align_frame_optional_survey_nulls(loci, expected.loci)
+            )
+            comparable_alerts, comparable_expected_alerts = (
+                _align_frame_optional_survey_nulls(alerts, expected.alerts)
+            )
+            pd.testing.assert_frame_equal(
+                comparable_loci,
+                comparable_expected_loci,
+                check_exact=True,
+            )
+            pd.testing.assert_frame_equal(
+                comparable_alerts,
+                comparable_expected_alerts,
+                check_exact=True,
+            )
         except AssertionError as exc:
             raise ArtifactValidationError(
                 _artifact_issue(

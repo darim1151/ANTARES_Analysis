@@ -43,6 +43,22 @@ journal, and proves the production target absent. Production is hashed before
 and after the operation; the retained candidate and evidence remain
 non-authoritative beneath `work/canary/<RUN_ID>`.
 
+## Run-local recovery checkpoints
+
+The complete ordered query result is sealed beneath the exact canary run root
+before full-history fetching begins. Fetch work is then committed in bounded,
+deterministic segments bound to that query checkpoint, release, configuration,
+night, provider, and policy. Data files are fsynced before immutable receipts;
+the final fetch-complete record is written only after exact contiguous coverage
+has been independently reopened and verified. Missing, partial, corrupt, or
+identity-mismatched state fails closed and is never promoted or deleted
+automatically.
+
+These checkpoints are operational recovery evidence only. They are outside the
+published science tree, carry no production capability, do not use the nightly
+manifest publication protocol, and cannot make a night visible to production
+or history readers.
+
 ## Authentication and load policy
 
 ANTARES search is public in `antares-client` 1.14.0; streaming credentials are
@@ -52,3 +68,10 @@ fetches at four workers, and API calls at the pinned 60-second timeout. The
 extractor constants, accepted cache-version identity
 `probe50_time_ra_dec_v1`, actual cache absence, and all bounds are recorded in
 release evidence.
+
+The fixed initial partition is also recorded as deferred performance debt. A
+one-day extraction issues 48 time bins by 24 RA bins by 6 declination bins,
+therefore 6,912 base-cell probes before any saturation-driven split; the probe
+limit and threshold are both 50. Phase 6 remediation preserves this accepted
+behavior as a controlled correctness experiment. Adaptive query-count
+reduction belongs to the later Phase 7 performance-budget work.

@@ -36,7 +36,9 @@ from src.operations.locking import LockUnavailable, WriterLock
 from src.operations.science import (
     ArtifactValidationError,
     NightScienceRequest,
+    ProviderIssue,
     ProviderOutcome,
+    ProviderStage,
     SyntheticScienceProvider,
     build_night_artifacts,
     reopen_and_validate_artifacts,
@@ -68,6 +70,7 @@ class FakeLocus:
         lightcurve=None,
         ra=12.5,
         dec=-2.5,
+        survey=None,
     ):
         self.locus_id = locus_id
         self.ra = ra
@@ -75,7 +78,11 @@ class FakeLocus:
         self.tags = ["lsst"]
         self.properties = {
             "newest_alert_observation_time": mjd,
-            "survey": {"lsst": {"dia_object_id": f"DIA-{locus_id}"}},
+            "survey": (
+                survey
+                if survey is not None
+                else {"lsst": {"dia_object_id": f"DIA-{locus_id}"}}
+            ),
             "brightest_alert_magnitude": 20.0,
             "num_mag_values": 1,
         }
@@ -90,6 +97,39 @@ def _lightcurve(value=20.0):
             "ztf_sigmapsf": [0.1],
             "ztf_fid": [1],
         }
+    )
+
+
+def _mixed_identifier_provider(root):
+    loci = [
+        FakeLocus(
+            "ANT-DIA",
+            lightcurve=_lightcurve(20.1),
+            survey={"lsst": {"dia_object_id": "DIA-1"}},
+        ),
+        FakeLocus(
+            "ANT-SS",
+            lightcurve=_lightcurve(20.2),
+            survey={"lsst": {"ss_object_id": "SS-1"}},
+        ),
+        FakeLocus(
+            "ANT-DIA-SS",
+            lightcurve=_lightcurve(20.3),
+            survey={
+                "lsst": {
+                    "dia_object_id": "DIA-2",
+                    "ss_object_id": "SS-2",
+                },
+                "ztf": {"id": "ZTF-1"},
+            },
+        ),
+    ]
+    by_id = {locus.locus_id: locus for locus in loci}
+    return _mock_provider(
+        root,
+        _canonical_search(loci),
+        by_id.__getitem__,
+        canonical_tiles=True,
     )
 
 
@@ -205,6 +245,22 @@ def _accepted_fixture(root):
     return data_root, root / "cache"
 
 
+def _commissioning_capabilities(base, run_id):
+    run_root = Path(base) / run_id
+    run_root.mkdir()
+    return (
+        run_root,
+        SyntheticWriteCapability.for_local_run_root(run_root, run_id),
+        LiveAntaresReadCapability.for_local_mock(
+            run_root,
+            run_id=run_id,
+            target_date_utc=TARGET_DATE_UTC,
+            release_sha=RELEASE_SHA,
+            authority=LIVE_ANTARES_READ,
+        ),
+    )
+
+
 class LiveCapabilityTests(unittest.TestCase):
     def test_live_authority_is_explicit_sealed_and_has_no_production_path(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -291,6 +347,24 @@ class LiveCapabilityTests(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("--authorize-live-read", stderr.getvalue())
+
+    def test_cli_qualification_accepts_an_explicit_resume_attempt_identity(self):
+        args = cli.build_parser().parse_args(
+            [
+                "night",
+                "qualify",
+                TARGET_DATE_UTC,
+                "--run-id",
+                "phase6-run",
+                "--attempt-id",
+                "phase6-resume-02",
+                "--release-sha",
+                RELEASE_SHA,
+                "--authorize-live-read",
+            ]
+        )
+        self.assertEqual(args.run_id, "phase6-run")
+        self.assertEqual(args.attempt_id, "phase6-resume-02")
 
     def test_production_ingest_remains_refused(self):
         stdout = io.StringIO()
@@ -547,6 +621,106 @@ class LiveProviderTests(unittest.TestCase):
                 set(reopened.loci["source_query_mode"]),
                 {"probe_first_time_ra_dec"},
             )
+
+    def test_parquet_roundtrip_accepts_optional_nested_identifier_nulls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            root.mkdir()
+            result = _mixed_identifier_provider(root).fetch_night(_request())
+            self.assertTrue(result.publishable)
+            self.assertEqual(result.validation["lsst_dia_count"], 2)
+            self.assertEqual(result.validation["lsst_ss_count"], 2)
+            self.assertEqual(result.validation["lsst_identifier_count"], 3)
+            self.assertEqual(result.validation["ztf_object_id_count"], 1)
+
+            reopened = reopen_and_validate_artifacts(
+                build_night_artifacts(result), expected=result
+            )
+
+            surveys = reopened.loci.set_index("locus_id")["survey"].to_dict()
+            self.assertEqual(
+                surveys["ANT-DIA"],
+                {
+                    "lsst": {
+                        "dia_object_id": "DIA-1",
+                        "ss_object_id": None,
+                    },
+                    "ztf": None,
+                },
+            )
+            self.assertEqual(
+                surveys["ANT-SS"],
+                {
+                    "lsst": {
+                        "dia_object_id": None,
+                        "ss_object_id": "SS-1",
+                    },
+                    "ztf": None,
+                },
+            )
+            self.assertEqual(
+                surveys["ANT-DIA-SS"],
+                {
+                    "lsst": {
+                        "dia_object_id": "DIA-2",
+                        "ss_object_id": "SS-2",
+                    },
+                    "ztf": {"id": "ZTF-1"},
+                },
+            )
+
+    def test_parquet_roundtrip_rejects_changed_nested_non_null_value(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            root.mkdir()
+            result = _mixed_identifier_provider(root).fetch_night(_request())
+            artifacts = build_night_artifacts(result)
+            result.loci.at[0, "survey"]["lsst"]["dia_object_id"] = "DIA-CHANGED"
+
+            with self.assertRaises(ArtifactValidationError) as raised:
+                reopen_and_validate_artifacts(artifacts, expected=result)
+            self.assertEqual(raised.exception.code, "artifact_frame_mismatch")
+
+    def test_parquet_roundtrip_rejects_changed_scalar_and_numeric_values(self):
+        for column, replacement in (("tags", "changed"), ("ra", 42.5)):
+            with self.subTest(column=column), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "run"
+                root.mkdir()
+                result = _mixed_identifier_provider(root).fetch_night(_request())
+                artifacts = build_night_artifacts(result)
+                result.loci.at[0, column] = replacement
+
+                with self.assertRaises(ArtifactValidationError) as raised:
+                    reopen_and_validate_artifacts(artifacts, expected=result)
+                self.assertEqual(raised.exception.code, "artifact_frame_mismatch")
+
+    def test_parquet_roundtrip_rejects_unrelated_mapping_null_padding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            root.mkdir()
+            result = _mixed_identifier_provider(root).fetch_night(_request())
+            result.loci["unrelated_mapping"] = [
+                {"optional_value": "present"},
+                {},
+                {},
+            ]
+            artifacts = build_night_artifacts(result)
+
+            with self.assertRaises(ArtifactValidationError) as raised:
+                reopen_and_validate_artifacts(artifacts, expected=result)
+            self.assertEqual(raised.exception.code, "artifact_frame_mismatch")
+
+    def test_parquet_roundtrip_rejects_undeclared_survey_null_padding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            root.mkdir()
+            result = _mixed_identifier_provider(root).fetch_night(_request())
+            result.loci.at[0, "survey"]["lsst"]["processing_state"] = None
+            artifacts = build_night_artifacts(result)
+
+            with self.assertRaises(ArtifactValidationError) as raised:
+                reopen_and_validate_artifacts(artifacts, expected=result)
+            self.assertEqual(raised.exception.code, "artifact_frame_mismatch")
 
     def test_complete_zero_requires_normal_iterator_exhaustion(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -881,6 +1055,288 @@ class CommissioningOrchestrationTests(unittest.TestCase):
             self.assertFalse(result.report.details["publication_attempted"])
             self.assertTrue((result.evidence_root / "independent-reopen.json").is_file())
             self.assertTrue((result.evidence_root / "inventory.sha256").is_file())
+
+    def test_artifact_failures_preserve_safe_structured_checkpoint_identity(self):
+        cases = (
+            ("build_night_artifacts", "artifact_build"),
+            ("reopen_and_validate_artifacts", "artifact_reopen_validation"),
+        )
+        secret = "secret-provider-detail-must-not-survive"
+
+        def fail_closed(*_args, **_kwargs):
+            try:
+                raise TypeError(secret)
+            except TypeError as cause:
+                raise ArtifactValidationError(
+                    ProviderIssue(
+                        "offline_artifact_validation_failed",
+                        ProviderStage.ARTIFACT,
+                        ProviderOutcome.VALIDATION_FAILURE,
+                        secret,
+                    )
+                ) from cause
+
+        for patched_name, expected_checkpoint in cases:
+            with self.subTest(checkpoint=expected_checkpoint):
+                with tempfile.TemporaryDirectory() as temporary:
+                    base = Path(temporary)
+                    data_root, cache_root = _accepted_fixture(base)
+                    run_root = base / expected_checkpoint
+                    run_root.mkdir()
+                    write_capability = SyntheticWriteCapability.for_local_run_root(
+                        run_root, expected_checkpoint
+                    )
+                    live_capability = LiveAntaresReadCapability.for_local_mock(
+                        run_root,
+                        run_id=expected_checkpoint,
+                        target_date_utc=TARGET_DATE_UTC,
+                        release_sha=RELEASE_SHA,
+                        authority=LIVE_ANTARES_READ,
+                    )
+                    locus = FakeLocus(lightcurve=_lightcurve())
+                    provider = LiveAntaresProvider(
+                        live_capability,
+                        search_fn=_canonical_search([locus]),
+                        get_by_id_fn=lambda _id: locus,
+                        connectivity_fn=lambda: ["safe"],
+                        retry_delay_seconds=0,
+                        max_fetch_workers=4,
+                    )
+                    spec = NightExecutionSpec(
+                        expected_checkpoint,
+                        "phase6-2026-06-27",
+                        RELEASE_SHA,
+                        "phase6-test",
+                        _request(),
+                    )
+                    with mock.patch(
+                        f"src.operations.commissioning.{patched_name}",
+                        side_effect=fail_closed,
+                    ):
+                        result = qualify_live_night(
+                            write_capability,
+                            live_capability,
+                            provider,
+                            spec,
+                            production_data_root=data_root,
+                            production_cache_root=cache_root,
+                        )
+
+                    self.assertFalse(result.report.success)
+                    failure = json.loads(
+                        (result.evidence_root / "failure.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    journal = json.loads(
+                        (
+                            write_capability.journal_root
+                            / f"{expected_checkpoint}.json"
+                        ).read_text(encoding="utf-8")
+                    )
+                    for recorded in (
+                        failure,
+                        result.report.details,
+                        journal["failure"],
+                    ):
+                        self.assertEqual(
+                            recorded["failed_checkpoint"], expected_checkpoint
+                        )
+                        self.assertEqual(
+                            recorded["error_code"],
+                            "offline_artifact_validation_failed",
+                        )
+                        self.assertEqual(recorded["error_stage"], "artifact")
+                        self.assertEqual(recorded["outcome"], "validation_failure")
+                        self.assertEqual(recorded["cause_type"], "TypeError")
+                    self.assertNotIn(secret, result.report.to_json())
+                    self.assertNotIn(
+                        secret,
+                        json.dumps(failure, sort_keys=True),
+                    )
+                    self.assertNotIn(secret, json.dumps(journal, sort_keys=True))
+                    secret_bytes = secret.encode("utf-8")
+                    for path in run_root.rglob("*"):
+                        if path.is_file() and not path.is_symlink():
+                            self.assertNotIn(secret_bytes, path.read_bytes(), path)
+
+    def test_restart_after_query_seal_skips_the_exhaustive_query(self):
+        class StopAfterQueryCheckpoint(RuntimeError):
+            pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            data_root, cache_root = _accepted_fixture(base)
+            run_root, write_capability, live_capability = (
+                _commissioning_capabilities(base, "query-resume-run")
+            )
+            locus = FakeLocus(lightcurve=_lightcurve())
+            first_provider = LiveAntaresProvider(
+                live_capability,
+                search_fn=_canonical_search([locus]),
+                get_by_id_fn=lambda _id: locus,
+                connectivity_fn=lambda: ["safe"],
+                retry_delay_seconds=0,
+                max_fetch_workers=4,
+            )
+
+            def stop(event, _details):
+                if event == "after_query_checkpoint_commit":
+                    raise StopAfterQueryCheckpoint("offline interruption")
+
+            first = qualify_live_night(
+                write_capability,
+                live_capability,
+                first_provider,
+                NightExecutionSpec(
+                    "query-attempt-one",
+                    "phase6-2026-06-27",
+                    RELEASE_SHA,
+                    "phase6-test",
+                    _request(),
+                ),
+                production_data_root=data_root,
+                production_cache_root=cache_root,
+                checkpoint_event_hook=stop,
+            )
+            self.assertFalse(first.report.success)
+            self.assertEqual(
+                first.report.details["failed_checkpoint"], "query_checkpoint_seal"
+            )
+            self.assertTrue(
+                (run_root / "checkpoints" / "query-result" / "COMMITTED.json").is_file()
+            )
+            self.assertFalse((run_root / "checkpoints" / "live-fetch-v1").exists())
+
+            def forbidden_query(_body):
+                raise AssertionError("sealed query must not be executed again")
+
+            resumed_provider = LiveAntaresProvider(
+                live_capability,
+                search_fn=forbidden_query,
+                get_by_id_fn=lambda _id: locus,
+                connectivity_fn=lambda: ["safe"],
+                retry_delay_seconds=0,
+                max_fetch_workers=4,
+            )
+            resumed = qualify_live_night(
+                write_capability,
+                live_capability,
+                resumed_provider,
+                NightExecutionSpec(
+                    "query-attempt-two",
+                    "phase6-2026-06-27",
+                    RELEASE_SHA,
+                    "phase6-test",
+                    _request(),
+                ),
+                production_data_root=data_root,
+                production_cache_root=cache_root,
+            )
+            self.assertTrue(resumed.report.success, resumed.report.to_json())
+            self.assertTrue(resumed.report.details["query_checkpoint_reused"])
+            self.assertEqual(resumed.report.details["fetch_checkpoint"]["fetched_segments"], 1)
+            self.assertNotEqual(first.evidence_root, resumed.evidence_root)
+
+    def test_downstream_artifact_failure_reuses_query_and_fetch_without_network(self):
+        cases = (
+            ("build_night_artifacts", "artifact_build"),
+            ("reopen_and_validate_artifacts", "artifact_reopen_validation"),
+        )
+        for patched_name, expected_checkpoint in cases:
+            with self.subTest(checkpoint=expected_checkpoint), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                data_root, cache_root = _accepted_fixture(base)
+                run_id = f"resume-{expected_checkpoint}"
+                run_root, write_capability, live_capability = (
+                    _commissioning_capabilities(base, run_id)
+                )
+                locus = FakeLocus(lightcurve=_lightcurve())
+                first_provider = LiveAntaresProvider(
+                    live_capability,
+                    search_fn=_canonical_search([locus]),
+                    get_by_id_fn=lambda _id: locus,
+                    connectivity_fn=lambda: ["safe"],
+                    retry_delay_seconds=0,
+                    max_fetch_workers=4,
+                )
+                injected = ArtifactValidationError(
+                    ProviderIssue(
+                        "offline_downstream_failure",
+                        ProviderStage.ARTIFACT,
+                        ProviderOutcome.VALIDATION_FAILURE,
+                        "static offline failure",
+                    )
+                )
+                with mock.patch(
+                    f"src.operations.commissioning.{patched_name}",
+                    side_effect=injected,
+                ):
+                    first = qualify_live_night(
+                        write_capability,
+                        live_capability,
+                        first_provider,
+                        NightExecutionSpec(
+                            "artifact-attempt-one",
+                            "phase6-2026-06-27",
+                            RELEASE_SHA,
+                            "phase6-test",
+                            _request(),
+                        ),
+                        production_data_root=data_root,
+                        production_cache_root=cache_root,
+                    )
+                self.assertFalse(first.report.success)
+                self.assertEqual(
+                    first.report.details["failed_checkpoint"], expected_checkpoint
+                )
+                self.assertTrue(
+                    (run_root / "checkpoints" / "live-fetch-v1" / "fetch-complete.json").is_file()
+                )
+
+                def forbidden(*_args, **_kwargs):
+                    raise AssertionError("complete checkpoints require no network callback")
+
+                resumed_provider = LiveAntaresProvider(
+                    live_capability,
+                    search_fn=forbidden,
+                    get_by_id_fn=forbidden,
+                    connectivity_fn=forbidden,
+                    retry_delay_seconds=0,
+                    max_fetch_workers=4,
+                )
+                resumed = qualify_live_night(
+                    write_capability,
+                    live_capability,
+                    resumed_provider,
+                    NightExecutionSpec(
+                        "artifact-attempt-two",
+                        "phase6-2026-06-27",
+                        RELEASE_SHA,
+                        "phase6-test",
+                        _request(),
+                    ),
+                    production_data_root=data_root,
+                    production_cache_root=cache_root,
+                )
+                self.assertTrue(resumed.report.success, resumed.report.to_json())
+                self.assertTrue(resumed.report.details["query_checkpoint_reused"])
+                self.assertEqual(
+                    resumed.report.details["fetch_checkpoint"]["fetched_segments"], 0
+                )
+                self.assertEqual(
+                    resumed.report.details["fetch_checkpoint"]["reused_segments"], 1
+                )
+                connectivity = json.loads(
+                    (resumed.evidence_root / "connectivity.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertFalse(connectivity["network_attempted"])
+                self.assertFalse(
+                    history.nightly_paths(data_root, TARGET_DATE_UTC)["dir"].exists()
+                )
+                self.assertFalse(cache_root.exists())
 
     def test_phase6_manifest_rejects_tampered_completion_details(self):
         with tempfile.TemporaryDirectory() as temporary:

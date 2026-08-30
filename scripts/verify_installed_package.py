@@ -47,6 +47,10 @@ def main() -> int:
             "src.operations.validation",
             "src.operations.writer",
             "src.operations.canary",
+            "src.operations.commissioning",
+            "src.operations.fetch_checkpoint",
+            "src.operations.live_antares",
+            "src.operations.query_checkpoint",
         ]
     )
     # Exercise the broker client's real import closure (including its BSON

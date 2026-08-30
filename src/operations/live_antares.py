@@ -36,6 +36,7 @@ import pandas as pd
 from .. import query
 from ..history import prepare_alerts, prepare_loci, validation_summary
 from .science import (
+    FetchProviderError,
     FetchStageEvidence,
     NightQueryResult,
     NightScienceRequest,
@@ -1150,6 +1151,305 @@ class LiveAntaresProvider:
             _combined_evidence(query_result.evidence, evidence),
         )
 
+    def _successful_fetch_result(
+        self,
+        request: NightScienceRequest,
+        query_result: NightQueryResult,
+        raw_alerts: pd.DataFrame,
+        details: Mapping[str, Any],
+    ) -> NightScienceResult:
+        """Apply the unchanged Phase 6 preparation and science-validation path."""
+
+        assert isinstance(query_result.loci, pd.DataFrame)
+        loci = prepare_loci(
+            query_result.loci,
+            request.date_utc,
+            request.mjd_min,
+            request.mjd_max,
+            query_result.evidence.details.get(
+                "request_completed_at_utc", request.ingested_at_utc
+            ),
+            source_query_mode=EXTRACTION_METHOD,
+        )
+        alerts = prepare_alerts(raw_alerts, request.date_utc, request.range_label)
+        fetch_evidence = FetchStageEvidence(
+            True,
+            False,
+            len(loci),
+            len(alerts),
+            (),
+            dict(details),
+        )
+        combined = _combined_evidence(query_result.evidence, fetch_evidence)
+        validation = validation_summary(
+            loci,
+            alerts,
+            mjd_min=request.mjd_min,
+            mjd_max=request.mjd_max,
+            prior_locus_ids=request.prior_locus_ids,
+            lsst_only=True,
+            query_completed=True,
+            query_fetch_clean=combined.clean,
+            mjd_upper_exclusive=True,
+        )
+        validation_errors: Tuple[ProviderIssue, ...] = ()
+        outcome = (
+            ProviderOutcome.SUCCESS_ZERO
+            if loci.empty and alerts.empty
+            else ProviderOutcome.SUCCESS
+        )
+        if validation.get("append_ready") is not True:
+            outcome = ProviderOutcome.VALIDATION_FAILURE
+            validation_errors = (
+                ProviderIssue(
+                    "live_science_validation_failed",
+                    ProviderStage.VALIDATION,
+                    outcome,
+                    "Existing nightly validation did not grant append readiness.",
+                    retryable=False,
+                ),
+            )
+        return NightScienceResult(
+            request,
+            self.provider_name,
+            self.scenario,
+            outcome,
+            query_result,
+            loci,
+            alerts,
+            fetch_evidence,
+            validation,
+            validation_errors,
+            combined,
+        )
+
+    def fetch_resumable(
+        self,
+        request: NightScienceRequest,
+        query_result: NightQueryResult,
+        checkpoint: object,
+        *,
+        event_hook: Optional[Callable[[str, Mapping[str, Any]], None]] = None,
+    ) -> NightScienceResult:
+        """Fetch or reopen exact query-ordered histories through sealed segments.
+
+        The checkpoint owns only operational durability.  This method retains
+        the existing per-object transport, preparation, validation, and result
+        semantics; a valid completed checkpoint invokes no ANTARES callback.
+        """
+
+        from .fetch_checkpoint import (
+            FetchCheckpointError,
+            FetchCheckpointFetchError,
+            FetchObjectResult,
+            SegmentedFetchCheckpoint,
+        )
+
+        self._validate_request(request)
+        if not isinstance(query_result, NightQueryResult):
+            raise ProviderContractError(
+                ProviderIssue(
+                    "invalid_query_result_type",
+                    ProviderStage.CONTRACT,
+                    ProviderOutcome.FETCH_FAILURE,
+                    "Live fetch requires a NightQueryResult.",
+                )
+            )
+        if query_result.request != request:
+            raise ProviderContractError(
+                ProviderIssue(
+                    "query_request_mismatch",
+                    ProviderStage.CONTRACT,
+                    ProviderOutcome.FETCH_FAILURE,
+                    "The query result belongs to another request.",
+                ),
+                result=query_result,
+            )
+        if (
+            query_result.provider_name != self.provider_name
+            or query_result.scenario != self.scenario
+        ):
+            raise ProviderContractError(
+                ProviderIssue(
+                    "query_provider_mismatch",
+                    ProviderStage.CONTRACT,
+                    ProviderOutcome.FETCH_FAILURE,
+                    "The query result belongs to another provider.",
+                ),
+                result=query_result,
+            )
+        if not query_result.clean:
+            return self._failed_fetch(request, query_result)
+        if not isinstance(query_result.loci, pd.DataFrame):
+            raise ProviderContractError(
+                ProviderIssue(
+                    "query_loci_missing",
+                    ProviderStage.CONTRACT,
+                    ProviderOutcome.MALFORMED_RESULT,
+                    "A completed live query must carry a loci DataFrame.",
+                ),
+                result=query_result,
+            )
+        if type(checkpoint) is not SegmentedFetchCheckpoint:
+            raise ProviderContractError(
+                ProviderIssue(
+                    "invalid_fetch_checkpoint_type",
+                    ProviderStage.CONTRACT,
+                    ProviderOutcome.FETCH_FAILURE,
+                    "Resumable live fetch requires a sealed segmented checkpoint.",
+                )
+            )
+
+        raw_loci = query_result.loci
+        if "locus_id" not in raw_loci.columns and not raw_loci.empty:
+            raise ProviderContractError(
+                ProviderIssue(
+                    "live_query_locus_id_missing",
+                    ProviderStage.FETCH,
+                    ProviderOutcome.MALFORMED_RESULT,
+                    "Completed live query rows lack locus_id.",
+                ),
+                result=query_result,
+            )
+        locus_ids = (
+            raw_loci["locus_id"].astype(str).tolist() if not raw_loci.empty else []
+        )
+        started = self.clock()
+        t0 = self.monotonic()
+        checkpoint_get_by_id: Optional[Callable[[str], Any]] = None
+
+        def fetch_segment(requested: Tuple[str, ...]) -> Tuple[FetchObjectResult, ...]:
+            nonlocal checkpoint_get_by_id
+            if checkpoint_get_by_id is None:
+                _search, checkpoint_get_by_id, _connectivity = self._load_client()
+            get_by_id = checkpoint_get_by_id
+            if not requested:
+                return ()
+            results: Dict[str, Mapping[str, Any]] = {}
+            workers = min(self.max_fetch_workers, len(requested))
+            batch_size = max(workers, workers * 4)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for offset in range(0, len(requested), batch_size):
+                    batch = requested[offset : offset + batch_size]
+                    futures = {
+                        pool.submit(
+                            self._fetch_one,
+                            locus_id,
+                            get_by_id,
+                            request.range_label,
+                        ): locus_id
+                        for locus_id in batch
+                    }
+                    for future in as_completed(futures):
+                        locus_id = futures[future]
+                        try:
+                            results[locus_id] = future.result()
+                        except Exception as exc:
+                            results[locus_id] = {
+                                "locus_id": locus_id,
+                                "completed": False,
+                                "frame": None,
+                                "retry_count": 0,
+                                "attempt_errors": [_exception_type(exc)],
+                            }
+            failed = [value for value in requested if not results[value]["completed"]]
+            if failed:
+                raise FetchCheckpointFetchError(
+                    "A deterministic fetch segment did not complete every object."
+                )
+            return tuple(
+                FetchObjectResult(
+                    locus_id,
+                    results[locus_id]["frame"],
+                    retry_count=int(results[locus_id]["retry_count"]),
+                    retry_exception_types=tuple(results[locus_id]["attempt_errors"]),
+                )
+                for locus_id in requested
+            )
+
+        try:
+            completion = checkpoint.fetch_missing(
+                locus_ids,
+                fetch_segment,
+                event_hook=event_hook,
+            )
+            segment_frames = []
+            lightcurves_with_rows = 0
+            lightcurves_empty = 0
+            for segment in checkpoint.iter_segments(locus_ids):
+                segment_frames.append(segment.alerts)
+                lightcurves_with_rows += sum(
+                    1 for value in segment.objects if int(value["alert_rows"]) > 0
+                )
+                lightcurves_empty += sum(
+                    1 for value in segment.objects if int(value["alert_rows"]) == 0
+                )
+        except FetchCheckpointError as exc:
+            raise FetchProviderError(
+                ProviderIssue(
+                    "live_fetch_checkpoint_failed",
+                    ProviderStage.FETCH,
+                    ProviderOutcome.FETCH_FAILURE,
+                    "Run-local fetch checkpoint validation or completion failed.",
+                    retryable=False,
+                ),
+                result=query_result,
+            ) from exc
+
+        raw_alerts = (
+            pd.concat(segment_frames, ignore_index=True, sort=False)
+            if segment_frames
+            else pd.DataFrame()
+        )
+        finished = self.clock()
+        effective_workers = min(self.max_fetch_workers, len(locus_ids)) if locus_ids else 0
+        details = {
+            "completion_classification": (
+                LiveCompletion.COMPLETE_ZERO.value
+                if not locus_ids
+                else LiveCompletion.COMPLETE_NONZERO.value
+            ),
+            "requested_objects": len(locus_ids),
+            "completed_objects": len(locus_ids),
+            "failed_objects": 0,
+            "failed_object_identity_sha256": _identifier_hash(()),
+            "failure_exception_types": [],
+            "retry_exception_types": list(completion.retry_exception_types),
+            "retry_count": completion.retry_count,
+            "lightcurves_with_rows": lightcurves_with_rows,
+            "lightcurves_empty": lightcurves_empty,
+            "full_locus_history_requests": len(locus_ids),
+            "full_locus_history_completed": len(locus_ids),
+            "alert_rows": len(raw_alerts),
+            "request_started_at_utc": _iso(started),
+            "request_completed_at_utc": _iso(finished),
+            "runtime_seconds": round(max(0.0, self.monotonic() - t0), 6),
+            "max_workers": self.max_fetch_workers,
+            "effective_workers": effective_workers,
+            "max_in_flight_futures": (
+                min(len(locus_ids), effective_workers * 4) if locus_ids else 0
+            ),
+            "max_attempts_per_object": self.max_fetch_attempts,
+            "cache_used": False,
+            "secret_material_recorded": False,
+            "checkpoint": {
+                "schema_version": "phase6.segmented-fetch-checkpoint.v1",
+                "identity_sha256": completion.checkpoint_identity_sha256,
+                "completion_sha256": completion.completion_sha256,
+                "segment_count": completion.segment_count,
+                "reused_segments": completion.reused_segments,
+                "fetched_segments": completion.fetched_segments,
+                "authoritative": False,
+                "production_eligible": False,
+            },
+        }
+        return self._successful_fetch_result(
+            request,
+            query_result,
+            raw_alerts,
+            details,
+        )
+
     def fetch(
         self,
         request: NightScienceRequest,
@@ -1373,66 +1673,11 @@ class LiveAntaresProvider:
                 _combined_evidence(query_result.evidence, fetch_evidence),
             )
 
-        loci = prepare_loci(
-            raw_loci,
-            request.date_utc,
-            request.mjd_min,
-            request.mjd_max,
-            query_result.evidence.details.get(
-                "request_completed_at_utc", request.ingested_at_utc
-            ),
-            source_query_mode=EXTRACTION_METHOD,
-        )
-        alerts = prepare_alerts(raw_alerts, request.date_utc, request.range_label)
-        fetch_evidence = FetchStageEvidence(
-            True,
-            False,
-            len(loci),
-            len(alerts),
-            (),
-            details,
-        )
-        combined = _combined_evidence(query_result.evidence, fetch_evidence)
-        validation = validation_summary(
-            loci,
-            alerts,
-            mjd_min=request.mjd_min,
-            mjd_max=request.mjd_max,
-            prior_locus_ids=request.prior_locus_ids,
-            lsst_only=True,
-            query_completed=True,
-            query_fetch_clean=combined.clean,
-            mjd_upper_exclusive=True,
-        )
-        validation_errors: Tuple[ProviderIssue, ...] = ()
-        outcome = (
-            ProviderOutcome.SUCCESS_ZERO
-            if loci.empty and alerts.empty
-            else ProviderOutcome.SUCCESS
-        )
-        if validation.get("append_ready") is not True:
-            outcome = ProviderOutcome.VALIDATION_FAILURE
-            validation_errors = (
-                ProviderIssue(
-                    "live_science_validation_failed",
-                    ProviderStage.VALIDATION,
-                    outcome,
-                    "Existing nightly validation did not grant append readiness.",
-                    retryable=False,
-                ),
-            )
-        return NightScienceResult(
+        return self._successful_fetch_result(
             request,
-            self.provider_name,
-            self.scenario,
-            outcome,
             query_result,
-            loci,
-            alerts,
-            fetch_evidence,
-            validation,
-            validation_errors,
-            combined,
+            raw_alerts,
+            details,
         )
 
     def fetch_night(self, request: NightScienceRequest) -> NightScienceResult:
