@@ -653,6 +653,7 @@ class SegmentedFetchCheckpoint:
         if not stat.S_ISDIR(observed.st_mode) or stat.S_ISLNK(observed.st_mode):
             raise FetchCheckpointBindingError("Sealed run root is missing or unsafe.")
         self.capability = capability
+        self.read_only = False
         self.binding = binding
         self.run_root = run_root.resolve(strict=True)
         self.root = _lexical_child(self.run_root, CHECKPOINT_DIRECTORY)
@@ -679,6 +680,55 @@ class SegmentedFetchCheckpoint:
     ) -> "SegmentedFetchCheckpoint":
         return cls(capability, binding)
 
+    @classmethod
+    def open_read_only(
+        cls, run_root: Path, binding: FetchCheckpointBinding
+    ) -> "SegmentedFetchCheckpoint":
+        """Open existing evidence without granting live-read or write authority.
+
+        Cross-release authorization belongs to the caller's recovery contract;
+        this reader still requires the checkpoint's exact originating binding.
+        It never creates, chmods, fsyncs, repairs, or upgrades source entries.
+        """
+        if not isinstance(binding, FetchCheckpointBinding):
+            raise FetchCheckpointBindingError("A FetchCheckpointBinding is required.")
+        root = Path(os.path.abspath(os.fspath(run_root)))
+        if root.name != binding.run_id or root.resolve(strict=True) != root:
+            raise FetchCheckpointBindingError("Read-only run root identity is unsafe.")
+        instance = cls.__new__(cls)
+        instance.capability = None
+        instance.read_only = True
+        instance.binding = binding
+        instance.run_root = root
+        instance.root = root / CHECKPOINT_DIRECTORY
+        instance.blobs = instance.root / "blobs"
+        instance.segments = instance.root / "segments"
+        instance.tmp = instance.root / "tmp"
+        instance.header_path = instance.root / "checkpoint.json"
+        instance.complete_path = instance.root / "fetch-complete.json"
+        instance._check_read_only_directories()
+        instance._open_or_create_header(allow_create=False)
+        return instance
+
+    def _check_read_only_directories(self) -> None:
+        for path in (
+            self.run_root,
+            self.root.parent,
+            self.root,
+            self.blobs,
+            self.segments,
+            self.tmp,
+        ):
+            observed = os.lstat(path)
+            if (
+                not stat.S_ISDIR(observed.st_mode)
+                or path.resolve(strict=True) != path
+                or stat.S_IMODE(observed.st_mode) != 0o700
+            ):
+                raise FetchCheckpointCorrupt("Read-only checkpoint directory is unsafe.")
+        if any(self.tmp.iterdir()):
+            raise FetchCheckpointAmbiguous("Read-only checkpoint has temporary residue.")
+
     def _header(self) -> Dict[str, Any]:
         return {
             "schema_version": CHECKPOINT_SCHEMA_VERSION,
@@ -700,6 +750,8 @@ class SegmentedFetchCheckpoint:
         }
 
     def _open_or_create_header(self, *, allow_create: bool = True) -> None:
+        if self.read_only:
+            allow_create = False
         expected = self._header()
         if self.header_path.exists() or self.header_path.is_symlink():
             payload = _read_regular(
@@ -756,8 +808,11 @@ class SegmentedFetchCheckpoint:
         return tuple(plans)
 
     def _validate_structure(self, plans: Sequence[FetchSegmentPlan]) -> None:
-        for directory in (self.root, self.blobs, self.segments, self.tmp):
-            _ensure_private_directory(directory, self.run_root)
+        if self.read_only:
+            self._check_read_only_directories()
+        else:
+            for directory in (self.root, self.blobs, self.segments, self.tmp):
+                _ensure_private_directory(directory, self.run_root)
         # Reprove the immutable binding on every public operation.  This also
         # fails closed if the header was removed after the object was opened.
         self._open_or_create_header(allow_create=False)
@@ -817,6 +872,8 @@ class SegmentedFetchCheckpoint:
                 )
 
     def _store_blob(self, payload: bytes, digest: str) -> Path:
+        if self.read_only:
+            raise FetchCheckpointBindingError("Read-only checkpoints cannot store blobs.")
         path = _lexical_child(self.blobs, Path(digest + ".parquet"))
         if path.exists() or path.is_symlink():
             observed = _read_regular(
@@ -1217,6 +1274,19 @@ class SegmentedFetchCheckpoint:
             or document["segment_count"] != len(plans)
         ):
             raise FetchCheckpointCorrupt("Fetch completion totals are contradictory.")
+        if self.read_only:
+            payload = _read_regular(
+                self.complete_path, maximum=MAX_JSON_BYTES, label="fetch completion"
+            )
+            if _parse_canonical_json(payload, "fetch completion") != document:
+                raise FetchCheckpointCorrupt("Read-only completion identity differs.")
+            referenced = {
+                record.receipt["artifact"]["sha256"] + ".parquet"
+                for record in records.values()
+            }
+            if {path.name for path in self.blobs.iterdir()} != referenced:
+                raise FetchCheckpointAmbiguous("Read-only checkpoint has extra blobs.")
+            return document, _sha256(payload)
         if event_hook is not None:
             event_hook(
                 "before_fetch_complete_commit",
@@ -1245,6 +1315,8 @@ class SegmentedFetchCheckpoint:
         event_hook: Optional[CheckpointEventHook] = None,
     ) -> FetchCheckpointCompletion:
         """Reuse committed segments and fetch only deterministic missing segments."""
+        if self.read_only:
+            raise FetchCheckpointBindingError("Read-only checkpoints cannot invoke callbacks.")
         if not callable(fetch_segment):
             raise TypeError("fetch_segment must be callable.")
         plans = self._plans(ordered_locus_ids)

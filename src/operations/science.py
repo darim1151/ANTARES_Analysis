@@ -19,6 +19,10 @@ from typing import Any, Dict, Mapping, Optional, Protocol, Tuple, runtime_checka
 
 import pandas as pd
 
+from ..query import (
+    canonical_survey_identifier_value,
+    survey_identifier_value_is_absent,
+)
 from .transaction import QueryFetchEvidence
 
 
@@ -1746,7 +1750,20 @@ _OPTIONAL_SURVEY_NULL_PATHS = frozenset(
         ("lsst", "dia_object_id"),
         ("lsst", "ss_object_id"),
         ("ztf",),
+        ("ztf", "field"),
         ("ztf", "id"),
+        ("ztf", "rcid"),
+        ("ztf", "ssnamenr"),
+    }
+)
+_SURVEY_IDENTIFIER_PATHS = frozenset(
+    {
+        ("lsst", "dia_object_id"),
+        ("lsst", "ss_object_id"),
+        ("ztf", "field"),
+        ("ztf", "id"),
+        ("ztf", "rcid"),
+        ("ztf", "ssnamenr"),
     }
 )
 
@@ -1757,7 +1774,13 @@ def _align_optional_survey_nulls(
     *,
     path: Tuple[str, ...] = (),
 ) -> Tuple[Any, Any]:
-    """Align only schema-declared Arrow null padding in one survey pair."""
+    """Align only declared survey-identifier representation differences."""
+
+    if path in _SURVEY_IDENTIFIER_PATHS:
+        return (
+            canonical_survey_identifier_value(reopened),
+            canonical_survey_identifier_value(expected),
+        )
 
     if not isinstance(reopened, Mapping) or not isinstance(expected, Mapping):
         return reopened, expected
@@ -1777,7 +1800,11 @@ def _align_optional_survey_nulls(
             aligned_expected[key] = right
         elif child_path in _OPTIONAL_SURVEY_NULL_PATHS:
             present = reopened[key] if in_reopened else expected[key]
-            if present is None:
+            if (
+                survey_identifier_value_is_absent(present)
+                if child_path in _SURVEY_IDENTIFIER_PATHS
+                else present is None
+            ):
                 aligned_reopened[key] = None
                 aligned_expected[key] = None
     return aligned_reopened, aligned_expected
@@ -1787,7 +1814,7 @@ def _align_frame_optional_survey_nulls(
     reopened: pd.DataFrame,
     expected: pd.DataFrame,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Return comparison copies aligned only for the declared survey schema."""
+    """Return copies aligned only for declared survey identifier semantics."""
 
     if (
         "survey" not in reopened.columns
@@ -1955,13 +1982,13 @@ def reopen_and_validate_artifacts(
         expected.require_publishable()
         assert expected.loci is not None
         assert expected.alerts is not None
+        comparable_loci, comparable_expected_loci = (
+            _align_frame_optional_survey_nulls(loci, expected.loci)
+        )
+        comparable_alerts, comparable_expected_alerts = (
+            _align_frame_optional_survey_nulls(alerts, expected.alerts)
+        )
         try:
-            comparable_loci, comparable_expected_loci = (
-                _align_frame_optional_survey_nulls(loci, expected.loci)
-            )
-            comparable_alerts, comparable_expected_alerts = (
-                _align_frame_optional_survey_nulls(alerts, expected.alerts)
-            )
             pd.testing.assert_frame_equal(
                 comparable_loci,
                 comparable_expected_loci,
@@ -1972,7 +1999,7 @@ def reopen_and_validate_artifacts(
                 comparable_expected_alerts,
                 check_exact=True,
             )
-        except AssertionError as exc:
+        except (AssertionError, TypeError, ValueError) as exc:
             raise ArtifactValidationError(
                 _artifact_issue(
                     "artifact_frame_mismatch",

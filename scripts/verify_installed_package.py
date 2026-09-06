@@ -51,6 +51,7 @@ def main() -> int:
             "src.operations.fetch_checkpoint",
             "src.operations.live_antares",
             "src.operations.query_checkpoint",
+            "src.operations.offline_recovery",
         ]
     )
     # Exercise the broker client's real import closure (including its BSON

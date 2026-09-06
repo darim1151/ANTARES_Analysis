@@ -19,11 +19,16 @@ per-alert photometry keeps the cheap query (seconds) separable from the
 expensive one (one HTTP request per locus).
 """
 
+import math
+from numbers import Integral, Rational, Real
+
+import numpy as np
 import pandas as pd
 
 LSST_DIA_FIELD = "properties.survey.lsst.dia_object_id"
 LSST_SS_FIELD = "properties.survey.lsst.ss_object_id"
 ZTF_OBJECT_ID_COL = "ztf_object_id"
+_ABSENT_SURVEY_IDENTIFIER = ("absence",)
 
 
 def lsst_identifier_filter():
@@ -44,15 +49,123 @@ def lsst_identifier_filter():
     }
 
 
-def _nonempty(value):
-    """Return True for scalar/list-like values that carry real content."""
+def _identifier_sequence(value):
+    """Return supported identifier-container items without testing truthiness."""
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return (value[()],)
+        return value
+    if isinstance(value, (list, tuple)):
+        return value
+    return None
+
+
+def _missing_identifier_scalar(value):
+    """Return whether one non-container identifier value is a missing sentinel."""
     if value is None:
+        return True
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
         return False
-    if isinstance(value, float) and pd.isna(value):
-        return False
-    if isinstance(value, (list, tuple, set)):
+    return isinstance(missing, (bool, np.bool_)) and bool(missing)
+
+
+def _nonempty(value):
+    """Return True for an identifier scalar/container carrying real content."""
+    items = _identifier_sequence(value)
+    if items is not None:
+        return any(_nonempty(item) for item in items)
+    if isinstance(value, set):
         return any(_nonempty(item) for item in value)
+    if _missing_identifier_scalar(value):
+        return False
     return str(value).strip() != ""
+
+
+def _canonical_identifier_leaf(value):
+    """Encode one scalar with deterministic, type-safe equality."""
+    if value is None or value is pd.NA or value is pd.NaT:
+        return ("missing", type(value))
+    if isinstance(value, np.generic):
+        if not isinstance(
+            value, (np.bool_, np.integer, np.floating, np.str_, np.bytes_)
+        ) or isinstance(value, np.timedelta64):
+            raise TypeError(f"Unsupported survey identifier scalar type: {type(value)!r}")
+        converted = value.item()
+        if not isinstance(converted, np.generic):
+            value = converted
+    if isinstance(value, bool):
+        return ("boolean", value)
+    if isinstance(value, str):
+        return ("string", value)
+    if isinstance(value, bytes):
+        return ("bytes", value)
+    if isinstance(value, Integral):
+        return ("number", int(value), 1)
+    if isinstance(value, Rational):
+        return ("number", int(value.numerator), int(value.denominator))
+    if isinstance(value, (float, np.floating, Real)):
+        if _missing_identifier_scalar(value):
+            return ("missing", type(value))
+        infinite = (
+            bool(np.isinf(value))
+            if isinstance(value, np.floating)
+            else math.isinf(value)
+        )
+        if infinite:
+            return ("infinity", 1 if value > 0 else -1)
+        try:
+            numerator, denominator = value.as_integer_ratio()
+        except (AttributeError, OverflowError, ValueError) as exc:
+            raise TypeError(
+                f"Unsupported real survey identifier type: {type(value)!r}"
+            ) from exc
+        return ("number", int(numerator), int(denominator))
+    raise TypeError(f"Unsupported survey identifier scalar type: {type(value)!r}")
+
+
+def _canonical_identifier_sequence_item(value):
+    """Encode one item without losing its scientific value or nesting."""
+    items = _identifier_sequence(value)
+    if items is not None:
+        return (
+            "sequence",
+            tuple(_canonical_identifier_sequence_item(item) for item in items),
+        )
+    return _canonical_identifier_leaf(value)
+
+
+def canonical_survey_identifier_value(value):
+    """Normalize only declared nested survey-identifier representations.
+
+    Sequence and equal-valued numeric types are representational after a Parquet
+    reopen, while identifier values, boolean-vs-number distinctions, nesting,
+    order, and multiplicity remain scientific. Wholly empty containers share
+    the same absent representation as null and blank scalar values.
+    """
+    items = _identifier_sequence(value)
+    if items is not None:
+        # Validate every leaf before collapsing a wholly absent container.
+        # Otherwise unsupported NaN-like scalars could bypass the type gate.
+        encoded = tuple(_canonical_identifier_sequence_item(item) for item in items)
+        if not any(_nonempty(item) for item in items):
+            return _ABSENT_SURVEY_IDENTIFIER
+        return (
+            "sequence",
+            encoded,
+        )
+    canonical = _canonical_identifier_leaf(value)
+    if canonical[0] == "missing" or (
+        canonical[0] == "string" and not canonical[1].strip()
+    ):
+        return _ABSENT_SURVEY_IDENTIFIER
+    return canonical
+
+
+def survey_identifier_value_is_absent(value):
+    """Return whether a whole identifier value has approved absence semantics."""
+    return canonical_survey_identifier_value(value) == _ABSENT_SURVEY_IDENTIFIER
 
 
 def _survey_lsst_dict(value):

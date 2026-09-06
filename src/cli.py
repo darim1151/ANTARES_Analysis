@@ -44,7 +44,7 @@ from src.operations.writer import WriterError, production_ingest_refusal
 
 
 DIST_NAME = "antares-analysis"
-SOURCE_VERSION = "0.4.1"
+SOURCE_VERSION = "0.4.2"
 PROFILE_CHOICES = ("auto", "environment", *sorted(BUILTIN_PROFILES))
 
 
@@ -513,6 +513,20 @@ def build_parser() -> argparse.ArgumentParser:
     _add_profile_options(night_qualify)
     night_qualify.add_argument("--json", action="store_true", help="emit versioned JSON")
     night_qualify.set_defaults(handler=_handle_night_qualify)
+
+    night_offline = night_commands.add_parser(
+        "recover-offline",
+        help="qualify only the sealed 0.4.1 June 27 checkpoints under 0.4.2",
+    )
+    night_offline.add_argument("action", choices=("prepare", "run", "audit"))
+    night_offline.add_argument("--run-id", required=True)
+    night_offline.add_argument("--release-sha", required=True)
+    def offline_handler(args):
+        from src.operations.offline_recovery import main as offline_main
+        return offline_main([
+            args.action, "--run-id", args.run_id, "--release-sha", args.release_sha
+        ])
+    night_offline.set_defaults(handler=offline_handler)
 
     backfill_parser = commands.add_parser(
         "backfill", help="plan sequential backlog handling without executing it"

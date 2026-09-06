@@ -6,6 +6,34 @@ This project still uses ANTARES as the broker/source. The workflows can run on
 Middle Earth or Rubin Science Platform (RSP); neither environment is a direct
 Rubin Butler/TAP replacement.
 
+## Release 0.4.2
+
+Survey identifier comparison now preserves exact numeric identity, distinguishes
+booleans from numbers, and handles ordered list, tuple, and NumPy array
+representations without ambiguous array truth tests. Whole absent fields remain
+absent; unsupported scalar types fail closed. Alignment is restricted to the
+two LSST identifier fields and ZTF `id`, `ssnamenr`, `field`, and `rcid`.
+
+`antares-analysis night recover-offline` provides a versioned, one-way recovery
+of the exact sealed June 27 acquisition from release 0.4.1 into a new 0.4.2
+qualification root. It verifies both release identities, all query shards and
+fetch segments, and every blob before rebuilding artifacts. Source checkpoints
+are read-only. Provider/client entry, network access, and writes outside the
+new qualification root are refused. A separate process reopens the artifacts;
+terminal evidence records checkpoint reuse, callback counts, and source and
+production identities before and after execution.
+
+The command has separate `prepare`, `run`, and `audit` actions, each requiring
+an exact `--run-id` and `--release-sha`. Preparation refuses an existing root;
+execution exclusively claims that prepared root once. The supported recovery
+runtime is the immutable Arnor CPython 3.11.16 environment. Detached execution
+must use the established `nohup`/`setsid` launcher, stdin `/dev/null`, cwd `/`,
+durable run-local logs, and a four-hour GNU `timeout` with a 60-second KILL grace.
+
+This release changes no query selection, extraction, or publication semantics.
+The recovery output is explicitly non-authoritative and non-publishable.
+June 27 publication remains unauthorized and unavailable through this command.
+
 ## What This Project Does
 
 The pipeline has two main jobs:

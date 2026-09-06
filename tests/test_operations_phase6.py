@@ -2,14 +2,19 @@ import contextlib
 import hashlib
 import io
 import json
+import math
 import tempfile
 import threading
 import time
 import unittest
+from copy import deepcopy
+from dataclasses import replace
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
+import numpy as np
 import pandas as pd
 
 from src import cli, history, query as query_module
@@ -123,6 +128,92 @@ def _mixed_identifier_provider(root):
                 "ztf": {"id": "ZTF-1"},
             },
         ),
+    ]
+    by_id = {locus.locus_id: locus for locus in loci}
+    return _mock_provider(
+        root,
+        _canonical_search(loci),
+        by_id.__getitem__,
+        canonical_tiles=True,
+    )
+
+
+def _sequence_identifier_provider(root):
+    surveys = [
+        {"lsst": {"dia_object_id": ["DIA-1"]}},
+        {
+            "lsst": {"dia_object_id": [], "ss_object_id": ["SS-1"]},
+            "ztf": {"id": [], "ssnamenr": [], "field": [], "rcid": []},
+        },
+        {
+            "lsst": {
+                "dia_object_id": np.array(["DIA-2", "DIA-2"], dtype=object),
+                "ss_object_id": ["SS-2"],
+            },
+            "ztf": {
+                "id": np.array(["ZTF-1", "ZTF-1"], dtype=object),
+                "ssnamenr": ["SSNAME-A", "SSNAME-A"],
+                "field": (17, 4),
+                "rcid": np.array([9, 2], dtype=object),
+            },
+        },
+        {
+            "lsst": {"dia_object_id": None, "ss_object_id": ("SS-3",)},
+            "ztf": {
+                "id": None,
+                "ssnamenr": ("SSNAME-NO-ID",),
+                "field": [99],
+                "rcid": np.array([6], dtype=object),
+            },
+        },
+        {
+            "lsst": {"dia_object_id": [], "ss_object_id": ["SS-4"]},
+            "ztf": {"id": [], "ssnamenr": [], "field": [], "rcid": []},
+        },
+        {
+            "lsst": {"dia_object_id": (), "ss_object_id": ["SS-5"]},
+            "ztf": {"id": (), "ssnamenr": (), "field": (), "rcid": ()},
+        },
+        {
+            "lsst": {
+                "dia_object_id": np.array([], dtype=object),
+                "ss_object_id": ["SS-6"],
+            },
+            "ztf": {
+                "id": np.array([], dtype=object),
+                "ssnamenr": np.array([], dtype=object),
+                "field": np.array([], dtype=object),
+                "rcid": np.array([], dtype=object),
+            },
+        },
+        {
+            "lsst": {
+                "dia_object_id": np.array([None, ""], dtype=object),
+                "ss_object_id": ["SS-7"],
+            },
+            "ztf": {
+                "id": np.array([None, ""], dtype=object),
+                "ssnamenr": np.array([None, ""], dtype=object),
+                "field": np.array([None], dtype=object),
+                "rcid": np.array([None], dtype=object),
+            },
+        },
+        {
+            "lsst": {
+                "dia_object_id": np.array(["DIA-3", "DIA-4"], dtype=object),
+                "ss_object_id": np.array([], dtype=object),
+            },
+            "ztf": {
+                "id": ["ZTF-2", "ZTF-3"],
+                "ssnamenr": np.array(["SSNAME-B", "SSNAME-C"], dtype=object),
+                "field": np.array([42, 7], dtype=object),
+                "rcid": (15, 1),
+            },
+        },
+    ]
+    loci = [
+        FakeLocus(f"ANT-SEQUENCE-{index:02d}", lightcurve=None, survey=survey)
+        for index, survey in enumerate(surveys)
     ]
     by_id = {locus.locus_id: locus for locus in loci}
     return _mock_provider(
@@ -669,6 +760,618 @@ class LiveProviderTests(unittest.TestCase):
                 },
             )
 
+    def test_identifier_presence_handles_supported_sequence_representations(self):
+        absent = (
+            None,
+            pd.NA,
+            pd.NaT,
+            float("nan"),
+            [],
+            (),
+            np.array([], dtype=object),
+            [None, "", pd.NA],
+            (None, ""),
+            np.array([None, "", pd.NA], dtype=object),
+        )
+        present = (
+            0,
+            False,
+            [0],
+            ["DIA-1"],
+            ("SS-1",),
+            np.array(["ZTF-1"], dtype=object),
+            np.array([None, "DIA-2"], dtype=object),
+        )
+
+        for value in absent:
+            with self.subTest(value=repr(value)):
+                self.assertFalse(query_module._nonempty(value))
+        for value in present:
+            with self.subTest(value=repr(value)):
+                self.assertTrue(query_module._nonempty(value))
+
+    def test_identifier_canonicalization_is_lossless_for_nonempty_sequences(self):
+        canonical = query_module.canonical_survey_identifier_value
+        equivalent = (
+            ["A", "B"],
+            ("A", "B"),
+            np.array(["A", "B"], dtype=object),
+        )
+        self.assertEqual(len({repr(canonical(value)) for value in equivalent}), 1)
+
+        unequal_pairs = (
+            (["A", ""], ["A", None]),
+            (["A", " "], ["A", ""]),
+            (["A", "B"], ["B", "A"]),
+            (["A", "B"], ["A", "C"]),
+            (["A", "A"], ["A"]),
+            ([0], []),
+            ([0], [False]),
+            (["A", False], ["A", None]),
+            (["A"], [None, ""]),
+            (["A", []], ["A", [None]]),
+        )
+        for left, right in unequal_pairs:
+            with self.subTest(left=left, right=right):
+                self.assertNotEqual(canonical(left), canonical(right))
+
+    def test_whole_field_scalar_canonicalization_is_typed_and_exact(self):
+        canonical = query_module.canonical_survey_identifier_value
+
+        self.assertEqual(canonical(1), canonical(np.int64(1)))
+        self.assertEqual(canonical(1), canonical(1.0))
+        self.assertEqual(canonical(0), canonical(-0.0))
+        self.assertNotEqual(canonical(0), canonical(False))
+        self.assertNotEqual(canonical(1), canonical(True))
+        self.assertNotEqual(canonical("1"), canonical(1))
+        self.assertNotEqual(canonical(b"1"), canonical("1"))
+        self.assertNotEqual(canonical(float("inf")), canonical(float("-inf")))
+        self.assertNotEqual(
+            canonical(np.int64(9007199254740993)),
+            canonical(np.float64(9007199254740992.0)),
+        )
+        self.assertNotEqual(canonical("A"), canonical(["A"]))
+        with self.assertRaises(TypeError):
+            canonical(object())
+
+    def test_identifier_canonicalization_collision_audit(self):
+        canonical = query_module.canonical_survey_identifier_value
+
+        nested_empty_array = np.empty(2, dtype=object)
+        nested_empty_array[0] = "A"
+        nested_empty_array[1] = np.array([], dtype=object)
+        nested_missing_array = np.empty(2, dtype=object)
+        nested_missing_array[0] = "A"
+        nested_missing_array[1] = np.array([None], dtype=object)
+
+        classes = {
+            "whole-absence": (
+                None,
+                pd.NA,
+                pd.NaT,
+                float("nan"),
+                np.float32("nan"),
+                "",
+                " ",
+                [],
+                (),
+                np.array([], dtype=object),
+                [None, "", pd.NA],
+                (None, ""),
+                np.array([None, ""], dtype=object),
+            ),
+            "string-a": ("A",),
+            "string-b": ("B",),
+            "string-one": ("1",),
+            "bytes-a": (b"A",),
+            "boolean-false": (False, np.bool_(False)),
+            "boolean-true": (True, np.bool_(True)),
+            "number-negative-seven": (
+                -7,
+                np.int8(-7),
+                np.int16(-7),
+                np.int32(-7),
+                np.int64(-7),
+                -7.0,
+                np.float32(-7.0),
+                np.float64(-7.0),
+            ),
+            "number-zero": (
+                0,
+                np.int8(0),
+                np.int64(0),
+                0.0,
+                -0.0,
+                np.float32(-0.0),
+                np.float64(0.0),
+            ),
+            "number-one": (
+                1,
+                np.int16(1),
+                np.int64(1),
+                1.0,
+                np.float32(1.0),
+                np.float64(1.0),
+            ),
+            "number-positive-255": (
+                255,
+                np.uint8(255),
+                np.uint16(255),
+                np.uint32(255),
+                np.uint64(255),
+                255.0,
+                np.float32(255.0),
+                np.float64(255.0),
+            ),
+            "number-one-and-a-half": (
+                1.5,
+                np.float16(1.5),
+                np.float32(1.5),
+                np.float64(1.5),
+            ),
+            "number-two53-minus-one": (
+                2**53 - 1,
+                np.int64(2**53 - 1),
+                float(2**53 - 1),
+                np.float64(2**53 - 1),
+            ),
+            "number-two53": (
+                2**53,
+                np.int64(2**53),
+                float(2**53),
+                np.float64(2**53),
+            ),
+            "number-two53-plus-one": (
+                2**53 + 1,
+                np.int64(2**53 + 1),
+            ),
+            "number-two53-plus-two": (
+                2**53 + 2,
+                np.int64(2**53 + 2),
+                float(2**53 + 2),
+                np.float64(2**53 + 2),
+            ),
+            "number-point-one-binary64": (0.1, np.float64(0.1)),
+            "number-point-one-binary32": (np.float32(0.1),),
+            "positive-infinity": (
+                float("inf"),
+                np.float32("inf"),
+                np.float64("inf"),
+            ),
+            "negative-infinity": (
+                float("-inf"),
+                np.float32("-inf"),
+                np.float64("-inf"),
+            ),
+            "sequence-ab": (
+                ["A", "B"],
+                ("A", "B"),
+                np.array(["A", "B"], dtype=object),
+            ),
+            "sequence-ba": (
+                ["B", "A"],
+                ("B", "A"),
+                np.array(["B", "A"], dtype=object),
+            ),
+            "sequence-a": (
+                ["A"],
+                ("A",),
+                np.array(["A"], dtype=object),
+            ),
+            "sequence-aa": (
+                ["A", "A"],
+                ("A", "A"),
+                np.array(["A", "A"], dtype=object),
+            ),
+            "sequence-a-blank": (
+                ["A", ""],
+                ("A", ""),
+                np.array(["A", ""], dtype=object),
+            ),
+            "sequence-a-whitespace": (
+                ["A", " "],
+                ("A", " "),
+                np.array(["A", " "], dtype=object),
+            ),
+            "sequence-a-none": (
+                ["A", None],
+                ("A", None),
+                np.array(["A", None], dtype=object),
+            ),
+            "sequence-a-pd-na": (
+                ["A", pd.NA],
+                ("A", pd.NA),
+                np.array(["A", pd.NA], dtype=object),
+            ),
+            "sequence-a-pd-nat": (
+                ["A", pd.NaT],
+                ("A", pd.NaT),
+                np.array(["A", pd.NaT], dtype=object),
+            ),
+            "sequence-a-nan": (
+                ["A", float("nan")],
+                ("A", float("nan")),
+                np.array(["A", float("nan")], dtype=object),
+            ),
+            "sequence-zero": (
+                [0],
+                (0.0,),
+                np.array([np.int64(0)], dtype=object),
+                np.array([0.0]),
+            ),
+            "sequence-false": (
+                [False],
+                (np.bool_(False),),
+                np.array([False], dtype=object),
+            ),
+            "sequence-one": (
+                [1],
+                (1.0,),
+                np.array([np.int64(1)], dtype=object),
+                np.array([1.0]),
+            ),
+            "sequence-true": (
+                [True],
+                (np.bool_(True),),
+                np.array([True], dtype=object),
+            ),
+            "sequence-false-zero": (
+                [False, 0],
+                (False, 0),
+                np.array([False, 0], dtype=object),
+            ),
+            "sequence-zero-false": (
+                [0, False],
+                (0, False),
+                np.array([0, False], dtype=object),
+            ),
+            "nested-empty": (
+                ["A", []],
+                ("A", ()),
+                nested_empty_array,
+            ),
+            "nested-missing": (
+                ["A", [None]],
+                ("A", (None,)),
+                nested_missing_array,
+            ),
+            "nested-ab": (
+                [["A", "B"]],
+                (("A", "B"),),
+                np.array([["A", "B"]], dtype=object),
+            ),
+            "nested-ba": (
+                [["B", "A"]],
+                (("B", "A"),),
+                np.array([["B", "A"]], dtype=object),
+            ),
+        }
+
+        def snapshot(value):
+            if value is pd.NA:
+                return ("pd.NA",)
+            if value is pd.NaT:
+                return ("pd.NaT",)
+            if isinstance(value, np.ndarray):
+                return (
+                    "ndarray",
+                    value.dtype.str,
+                    value.shape,
+                    snapshot(value.tolist()),
+                )
+            if isinstance(value, (list, tuple)):
+                return (type(value), tuple(snapshot(item) for item in value))
+            if isinstance(value, np.generic):
+                return (type(value), snapshot(value.item()))
+            if isinstance(value, float) and math.isnan(value):
+                return ("float-nan",)
+            return (type(value), repr(value))
+
+        corpus = []
+        for class_name, values in classes.items():
+            for value in values:
+                before = snapshot(value)
+                encoded = canonical(value)
+                self.assertEqual(encoded, canonical(value))
+                self.assertEqual(before, snapshot(value))
+                corpus.append((class_name, value, encoded))
+
+        self.assertEqual(len(classes), 40)
+        self.assertEqual(len(corpus), 139)
+        for index, (left_class, left_value, left_encoded) in enumerate(corpus):
+            for right_class, right_value, right_encoded in corpus[index + 1 :]:
+                with self.subTest(
+                    left=repr(left_value),
+                    right=repr(right_value),
+                ):
+                    self.assertEqual(
+                        left_encoded == right_encoded,
+                        left_class == right_class,
+                    )
+
+    def test_identifier_canonicalization_rejects_unsupported_missing_and_numpy_scalars(self):
+        canonical = query_module.canonical_survey_identifier_value
+        unsupported = (
+            complex(float("nan"), 1),
+            Decimal("NaN"),
+            np.complex128(complex(float("nan"), 1)),
+            np.timedelta64(1, "ns"),
+            np.timedelta64("NaT"),
+            np.datetime64(1, "ns"),
+            np.datetime64("NaT"),
+        )
+        for value in unsupported:
+            for representation in (
+                value,
+                [value],
+                (value,),
+                ["A", [value]],
+                np.array([value], dtype=object),
+                np.array([value]),
+                np.array(value),
+            ):
+                with self.subTest(value=repr(representation)):
+                    with self.assertRaises(TypeError):
+                        canonical(representation)
+
+    def test_provider_frame_comparison_rejects_whole_field_scalar_collisions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            root.mkdir()
+            provider_result = _mixed_identifier_provider(root).fetch_night(_request())
+
+            def with_dia_value(value):
+                loci = provider_result.loci.copy(deep=True)
+                for row in (0, 2):
+                    survey = deepcopy(loci.at[row, "survey"])
+                    survey["lsst"]["dia_object_id"] = value
+                    loci.at[row, "survey"] = survey
+                return replace(provider_result, loci=loci)
+
+            unequal_pairs = (
+                (0, False),
+                (1, True),
+                (np.float64(9007199254740992.0), np.int64(9007199254740993)),
+                ("A", ["A"]),
+                (float("inf"), float("-inf")),
+                ("1", 1),
+            )
+            for serialized, expected in unequal_pairs:
+                with self.subTest(serialized=serialized, expected=expected):
+                    artifacts = build_night_artifacts(with_dia_value(serialized))
+                    with self.assertRaises(ArtifactValidationError) as raised:
+                        reopen_and_validate_artifacts(
+                            artifacts,
+                            expected=with_dia_value(expected),
+                        )
+                    self.assertEqual(raised.exception.code, "artifact_frame_mismatch")
+
+            artifacts = build_night_artifacts(with_dia_value(1))
+            for unsupported in (
+                np.timedelta64(1, "ns"),
+                Decimal("NaN"),
+                [complex(float("nan"), 1)],
+            ):
+                with self.subTest(unsupported=repr(unsupported)):
+                    with self.assertRaises(TypeError):
+                        reopen_and_validate_artifacts(
+                            artifacts, expected=with_dia_value(unsupported)
+                        )
+
+    def test_provider_frame_comparison_accepts_approved_identifier_equivalence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            root.mkdir()
+            provider_result = _mixed_identifier_provider(root).fetch_night(_request())
+
+            def with_dia_value(value):
+                loci = provider_result.loci.copy(deep=True)
+                for row in (0, 2):
+                    survey = deepcopy(loci.at[row, "survey"])
+                    survey["lsst"]["dia_object_id"] = value
+                    loci.at[row, "survey"] = survey
+                return replace(provider_result, loci=loci)
+
+            equivalent_pairs = (
+                (1, np.int64(1)),
+                (1, 1.0),
+                (["A", "B"], ("A", "B")),
+                (("A", "B"), np.array(["A", "B"], dtype=object)),
+            )
+            for serialized, expected in equivalent_pairs:
+                with self.subTest(serialized=serialized, expected=expected):
+                    artifacts = build_night_artifacts(with_dia_value(serialized))
+                    reopened = reopen_and_validate_artifacts(
+                        artifacts,
+                        expected=with_dia_value(expected),
+                    )
+                    self.assertEqual(len(reopened.loci), len(provider_result.loci))
+
+    def test_identifier_counts_require_the_declared_identifier_paths(self):
+        frame = pd.DataFrame(
+            {
+                "survey": [
+                    {"lsst": {"dia_object_id": "DIA"}},
+                    {"lsst": {"ss_object_id": "SS"}},
+                    {
+                        "lsst": {
+                            "dia_object_id": "DIA-BOTH",
+                            "ss_object_id": "SS-BOTH",
+                        }
+                    },
+                    {},
+                    {
+                        "ztf": {
+                            "ssnamenr": ["NO-ZTF-ID"],
+                            "field": [99],
+                            "rcid": [6],
+                        }
+                    },
+                    {
+                        "lsst": {"dia_object_id": 0},
+                        "ztf": {"id": 0},
+                    },
+                ]
+            }
+        )
+        self.assertEqual(
+            query_module.lsst_identifier_counts(frame),
+            {
+                "lsst_dia_count": 3,
+                "lsst_ss_count": 2,
+                "lsst_identifier_count": 4,
+                "ztf_object_id_count": 1,
+            },
+        )
+        self.assertEqual(
+            query_module.lsst_identifier_counts(frame.iloc[[4]]),
+            {
+                "lsst_dia_count": 0,
+                "lsst_ss_count": 0,
+                "lsst_identifier_count": 0,
+                "ztf_object_id_count": 0,
+            },
+        )
+
+    def test_parquet_roundtrip_preserves_sequence_identifier_semantics(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            root.mkdir()
+            result = _sequence_identifier_provider(root).fetch_night(_request())
+            self.assertTrue(result.publishable)
+            self.assertEqual(result.validation["lsst_dia_count"], 3)
+            self.assertEqual(result.validation["lsst_ss_count"], 7)
+            self.assertEqual(result.validation["lsst_identifier_count"], 9)
+            self.assertEqual(result.validation["ztf_object_id_count"], 2)
+
+            reopened = reopen_and_validate_artifacts(
+                build_night_artifacts(result), expected=result
+            )
+            regenerated = history.validation_summary(
+                reopened.loci,
+                reopened.alerts,
+                mjd_min=result.request.mjd_min,
+                mjd_max=result.request.mjd_max,
+                prior_locus_ids=result.request.prior_locus_ids,
+                lsst_only=True,
+                query_completed=True,
+                query_fetch_clean=True,
+                mjd_upper_exclusive=True,
+            )
+            self.assertEqual(regenerated, result.validation)
+            self.assertEqual(
+                {
+                    key: regenerated[key]
+                    for key in (
+                        "lsst_dia_count",
+                        "lsst_ss_count",
+                        "lsst_identifier_count",
+                        "ztf_object_id_count",
+                    )
+                },
+                {
+                    "lsst_dia_count": 3,
+                    "lsst_ss_count": 7,
+                    "lsst_identifier_count": 9,
+                    "ztf_object_id_count": 2,
+                },
+            )
+
+            surveys = reopened.loci.set_index("locus_id")["survey"].to_dict()
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-02"]["lsst"]["dia_object_id"].tolist(),
+                ["DIA-2", "DIA-2"],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-02"]["ztf"]["id"].tolist(),
+                ["ZTF-1", "ZTF-1"],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-02"]["ztf"]["ssnamenr"].tolist(),
+                ["SSNAME-A", "SSNAME-A"],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-02"]["ztf"]["field"].tolist(),
+                [17, 4],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-02"]["ztf"]["rcid"].tolist(),
+                [9, 2],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-03"]["ztf"]["ssnamenr"].tolist(),
+                ["SSNAME-NO-ID"],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-03"]["ztf"]["field"].tolist(),
+                [99],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-03"]["ztf"]["rcid"].tolist(),
+                [6],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-08"]["lsst"]["dia_object_id"].tolist(),
+                ["DIA-3", "DIA-4"],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-08"]["ztf"]["id"].tolist(),
+                ["ZTF-2", "ZTF-3"],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-08"]["ztf"]["ssnamenr"].tolist(),
+                ["SSNAME-B", "SSNAME-C"],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-08"]["ztf"]["field"].tolist(),
+                [42, 7],
+            )
+            self.assertEqual(
+                surveys["ANT-SEQUENCE-08"]["ztf"]["rcid"].tolist(),
+                [15, 1],
+            )
+
+    def test_parquet_roundtrip_rejects_sequence_order_value_and_multiplicity_drift(self):
+        mutations = (
+            ("order", "ANT-SEQUENCE-08", ["DIA-4", "DIA-3"]),
+            ("value", "ANT-SEQUENCE-08", ["DIA-3", "DIA-CHANGED"]),
+            ("duplicate-removal", "ANT-SEQUENCE-02", ["DIA-2"]),
+            (
+                "duplicate-addition",
+                "ANT-SEQUENCE-02",
+                ["DIA-2", "DIA-2", "DIA-2"],
+            ),
+        )
+        for label, locus_id, replacement in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "run"
+                root.mkdir()
+                result = _sequence_identifier_provider(root).fetch_night(_request())
+                artifacts = build_night_artifacts(result)
+                row = result.loci.index[result.loci["locus_id"].eq(locus_id)][0]
+                result.loci.at[row, "survey"]["lsst"]["dia_object_id"] = replacement
+
+                with self.assertRaises(ArtifactValidationError) as raised:
+                    reopen_and_validate_artifacts(artifacts, expected=result)
+                self.assertEqual(raised.exception.code, "artifact_frame_mismatch")
+
+    def test_parquet_roundtrip_keeps_unrelated_nested_arrays_strict(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            root.mkdir()
+            result = _mixed_identifier_provider(root).fetch_night(_request())
+            result.loci["unrelated_nested"] = [
+                {"values": ["A", "B"]},
+                {"values": []},
+                {"values": ["C"]},
+            ]
+            artifacts = build_night_artifacts(result)
+            result.loci.at[0, "unrelated_nested"] = {"values": ["A", "CHANGED"]}
+
+            with self.assertRaises(ArtifactValidationError) as raised:
+                reopen_and_validate_artifacts(artifacts, expected=result)
+            self.assertEqual(raised.exception.code, "artifact_frame_mismatch")
+
     def test_parquet_roundtrip_rejects_changed_nested_non_null_value(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "run"
@@ -693,6 +1396,47 @@ class LiveProviderTests(unittest.TestCase):
                 with self.assertRaises(ArtifactValidationError) as raised:
                     reopen_and_validate_artifacts(artifacts, expected=result)
                 self.assertEqual(raised.exception.code, "artifact_frame_mismatch")
+                self.assertIsInstance(raised.exception.__cause__, AssertionError)
+
+    def test_provider_frame_comparison_wraps_only_direct_pandas_failures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run"
+            root.mkdir()
+            result = _mixed_identifier_provider(root).fetch_night(_request())
+            artifacts = build_night_artifacts(result)
+
+            for failure in (
+                TypeError("controlled pandas comparison type error"),
+                ValueError("controlled pandas comparison value error"),
+            ):
+                with self.subTest(failure=type(failure).__name__), mock.patch(
+                    "src.operations.science.pd.testing.assert_frame_equal",
+                    side_effect=failure,
+                ):
+                    with self.assertRaises(ArtifactValidationError) as raised:
+                        reopen_and_validate_artifacts(artifacts, expected=result)
+                    self.assertEqual(raised.exception.code, "artifact_frame_mismatch")
+                    self.assertIs(raised.exception.__cause__, failure)
+
+            alignment_failure = ValueError("controlled alignment failure")
+            with mock.patch(
+                "src.operations.science._align_frame_optional_survey_nulls",
+                side_effect=alignment_failure,
+            ):
+                with self.assertRaises(ValueError) as raised:
+                    reopen_and_validate_artifacts(artifacts, expected=result)
+                self.assertIs(raised.exception, alignment_failure)
+
+            canonicalization_failure = TypeError(
+                "controlled canonicalization failure"
+            )
+            with mock.patch(
+                "src.operations.science.canonical_survey_identifier_value",
+                side_effect=canonicalization_failure,
+            ):
+                with self.assertRaises(TypeError) as raised:
+                    reopen_and_validate_artifacts(artifacts, expected=result)
+                self.assertIs(raised.exception, canonicalization_failure)
 
     def test_parquet_roundtrip_rejects_unrelated_mapping_null_padding(self):
         with tempfile.TemporaryDirectory() as temporary:
