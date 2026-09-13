@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -70,6 +71,7 @@ from .writer import (
 
 
 COMMISSIONING_SCHEMA_VERSION = "phase6.live-commissioning.v1"
+PRODUCTION_SENTINEL_SCHEMA_VERSION = "phase6.production-sentinel.v2"
 TARGET_DATE_UTC = "2026-06-27"
 ACCEPTED_PREDECESSOR_DATE = "2026-06-26"
 ACCEPTED_BASELINE = {
@@ -555,30 +557,287 @@ def release_environment_preflight(
     return value
 
 
+def _decode_mountinfo_field(value: str) -> str:
+    """Decode the octal escapes used by Linux mountinfo path fields."""
+
+    decoded = re.sub(
+        r"\\(040|011|012|134)",
+        lambda match: chr(int(match.group(1), 8)),
+        value,
+    )
+    if "\\" in decoded:
+        raise CommissioningError("Linux mount topology contains an invalid escape.")
+    return decoded
+
+
+def production_mount_binding(
+    path: Path,
+    *,
+    mountinfo_lines: Optional[Sequence[str]] = None,
+    runtime_device: Optional[int] = None,
+) -> Mapping[str, str]:
+    """Return the stable logical mount binding enclosing one canonical path."""
+
+    path = Path(path)
+    if not path.is_absolute() or path.is_symlink() or not path.is_dir():
+        raise CommissioningError("Production mount path is missing or unsafe.")
+    try:
+        canonical = path.resolve(strict=True)
+    except OSError as exc:
+        raise CommissioningError("Production mount path cannot be resolved.") from exc
+    if canonical != path:
+        raise CommissioningError("Production mount path uses an alias or symlink.")
+    if runtime_device is None:
+        try:
+            runtime_device = path.stat().st_dev
+        except OSError as exc:
+            raise CommissioningError(
+                "Production mount device cannot be observed."
+            ) from exc
+    if (
+        not isinstance(runtime_device, int)
+        or isinstance(runtime_device, bool)
+        or runtime_device < 0
+    ):
+        raise CommissioningError("Production mount device is invalid.")
+    try:
+        runtime_major_minor = (
+            os.major(runtime_device),
+            os.minor(runtime_device),
+        )
+    except (OverflowError, ValueError) as exc:
+        raise CommissioningError("Production mount device is invalid.") from exc
+    if mountinfo_lines is None:
+        try:
+            mountinfo_lines = Path("/proc/self/mountinfo").read_text(
+                encoding="utf-8"
+            ).splitlines()
+        except (OSError, UnicodeError) as exc:
+            raise CommissioningError(
+                "Linux mount topology is unavailable for production qualification."
+            ) from exc
+
+    candidates = []
+    for line in mountinfo_lines:
+        fields = line.split()
+        try:
+            separator = fields.index("-")
+        except ValueError as exc:
+            raise CommissioningError("Linux mount topology is malformed.") from exc
+        if separator < 6 or len(fields) < separator + 4:
+            raise CommissioningError("Linux mount topology is malformed.")
+        if (
+            not fields[0].isdigit()
+            or not fields[1].isdigit()
+            or re.fullmatch(r"[0-9]+:[0-9]+", fields[2]) is None
+        ):
+            raise CommissioningError("Linux mount topology is malformed.")
+        mount_root = Path(_decode_mountinfo_field(fields[3]))
+        mount_point = Path(_decode_mountinfo_field(fields[4]))
+        if (
+            not mount_root.is_absolute()
+            or not mount_point.is_absolute()
+            or ".." in mount_root.parts
+            or ".." in mount_point.parts
+        ):
+            raise CommissioningError("Linux mount topology contains a relative mount.")
+        try:
+            canonical.relative_to(mount_point)
+        except ValueError:
+            continue
+        candidates.append(
+            {
+                "mount_point": str(mount_point),
+                "filesystem_type": fields[separator + 1],
+                "source": _decode_mountinfo_field(fields[separator + 2]),
+                "major_minor": tuple(
+                    int(component) for component in fields[2].split(":")
+                ),
+            }
+        )
+    if not candidates:
+        raise CommissioningError("No enclosing production mount was found.")
+    longest = max(len(Path(item["mount_point"]).parts) for item in candidates)
+    longest_candidates = [
+        item
+        for item in candidates
+        if len(Path(item["mount_point"]).parts) == longest
+    ]
+    selected = [
+        item
+        for item in longest_candidates
+        if item["major_minor"] == runtime_major_minor
+    ]
+    if not selected:
+        raise CommissioningError(
+            "Production mount binding does not match the live production device."
+        )
+    if len(selected) != 1:
+        raise CommissioningError("Production mount binding is ambiguous.")
+    selected_mount = Path(selected[0]["mount_point"])
+    try:
+        resolved_mount = selected_mount.resolve(strict=True)
+    except OSError as exc:
+        raise CommissioningError(
+            "Production mount point cannot be resolved."
+        ) from exc
+    if resolved_mount != selected_mount:
+        raise CommissioningError("Production mount point uses an alias or symlink.")
+    return {
+        "mount_point": str(resolved_mount),
+        "filesystem_type": selected[0]["filesystem_type"],
+        "source": selected[0]["source"],
+    }
+
+
+def _mount_binding_valid(value: Any) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "mount_point",
+        "filesystem_type",
+        "source",
+    }:
+        return False
+    mount_point = value.get("mount_point")
+    return bool(
+        isinstance(mount_point, str)
+        and Path(mount_point).is_absolute()
+        and ".." not in Path(mount_point).parts
+        and isinstance(value.get("filesystem_type"), str)
+        and value.get("filesystem_type")
+        and isinstance(value.get("source"), str)
+        and value.get("source")
+    )
+
+
+def _device_rows_valid(value: Any, expected_paths: Sequence[str]) -> bool:
+    if (
+        not isinstance(value, list)
+        or len(value) != len(expected_paths)
+        or any(not isinstance(path, str) for path in expected_paths)
+        or len(set(expected_paths)) != len(expected_paths)
+    ):
+        return False
+    observed_paths = []
+    for row in value:
+        if not isinstance(row, Mapping) or set(row) != {"path", "device"}:
+            return False
+        path = row.get("path")
+        device = row.get("device")
+        if (
+            not isinstance(path, str)
+            or isinstance(device, bool)
+            or not isinstance(device, int)
+            or device < 0
+        ):
+            return False
+        observed_paths.append(path)
+    return observed_paths == sorted(expected_paths)
+
+
+def _runtime_observation_valid(value: Any, durable_state: Any) -> bool:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {
+            "directory_devices",
+            "manifest_devices",
+            "durable_file_devices",
+        }
+        or not isinstance(durable_state, Mapping)
+    ):
+        return False
+    directories = durable_state.get("directory_metadata")
+    directory_devices = value.get("directory_devices")
+    manifests = durable_state.get("manifest_inventory")
+    files = durable_state.get("durable_file_inventory")
+    if (
+        not isinstance(directories, Mapping)
+        or not isinstance(directory_devices, Mapping)
+        or set(directory_devices) != set(directories)
+        or not isinstance(manifests, list)
+        or not isinstance(files, list)
+    ):
+        return False
+    for name, metadata in directories.items():
+        row = directory_devices.get(name)
+        if (
+            not isinstance(metadata, Mapping)
+            or not isinstance(row, Mapping)
+            or set(row) != {"path", "device"}
+            or row.get("path") != metadata.get("path")
+            or isinstance(row.get("device"), bool)
+            or not isinstance(row.get("device"), int)
+            or row.get("device") < 0
+        ):
+            return False
+    manifest_paths = [row.get("path") for row in manifests if isinstance(row, Mapping)]
+    file_paths = [row.get("path") for row in files if isinstance(row, Mapping)]
+    if len(manifest_paths) != len(manifests) or len(file_paths) != len(files):
+        return False
+    return bool(
+        _device_rows_valid(value.get("manifest_devices"), manifest_paths)
+        and _device_rows_valid(value.get("durable_file_devices"), file_paths)
+    )
+
+
+def _sentinel_predicates_valid(value: Mapping[str, Any]) -> bool:
+    return bool(
+        set(value) == {
+            "target_path",
+            "target_absent",
+            "transaction_artifacts",
+            "cache_path",
+            "cache_absent",
+        }
+        and isinstance(value.get("target_path"), str)
+        and Path(value["target_path"]).is_absolute()
+        and ".." not in Path(value["target_path"]).parts
+        and value.get("target_absent") is True
+        and isinstance(value.get("cache_path"), str)
+        and Path(value["cache_path"]).is_absolute()
+        and ".." not in Path(value["cache_path"]).parts
+        and value.get("cache_absent") is True
+        and value.get("transaction_artifacts") == []
+    )
+
+
 def capture_production_sentinel(
     data_root: Path,
     cache_root: Path,
     target_date_utc: str = TARGET_DATE_UTC,
+    *,
+    mountinfo_lines: Optional[Sequence[str]] = None,
 ) -> Mapping[str, Any]:
-    """Capture an application-independent metadata mutation tripwire."""
+    """Capture durable production state plus session-local filesystem evidence."""
     data_root = Path(data_root)
     cache_root = Path(cache_root)
-    if data_root.is_symlink() or not data_root.is_dir():
+    if (
+        not data_root.is_absolute()
+        or data_root.is_symlink()
+        or not data_root.is_dir()
+        or data_root.resolve(strict=True) != data_root
+    ):
         raise CommissioningError("Production data root is missing or unsafe.")
     target = _production_target(data_root, target_date_utc)
     manifests = []
+    manifest_devices = []
     for path in _manifest_paths(data_root):
         observed = path.stat()
         manifests.append(
             {
                 "path": path.relative_to(data_root).as_posix(),
-                "device": observed.st_dev,
                 "inode": observed.st_ino,
                 "size": observed.st_size,
                 "mtime_ns": observed.st_mtime_ns,
             }
         )
+        manifest_devices.append(
+            {
+                "path": path.relative_to(data_root).as_posix(),
+                "device": observed.st_dev,
+            }
+        )
     directory_metadata = {}
+    directory_devices = {}
     for name, path in (
         ("data_root", data_root),
         ("nightly_root", history.survey_data_root(data_root) / "nightly"),
@@ -587,13 +846,17 @@ def capture_production_sentinel(
         observed = path.stat()
         directory_metadata[name] = {
             "path": str(path),
-            "device": observed.st_dev,
             "inode": observed.st_ino,
             "mode": f"{stat.S_IMODE(observed.st_mode):04o}",
             "mtime_ns": observed.st_mtime_ns,
         }
+        directory_devices[name] = {
+            "path": str(path),
+            "device": observed.st_dev,
+        }
     transaction_artifacts = []
     file_inventory = []
+    file_devices = []
     for directory, names, files in os.walk(data_root, followlinks=False):
         safe_names = []
         for name in names:
@@ -612,12 +875,17 @@ def capture_production_sentinel(
             file_inventory.append(
                 {
                     "path": path.relative_to(data_root).as_posix(),
-                    "device": observed.st_dev,
                     "inode": observed.st_ino,
                     "mode": f"{stat.S_IMODE(observed.st_mode):04o}",
                     "bytes": observed.st_size,
                     "mtime_ns": observed.st_mtime_ns,
                     "sha256": _file_sha256(path),
+                }
+            )
+            file_devices.append(
+                {
+                    "path": path.relative_to(data_root).as_posix(),
+                    "device": observed.st_dev,
                 }
             )
         for name in names + files:
@@ -635,14 +903,35 @@ def capture_production_sentinel(
     checksum_manifest = "".join(
         f"{item['sha256']}  ./{item['path']}\n" for item in ordered_inventory
     ).encode("utf-8")
-    stable = {
-        "data_root_identity": directory_metadata["data_root"],
+    inventory_by_path = {item["path"]: item for item in ordered_inventory}
+    cumulative = history.cumulative_paths(data_root)
+    cumulative_relative = {
+        "loci_index": cumulative["loci_index"].relative_to(data_root).as_posix(),
+        "nightly_summary": cumulative["nightly_summary"].relative_to(
+            data_root
+        ).as_posix(),
+    }
+    try:
+        cumulative_hashes = {
+            name: inventory_by_path[path]["sha256"]
+            for name, path in cumulative_relative.items()
+        }
+    except KeyError as exc:
+        raise CommissioningError(
+            "Production cumulative artifact is missing from the durable inventory."
+        ) from exc
+    durable_state = {
+        "canonical_data_root": str(data_root),
         "directory_metadata": directory_metadata,
         "manifest_inventory": manifests,
         "durable_file_inventory": ordered_inventory,
         "durable_file_count": len(file_inventory),
         "durable_bytes": sum(int(item["bytes"]) for item in file_inventory),
+        "manifest_count": len(manifests),
         "checksum_manifest_sha256": hashlib.sha256(checksum_manifest).hexdigest(),
+        "cumulative_artifact_hashes": cumulative_hashes,
+    }
+    qualification_predicates = {
         "target_path": str(target),
         "target_absent": not target.exists() and not target.is_symlink(),
         "transaction_artifacts": sorted(transaction_artifacts),
@@ -650,10 +939,25 @@ def capture_production_sentinel(
         "cache_absent": not cache_root.exists() and not cache_root.is_symlink(),
     }
     return {
-        "schema_version": "phase6.production-sentinel.v1",
+        "schema_version": PRODUCTION_SENTINEL_SCHEMA_VERSION,
         "captured_at_utc": _iso(_utc_now()),
-        **stable,
-        "fingerprint_sha256": _digest(stable),
+        "durable_state": durable_state,
+        "durable_fingerprint_sha256": _canonical_digest(durable_state),
+        "mount_binding": production_mount_binding(
+            data_root,
+            mountinfo_lines=mountinfo_lines,
+            runtime_device=directory_devices["data_root"]["device"],
+        ),
+        "qualification_predicates": qualification_predicates,
+        "runtime_observation": {
+            "directory_devices": directory_devices,
+            "manifest_devices": sorted(
+                manifest_devices, key=lambda item: item["path"]
+            ),
+            "durable_file_devices": sorted(
+                file_devices, key=lambda item: item["path"]
+            ),
+        },
     }
 
 
@@ -661,21 +965,91 @@ def compare_production_sentinels(
     before: Mapping[str, Any],
     after: Mapping[str, Any],
 ) -> Mapping[str, Any]:
+    before_state = before.get("durable_state")
+    after_state = after.get("durable_state")
+    before_predicates = before.get("qualification_predicates")
+    after_predicates = after.get("qualification_predicates")
+    schema_valid = bool(
+        before.get("schema_version") == PRODUCTION_SENTINEL_SCHEMA_VERSION
+        and after.get("schema_version") == PRODUCTION_SENTINEL_SCHEMA_VERSION
+    )
+    fingerprints_valid = bool(
+        isinstance(before_state, Mapping)
+        and isinstance(after_state, Mapping)
+        and before.get("durable_fingerprint_sha256")
+        == _canonical_digest(before_state)
+        and after.get("durable_fingerprint_sha256")
+        == _canonical_digest(after_state)
+    )
+    durable_equal = bool(
+        fingerprints_valid
+        and before_state == after_state
+        and before.get("durable_fingerprint_sha256")
+        == after.get("durable_fingerprint_sha256")
+    )
+    mount_bindings_valid = bool(
+        _mount_binding_valid(before.get("mount_binding"))
+        and _mount_binding_valid(after.get("mount_binding"))
+    )
+    mount_equal = bool(
+        mount_bindings_valid
+        and before.get("mount_binding") == after.get("mount_binding")
+    )
+    runtime_observations_valid = bool(
+        _runtime_observation_valid(before.get("runtime_observation"), before_state)
+        and _runtime_observation_valid(after.get("runtime_observation"), after_state)
+    )
+    runtime_equal = bool(
+        runtime_observations_valid
+        and before.get("runtime_observation") == after.get("runtime_observation")
+    )
+    predicates_valid = bool(
+        isinstance(before_predicates, Mapping)
+        and isinstance(after_predicates, Mapping)
+        and _sentinel_predicates_valid(before_predicates)
+        and _sentinel_predicates_valid(after_predicates)
+    )
+    predicates_equal = bool(
+        predicates_valid and before_predicates == after_predicates
+    )
     passed = bool(
-        before.get("fingerprint_sha256") == after.get("fingerprint_sha256")
-        and after.get("target_absent") is True
-        and after.get("cache_absent") is True
-        and after.get("transaction_artifacts") == []
+        schema_valid
+        and durable_equal
+        and mount_equal
+        and runtime_equal
+        and predicates_equal
     )
     return {
         "passed": passed,
-        "before_sha256": before.get("fingerprint_sha256"),
-        "after_sha256": after.get("fingerprint_sha256"),
+        "schema_valid": schema_valid,
+        "fingerprints_valid": fingerprints_valid,
+        "durable_state_equal": durable_equal,
+        "mount_bindings_valid": mount_bindings_valid,
+        "mount_binding_equal": mount_equal,
+        "runtime_observations_valid": runtime_observations_valid,
+        "runtime_device_projection_equal": runtime_equal,
+        "qualification_predicates_valid": predicates_valid,
+        "qualification_predicates_equal": predicates_equal,
+        "before_sha256": before.get("durable_fingerprint_sha256"),
+        "after_sha256": after.get("durable_fingerprint_sha256"),
         "publication_attempted": False,
-        "production_target_created": False if after.get("target_absent") is True else True,
+        "production_target_created": (
+            False
+            if isinstance(after_predicates, Mapping)
+            and after_predicates.get("target_absent") is True
+            else True
+        ),
         "scientific_bytes_changed": False if passed else None,
-        "cache_absent": after.get("cache_absent"),
-        "transaction_artifacts": after.get("transaction_artifacts"),
+        "cache_absent": (
+            after_predicates.get("cache_absent")
+            if isinstance(after_predicates, Mapping)
+            else None
+        ),
+        "transaction_artifacts": (
+            after_predicates.get("transaction_artifacts")
+            if isinstance(after_predicates, Mapping)
+            else None
+        ),
     }
 
 
@@ -750,6 +1124,7 @@ def qualify_live_night(
     *,
     production_data_root: Path,
     production_cache_root: Path,
+    production_mountinfo_lines: Optional[Sequence[str]] = None,
     clock: Any = _utc_now,
     checkpoint_event_hook: Optional[
         Callable[[str, Mapping[str, Any]], None]
@@ -1088,14 +1463,16 @@ def qualify_live_night(
             production_data_root,
             production_cache_root,
             spec.science_request.date_utc,
+            mountinfo_lines=production_mountinfo_lines,
         )
         _write_json_atomic(
             evidence_root / "production-sentinel-before.json", before_sentinel
         )
         if write_capability.environment == "arnor-canary":
+            durable_state = before_sentinel["durable_state"]
             inventory_by_path = {
                 item["path"]: item
-                for item in before_sentinel["durable_file_inventory"]
+                for item in durable_state["durable_file_inventory"]
             }
             loci_relative = history.cumulative_paths(production_data_root)[
                 "loci_index"
@@ -1104,11 +1481,11 @@ def qualify_live_night(
                 "nightly_summary"
             ].relative_to(production_data_root).as_posix()
             if (
-                before_sentinel.get("durable_file_count")
+                durable_state.get("durable_file_count")
                 != ACCEPTED_BASELINE["durable_file_count"]
-                or before_sentinel.get("durable_bytes")
+                or durable_state.get("durable_bytes")
                 != ACCEPTED_BASELINE["durable_bytes"]
-                or before_sentinel.get("checksum_manifest_sha256")
+                or durable_state.get("checksum_manifest_sha256")
                 != ACCEPTED_BASELINE["checksum_manifest_sha256"]
                 or inventory_by_path.get(loci_relative, {}).get("sha256")
                 != ACCEPTED_BASELINE["loci_index_sha256"]
@@ -1383,6 +1760,7 @@ def qualify_live_night(
             production_data_root,
             production_cache_root,
             spec.science_request.date_utc,
+            mountinfo_lines=production_mountinfo_lines,
         )
         comparison = compare_production_sentinels(before_sentinel, after_sentinel)
         _write_json_atomic(evidence_root / "production-sentinel-after.json", after_sentinel)
@@ -1515,6 +1893,7 @@ def qualify_live_night(
                     production_data_root,
                     production_cache_root,
                     spec.science_request.date_utc,
+                    mountinfo_lines=production_mountinfo_lines,
                 )
                 failure_comparison = compare_production_sentinels(
                     before_sentinel, failure_after
@@ -1628,10 +2007,12 @@ __all__ = [
     "ACCEPTED_BASELINE",
     "CommissioningError",
     "CommissioningResult",
+    "PRODUCTION_SENTINEL_SCHEMA_VERSION",
     "TARGET_DATE_UTC",
     "capture_production_sentinel",
     "compare_production_sentinels",
     "establish_target_eligibility",
+    "production_mount_binding",
     "qualify_live_night",
     "resource_preflight",
 ]

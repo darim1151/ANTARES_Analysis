@@ -2,7 +2,7 @@
 
 There is deliberately no provider, live-read capability, query callback,
 fetch callback, publication transaction, or checkpoint writer in this path.
-The source binding remains 0.4.1; only the consuming qualification is 0.4.2.
+The source binding remains 0.4.1; only the consuming qualification is 0.4.3.
 """
 
 from __future__ import annotations
@@ -18,11 +18,13 @@ import sys
 from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional, Sequence
 
-CONTRACT = "phase6f.offline-recovery.0.4.1-to-0.4.2.v1"
+CONTRACT = "phase6f.offline-recovery.0.4.1-to-0.4.3.v2"
+SCIENTIFIC_ARTIFACT_CONTRACT = "phase6f.offline-recovery.0.4.1-to-0.4.2.v1"
+SOURCE_IDENTITY_SCHEMA = "phase6f.offline-source-identity.v2"
 SOURCE_VERSION = "0.4.1"
-CONSUMER_VERSION = "0.4.2"
+CONSUMER_VERSION = "0.4.3"
 SOURCE_SHA = "6f68e7b3955bbda08d5d6c5e2319d26cd7d4e829"
 SOURCE_RUN_ID = "phase6d-live-0.4.1-6f68e7b-20260627-20260903T201059Z"
 CANARY_ROOT = Path("/astro/store/shire/ANTARES/work/canary")
@@ -42,7 +44,18 @@ FETCH_POLICY = "bfe06131cbd0a6ce86f7649ccb96bda6e1d5292e7f7546396960108da9cb5442
 QUERY_CONTRACT = "e9927901681136d3129a07b476119e1f13e199caa6c90e3c27ff569d0270ee1c"
 QUERY_ORDER = "634e2846d5602145be7e223861631e47fdba99fb9f984d8e51dcd31841d3465d"
 FETCH_ID = "4df4086c49b698141ed73d0796ad658a42e20c12b4306a1e97752cc4caa240af"
-PRODUCTION_SENTINEL = "90673ce201b8bc7b439ffc58ddee8750728dc07e35d9004c053e18b5e4aaf2a3"
+# These explicit V2 production trust anchors were authorized by Control after
+# separate read-only qualification.  They must never be derived from the state
+# being checked or extended with runtime device identity.
+PRODUCTION_SENTINEL_SCHEMA = "phase6.production-sentinel.v2"
+PRODUCTION_DURABLE_FINGERPRINT: Optional[str] = (
+    "52d9d30f0e004622485ba819af3bb56c81b704c22e7618b086a4ac398a76bf63"
+)
+PRODUCTION_MOUNT_BINDING: Optional[Mapping[str, str]] = {
+    "mount_point": "/astro/store/shire",
+    "filesystem_type": "nfs4",
+    "source": "shire.infiniband:/data/shire",
+}
 PRIOR_HASH = "f75196d18690e610ab6e79231b244c3fddca396a68eea08dd2d0408e91d8b587"
 SUMMARY_HASH = "85c5fac9c242fa2e7993155036ada649336b0affe8ffc8843d2c5733ea765114"
 TIMEOUT_SECONDS = 14400
@@ -66,6 +79,17 @@ def _json(value: Any) -> bytes:
 
 
 def _digest(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _mapping_digest(value: Mapping[str, Any]) -> str:
+    payload = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -112,7 +136,8 @@ def _write_new(path: Path, payload: bytes) -> None:
 def source_identity(root: Path) -> Mapping[str, Any]:
     """Hash all preserved bytes and stable metadata, excluding access times."""
     _real(root)
-    entries = []
+    durable_inventory = []
+    runtime_devices = []
     for path in [root, *sorted(root.rglob("*"))]:
         before = path.lstat()
         _require(stat.S_ISDIR(before.st_mode) or stat.S_ISREG(before.st_mode), "Source contains a link or special file.")
@@ -121,8 +146,133 @@ def source_identity(root: Path) -> Mapping[str, Any]:
         after = path.lstat()
         identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
         _require(identity(before) == identity(after), "Source changed while hashing.")
-        entries.append([str(path.relative_to(root)), *identity(before), digest])
-    return {"sha256": _digest(_json(entries)), "entries": len(entries), "inventory": entries}
+        relative = str(path.relative_to(root))
+        durable_inventory.append(
+            {
+                "path": relative,
+                "inode": before.st_ino,
+                "mode": before.st_mode,
+                "uid": before.st_uid,
+                "gid": before.st_gid,
+                "size": before.st_size,
+                "mtime_ns": before.st_mtime_ns,
+                "ctime_ns": before.st_ctime_ns,
+                "sha256": digest,
+            }
+        )
+        runtime_devices.append({"path": relative, "device": before.st_dev})
+    durable_state = {
+        "canonical_source_root": str(root),
+        "entries": len(durable_inventory),
+        "inventory": durable_inventory,
+    }
+    return {
+        "schema_version": SOURCE_IDENTITY_SCHEMA,
+        "durable_state": durable_state,
+        "durable_sha256": _digest(_json(durable_state)),
+        "runtime_observation": {"devices": runtime_devices},
+    }
+
+
+def _source_runtime_observation_valid(value: Any, durable_state: Any) -> bool:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"devices"}
+        or not isinstance(durable_state, Mapping)
+        or not isinstance(durable_state.get("inventory"), list)
+    ):
+        return False
+    inventory = durable_state["inventory"]
+    devices = value.get("devices")
+    if not isinstance(devices, list) or len(devices) != len(inventory):
+        return False
+    for metadata, observed in zip(inventory, devices):
+        if (
+            not isinstance(metadata, Mapping)
+            or not isinstance(metadata.get("path"), str)
+            or not isinstance(observed, Mapping)
+            or set(observed) != {"path", "device"}
+            or observed.get("path") != metadata.get("path")
+            or isinstance(observed.get("device"), bool)
+            or not isinstance(observed.get("device"), int)
+            or observed.get("device") < 0
+        ):
+            return False
+    return True
+
+
+def compare_source_identities(
+    before: Mapping[str, Any], after: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Compare durable and same-execution source identity separately."""
+
+    before_state = before.get("durable_state")
+    after_state = after.get("durable_state")
+    schemas_valid = bool(
+        before.get("schema_version") == SOURCE_IDENTITY_SCHEMA
+        and after.get("schema_version") == SOURCE_IDENTITY_SCHEMA
+    )
+    digests_valid = bool(
+        isinstance(before_state, Mapping)
+        and isinstance(after_state, Mapping)
+        and before.get("durable_sha256") == _digest(_json(before_state))
+        and after.get("durable_sha256") == _digest(_json(after_state))
+    )
+    durable_equal = bool(
+        digests_valid
+        and before_state == after_state
+        and before.get("durable_sha256") == after.get("durable_sha256")
+    )
+    runtime_observations_valid = bool(
+        _source_runtime_observation_valid(
+            before.get("runtime_observation"), before_state
+        )
+        and _source_runtime_observation_valid(
+            after.get("runtime_observation"), after_state
+        )
+    )
+    runtime_equal = bool(
+        runtime_observations_valid
+        and before.get("runtime_observation") == after.get("runtime_observation")
+    )
+    return {
+        "passed": schemas_valid and durable_equal and runtime_equal,
+        "schemas_valid": schemas_valid,
+        "digests_valid": digests_valid,
+        "durable_state_equal": durable_equal,
+        "runtime_observations_valid": runtime_observations_valid,
+        "runtime_device_projection_equal": runtime_equal,
+    }
+
+
+def qualify_persisted_source_identity(
+    observed: Mapping[str, Any],
+    *,
+    expected_schema: str,
+    expected_durable_sha256: str,
+) -> Mapping[str, Any]:
+    """Check cross-command source identity without comparing runtime devices."""
+
+    durable_state = observed.get("durable_state")
+    _require(
+        expected_schema == SOURCE_IDENTITY_SCHEMA
+        and observed.get("schema_version") == expected_schema,
+        "Preserved source identity schema differs.",
+    )
+    _require(
+        isinstance(durable_state, dict)
+        and observed.get("durable_sha256") == _digest(_json(durable_state)),
+        "Preserved source durable identity is internally inconsistent.",
+    )
+    _require(
+        observed.get("durable_sha256") == expected_durable_sha256,
+        "Preserved source changed since preparation.",
+    )
+    return {
+        "passed": True,
+        "schema_version": expected_schema,
+        "durable_sha256": expected_durable_sha256,
+    }
 
 
 def validate_release_pair(source_version: str, source_sha: str, consumer_version: str, consumer_sha: str) -> None:
@@ -130,7 +280,7 @@ def validate_release_pair(source_version: str, source_sha: str, consumer_version
         (source_version, source_sha, consumer_version) == (SOURCE_VERSION, SOURCE_SHA, CONSUMER_VERSION)
         and re.fullmatch(r"[0-9a-f]{40}", consumer_sha) is not None
         and consumer_sha != SOURCE_SHA,
-        "Only the exact 0.4.1 source to installed 0.4.2 recovery is authorized.",
+        "Only the exact 0.4.1 source to installed 0.4.3 recovery is authorized.",
     )
 
 
@@ -224,21 +374,137 @@ def checkpoint_layout() -> None:
     _require(not any(temporary.iterdir()), "Temporary fetch residue is present.")
 
 
-def production_snapshot() -> Mapping[str, Any]:
+def _configured_production_pins() -> Mapping[str, Any]:
+    _require(
+        PRODUCTION_DURABLE_FINGERPRINT is not None
+        and PRODUCTION_MOUNT_BINDING is not None,
+        "Production V2 qualification pins are unconfigured.",
+    )
+    _require(
+        re.fullmatch(r"[0-9a-f]{64}", str(PRODUCTION_DURABLE_FINGERPRINT))
+        is not None
+        and _production_mount_binding_valid(PRODUCTION_MOUNT_BINDING),
+        "Production V2 qualification pins are malformed.",
+    )
+    return {
+        "schema_version": PRODUCTION_SENTINEL_SCHEMA,
+        "durable_fingerprint_sha256": PRODUCTION_DURABLE_FINGERPRINT,
+        "mount_binding": dict(PRODUCTION_MOUNT_BINDING),
+    }
+
+
+def _production_mount_binding_valid(value: Any) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "mount_point",
+        "filesystem_type",
+        "source",
+    }:
+        return False
+    mount_point = value.get("mount_point")
+    return bool(
+        isinstance(mount_point, str)
+        and Path(mount_point).is_absolute()
+        and ".." not in Path(mount_point).parts
+        and isinstance(value.get("filesystem_type"), str)
+        and value.get("filesystem_type")
+        and isinstance(value.get("source"), str)
+        and value.get("source")
+    )
+
+
+def qualify_production_sentinel(
+    sentinel: Mapping[str, Any],
+    *,
+    expected_schema: str,
+    expected_durable_fingerprint: str,
+    expected_mount_binding: Mapping[str, str],
+) -> Mapping[str, Any]:
+    """Apply explicitly supplied V2 trust anchors without deriving new pins."""
+
+    from .commissioning import PRODUCTION_SENTINEL_SCHEMA_VERSION
+
+    durable_state = sentinel.get("durable_state")
+    predicates = sentinel.get("qualification_predicates")
+    _require(
+        expected_schema == PRODUCTION_SENTINEL_SCHEMA
+        == PRODUCTION_SENTINEL_SCHEMA_VERSION
+        and sentinel.get("schema_version") == expected_schema,
+        "Production sentinel schema differs.",
+    )
+    _require(
+        re.fullmatch(r"[0-9a-f]{64}", expected_durable_fingerprint) is not None
+        and isinstance(durable_state, dict)
+        and sentinel.get("durable_fingerprint_sha256")
+        == _mapping_digest(durable_state),
+        "Production durable fingerprint is internally inconsistent.",
+    )
+    _require(
+        sentinel.get("durable_fingerprint_sha256")
+        == expected_durable_fingerprint,
+        "Production durable state differs from the authorized V2 baseline.",
+    )
+    _require(
+        _production_mount_binding_valid(expected_mount_binding)
+        and _production_mount_binding_valid(sentinel.get("mount_binding"))
+        and sentinel.get("mount_binding") == dict(expected_mount_binding),
+        "Production mount binding differs from the authorized V2 baseline.",
+    )
+    _require(
+        isinstance(predicates, dict)
+        and set(predicates)
+        == {
+            "target_path",
+            "target_absent",
+            "transaction_artifacts",
+            "cache_path",
+            "cache_absent",
+        }
+        and isinstance(predicates.get("target_path"), str)
+        and Path(predicates["target_path"]).is_absolute()
+        and ".." not in Path(predicates["target_path"]).parts
+        and predicates.get("target_absent") is True
+        and isinstance(predicates.get("cache_path"), str)
+        and Path(predicates["cache_path"]).is_absolute()
+        and ".." not in Path(predicates["cache_path"]).parts
+        and predicates.get("cache_absent") is True
+        and predicates.get("transaction_artifacts") == [],
+        "Production target, cache, or transaction-residue predicate differs.",
+    )
+    return {
+        "passed": True,
+        "schema_version": expected_schema,
+        "durable_fingerprint_sha256": expected_durable_fingerprint,
+        "mount_binding": dict(expected_mount_binding),
+    }
+
+
+def production_snapshot(
+    *, mountinfo_lines: Optional[Sequence[str]] = None
+) -> Mapping[str, Any]:
     from .commissioning import capture_production_sentinel, establish_target_eligibility
     from ..history import cumulative_paths
-    sentinel = capture_production_sentinel(DATA_ROOT, CACHE_ROOT)
-    _require(sentinel["fingerprint_sha256"] == PRODUCTION_SENTINEL and sentinel["target_absent"] and sentinel["cache_absent"] and sentinel["transaction_artifacts"] == [], "Production baseline, target absence, or cache absence differs.")
-    _require(sentinel["durable_file_count"] == 324 and sentinel["durable_bytes"] == 1141241743, "Production inventory differs.")
+
+    pins = _configured_production_pins()
+    sentinel = capture_production_sentinel(
+        DATA_ROOT, CACHE_ROOT, mountinfo_lines=mountinfo_lines
+    )
+    qualification = qualify_production_sentinel(
+        sentinel,
+        expected_schema=pins["schema_version"],
+        expected_durable_fingerprint=pins["durable_fingerprint_sha256"],
+        expected_mount_binding=pins["mount_binding"],
+    )
+    durable_state = sentinel["durable_state"]
+    _require(durable_state["durable_file_count"] == 324 and durable_state["durable_bytes"] == 1141241743, "Production inventory differs.")
     paths = cumulative_paths(DATA_ROOT)
     _require(_hash(paths["loci_index"]) == PRIOR_HASH and _hash(paths["nightly_summary"]) == SUMMARY_HASH, "Cumulative identity differs.")
     eligibility = establish_target_eligibility(DATA_ROOT)
     _require(eligibility["passed"] and eligibility["authoritative_manifest_count"] == 90 and eligibility["total_loci"] == 993218 and eligibility["total_alerts"] == 13579707, "Production science baseline differs.")
-    return {"sentinel": sentinel, "eligibility": eligibility}
+    return {"sentinel": sentinel, "qualification": qualification, "eligibility": eligibility}
 
 
 def _root(run_id: str) -> Path:
-    _require(re.fullmatch(r"phase6f-recovery-0[.]4[.]2-[A-Za-z0-9._-]+", run_id) is not None, "Unsafe recovery run id.")
+    _require(re.fullmatch(r"phase6f-recovery-0[.]4[.]3-[A-Za-z0-9._-]+", run_id) is not None, "Unsafe recovery run id.")
     _require(run_id != SOURCE_RUN_ID, "Recovery cannot use the source root.")
     return _real(CANARY_ROOT) / run_id
 
@@ -334,7 +600,7 @@ def prepare(run_id: str, consumer_sha: str) -> Mapping[str, Any]:
     root.mkdir(mode=0o700)
     for name in ("logs", "status", "evidence", "candidate", "tmp", "launcher"):
         (root / name).mkdir(mode=0o700)
-    binding = {"schema_version": CONTRACT, "run_id": run_id, "run_root": str(root), "source_root": str(SOURCE_ROOT), "source_version": SOURCE_VERSION, "source_sha": SOURCE_SHA, "consumer_version": CONSUMER_VERSION, "consumer_sha": consumer_sha, "night": NIGHT, "mjd": list(MJD), "query_identity": QUERY_ID, "fetch_identity": FETCH_ID, "authoritative": False, "publishable": False, "publication_authorized": False, "timeout_seconds": TIMEOUT_SECONDS, "term_grace_seconds": 60, "source_identity": source["sha256"], "production_sentinel": PRODUCTION_SENTINEL, "environment": environment, "resources": {"free_bytes": resources.f_bavail * resources.f_frsize, "free_inodes": resources.f_favail, "memory": memory}}
+    binding = {"schema_version": CONTRACT, "run_id": run_id, "run_root": str(root), "source_root": str(SOURCE_ROOT), "source_version": SOURCE_VERSION, "source_sha": SOURCE_SHA, "consumer_version": CONSUMER_VERSION, "consumer_sha": consumer_sha, "night": NIGHT, "mjd": list(MJD), "query_identity": QUERY_ID, "fetch_identity": FETCH_ID, "authoritative": False, "publishable": False, "publication_authorized": False, "timeout_seconds": TIMEOUT_SECONDS, "term_grace_seconds": 60, "source_identity_schema": SOURCE_IDENTITY_SCHEMA, "source_durable_identity": source["durable_sha256"], "production_qualification": _configured_production_pins(), "environment": environment, "resources": {"free_bytes": resources.f_bavail * resources.f_frsize, "free_inodes": resources.f_favail, "memory": memory}}
     _write_new(root / "evidence/source-before.json", _json(source))
     _write_new(root / "evidence/production-before.json", _json(production))
     _write_new(root / "binding.json", _json(binding))
@@ -347,8 +613,13 @@ def _binding(root: Path, consumer_sha: str) -> Mapping[str, Any]:
     _require(root == _root(root.name) and stat.S_IMODE(root.stat().st_mode) == 0o700 and root.stat().st_uid == os.getuid(), "Recovery root identity differs.")
     binding = _read(root / "binding.json")
     _require(_hash(root / "binding.json") == (root / "binding.sha256").read_text().strip(), "Recovery binding seal differs.")
-    expected = {"schema_version": CONTRACT, "run_id": root.name, "run_root": str(root), "source_root": str(SOURCE_ROOT), "source_version": SOURCE_VERSION, "source_sha": SOURCE_SHA, "consumer_version": CONSUMER_VERSION, "consumer_sha": consumer_sha, "night": NIGHT, "mjd": list(MJD), "query_identity": QUERY_ID, "fetch_identity": FETCH_ID, "authoritative": False, "publishable": False, "publication_authorized": False, "timeout_seconds": TIMEOUT_SECONDS, "production_sentinel": PRODUCTION_SENTINEL}
+    expected = {"schema_version": CONTRACT, "run_id": root.name, "run_root": str(root), "source_root": str(SOURCE_ROOT), "source_version": SOURCE_VERSION, "source_sha": SOURCE_SHA, "consumer_version": CONSUMER_VERSION, "consumer_sha": consumer_sha, "night": NIGHT, "mjd": list(MJD), "query_identity": QUERY_ID, "fetch_identity": FETCH_ID, "authoritative": False, "publishable": False, "publication_authorized": False, "timeout_seconds": TIMEOUT_SECONDS, "source_identity_schema": SOURCE_IDENTITY_SCHEMA, "production_qualification": _configured_production_pins()}
     _require(all(binding.get(key) == value for key, value in expected.items()), "Recovery contract binding differs.")
+    _require(
+        re.fullmatch(r"[0-9a-f]{64}", str(binding.get("source_durable_identity")))
+        is not None,
+        "Recovery source identity binding differs.",
+    )
     return binding
 
 
@@ -367,6 +638,8 @@ def reconstruct(root: Path, consumer_sha: str) -> Mapping[str, Any]:
     guard = OfflineGuard(root)
     guard.install()
     final = {"schema_version": CONTRACT, "run_id": root.name, "success": False, "authoritative": False, "publishable": False, "publication_attempted": False, "environment": environment}
+    source_before = None
+    production_before = None
     stage = "source_reproof"
     def progress(name, **details):
         nonlocal stage
@@ -378,8 +651,12 @@ def reconstruct(root: Path, consumer_sha: str) -> Mapping[str, Any]:
     try:
         progress(stage)
         source_before = source_identity(SOURCE_ROOT)
-        _require(source_before["sha256"] == binding["source_identity"], "Preserved source changed since preparation.")
-        production_snapshot()
+        qualify_persisted_source_identity(
+            source_before,
+            expected_schema=binding["source_identity_schema"],
+            expected_durable_sha256=binding["source_durable_identity"],
+        )
+        production_before = production_snapshot()
         checkpoint_layout()
         query_manifest = _read(SOURCE_ROOT / "checkpoints/query-result/manifest.json")
         fetch_manifest = _read(SOURCE_ROOT / "checkpoints/live-fetch-v1/checkpoint.json")
@@ -411,7 +688,7 @@ def reconstruct(root: Path, consumer_sha: str) -> Mapping[str, Any]:
         progress("science_preparation")
         loci = history.prepare_loci(query_result.loci, NIGHT, *MJD, query_result.evidence.details["request_completed_at_utc"], source_query_mode="probe_first_time_ra_dec")
         alerts = history.prepare_alerts(raw_alerts, NIGHT, request.range_label)
-        details = {"completion_classification": "COMPLETE_NONZERO", "requested_objects": OBJECTS, "completed_objects": OBJECTS, "failed_objects": 0, "failed_object_identity_sha256": _digest(b""), "failure_exception_types": [], "retry_exception_types": list(completion.retry_exception_types), "retry_count": completion.retry_count, "lightcurves_with_rows": with_rows, "lightcurves_empty": OBJECTS - with_rows, "full_locus_history_requests": OBJECTS, "full_locus_history_completed": OBJECTS, "alert_rows": ALERTS, "max_workers": 4, "effective_workers": min(4, OBJECTS), "max_in_flight_futures": min(OBJECTS, min(4, OBJECTS) * 4), "max_attempts_per_object": 3, "cache_used": False, "secret_material_recorded": False, "checkpoint": completion.as_dict(), "offline_recovery": {"contract": CONTRACT, "new_history_requests": 0, "source_root": str(SOURCE_ROOT)}}
+        details = {"completion_classification": "COMPLETE_NONZERO", "requested_objects": OBJECTS, "completed_objects": OBJECTS, "failed_objects": 0, "failed_object_identity_sha256": _digest(b""), "failure_exception_types": [], "retry_exception_types": list(completion.retry_exception_types), "retry_count": completion.retry_count, "lightcurves_with_rows": with_rows, "lightcurves_empty": OBJECTS - with_rows, "full_locus_history_requests": OBJECTS, "full_locus_history_completed": OBJECTS, "alert_rows": ALERTS, "max_workers": 4, "effective_workers": min(4, OBJECTS), "max_in_flight_futures": min(OBJECTS, min(4, OBJECTS) * 4), "max_attempts_per_object": 3, "cache_used": False, "secret_material_recorded": False, "checkpoint": completion.as_dict(), "offline_recovery": {"contract": SCIENTIFIC_ARTIFACT_CONTRACT, "new_history_requests": 0, "source_root": str(SOURCE_ROOT)}}
         fetch = FetchStageEvidence(True, False, len(loci), len(alerts), (), details)
         evidence = _result_evidence(query_result.evidence, fetch)
         validation = history.validation_summary(loci, alerts, mjd_min=MJD[0], mjd_max=MJD[1], prior_locus_ids=request.prior_locus_ids, lsst_only=True, query_completed=True, query_fetch_clean=evidence.clean, mjd_upper_exclusive=True)
@@ -420,7 +697,7 @@ def reconstruct(root: Path, consumer_sha: str) -> Mapping[str, Any]:
         progress("artifact_build")
         artifacts = build_night_artifacts(result)
         manifest = json.loads(artifacts["manifest.json"])
-        manifest.update({"authoritative": False, "publishable": False, "publication_authorized": False, "offline_recovery_contract": CONTRACT})
+        manifest.update({"authoritative": False, "publishable": False, "publication_authorized": False, "offline_recovery_contract": SCIENTIFIC_ARTIFACT_CONTRACT})
         artifacts["manifest.json"] = _json(manifest)
         progress("artifact_reopen")
         reopen_and_validate_artifacts(artifacts, expected=result)
@@ -444,18 +721,25 @@ def reconstruct(root: Path, consumer_sha: str) -> Mapping[str, Any]:
         final.update({"success": False, "status": "BLOCKED", "stage": stage, "error_type": type(error).__name__, "error_code": getattr(error, "code", type(error).__name__)})
     finally:
         try:
+            _require(source_before is not None, "Source baseline observation is missing.")
             source_after = source_identity(SOURCE_ROOT)
             _write_new(root / "evidence/source-after.json", _json(source_after))
-            final["source_before_sha256"] = binding["source_identity"]
-            final["source_after_sha256"] = source_after["sha256"]
-            _require(source_after["sha256"] == binding["source_identity"], "Source mutation detected.")
+            final["source_before_sha256"] = source_before["durable_sha256"]
+            final["source_after_sha256"] = source_after["durable_sha256"]
+            _require(compare_source_identities(source_before, source_after)["passed"], "Source mutation or runtime device transition detected.")
         except Exception as error:
             final.update({"success": False, "status": "BLOCKED", "source_invariant_error_type": type(error).__name__})
         try:
+            _require(production_before is not None, "Production baseline observation is missing.")
             after = production_snapshot()
             _write_new(root / "evidence/production-after.json", _json(after))
-            final["production_before_sha256"] = PRODUCTION_SENTINEL
-            final["production_after_sha256"] = after["sentinel"]["fingerprint_sha256"]
+            from .commissioning import compare_production_sentinels
+            comparison = compare_production_sentinels(
+                production_before["sentinel"], after["sentinel"]
+            )
+            _require(comparison["passed"], "Production mutation or runtime device transition detected.")
+            final["production_before_sha256"] = production_before["sentinel"]["durable_fingerprint_sha256"]
+            final["production_after_sha256"] = after["sentinel"]["durable_fingerprint_sha256"]
         except Exception as error:
             final.update({"success": False, "status": "BLOCKED", "production_invariant_error_type": type(error).__name__})
         final["callback_and_network_counts"] = dict(guard.counts)
@@ -486,7 +770,7 @@ def audit(root: Path, consumer_sha: str) -> Mapping[str, Any]:
     reopened = reopen_and_validate_artifacts(payloads)
     _require(len(reopened.loci) == OBJECTS and len(reopened.alerts) == ALERTS, "Independent scientific counts differ.")
     manifest = json.loads(payloads["manifest.json"])
-    _require(manifest.get("authoritative") is False and manifest.get("publishable") is False and manifest.get("publication_authorized") is False and manifest.get("offline_recovery_contract") == CONTRACT, "Qualification publication boundary differs.")
+    _require(manifest.get("authoritative") is False and manifest.get("publishable") is False and manifest.get("publication_authorized") is False and manifest.get("offline_recovery_contract") == SCIENTIFIC_ARTIFACT_CONTRACT, "Qualification publication boundary differs.")
     return {"schema_version": CONTRACT, "success": True, "artifacts": observed, "validation": manifest["validation"], "loci": len(reopened.loci), "alerts": len(reopened.alerts), "environment": environment, "callback_and_network_counts": guard.counts}
 
 

@@ -580,6 +580,32 @@ class LockAndTransactionTests(unittest.TestCase):
             transaction.abort()
             lock.release()
 
+    def test_precommit_rejects_stage_target_device_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            capability = self._capability(temporary)
+            lock = self._lock(capability)
+            transaction = self._staged(capability, lock)
+            transaction.validate(lambda stage: True)
+            real_stat = os.stat
+
+            def different_target_device(path, *args, **kwargs):
+                observed = real_stat(path, *args, **kwargs)
+                if Path(path) == transaction.target.parent:
+                    fields = list(observed)
+                    fields[stat.ST_DEV] = observed.st_dev + 1
+                    return os.stat_result(fields)
+                return observed
+
+            with mock.patch.object(
+                transaction_module.os, "stat", side_effect=different_target_device
+            ), self.assertRaisesRegex(TransactionError, "same-filesystem"):
+                transaction.precommit_reprove()
+
+            self.assertEqual(transaction.state, ExecutionState.FAILED)
+            self.assertFalse(transaction.target.exists())
+            transaction.abort()
+            lock.release()
+
     def test_staging_write_failure_is_terminal_and_abort_cleans_stage(self):
         with tempfile.TemporaryDirectory() as temporary:
             capability = self._capability(temporary)

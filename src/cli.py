@@ -44,7 +44,7 @@ from src.operations.writer import WriterError, production_ingest_refusal
 
 
 DIST_NAME = "antares-analysis"
-SOURCE_VERSION = "0.4.2"
+SOURCE_VERSION = "0.4.3"
 PROFILE_CHOICES = ("auto", "environment", *sorted(BUILTIN_PROFILES))
 
 
@@ -516,7 +516,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     night_offline = night_commands.add_parser(
         "recover-offline",
-        help="qualify only the sealed 0.4.1 June 27 checkpoints under 0.4.2",
+        help=(
+            "prepare future sealed 0.4.1-to-0.4.3 qualification; "
+            "authorized production V2 pins are required"
+        ),
     )
     night_offline.add_argument("action", choices=("prepare", "run", "audit"))
     night_offline.add_argument("--run-id", required=True)

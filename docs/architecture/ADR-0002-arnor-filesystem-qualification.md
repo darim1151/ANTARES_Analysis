@@ -7,6 +7,21 @@ Administrative update (2026-08-26): the single-root correction in ADR-0003 was
 accepted and Phase 5 resumed. Phase 4 qualification evidence remains valid
 historical evidence; current project paths are governed by ADR-0003.
 
+Administrative update (2026-09-13): device 55 remains the historical Phase 4
+observation, not a durable re-entry invariant. Production sentinel V2 separates
+release-bound durable production state from runtime filesystem identity. Its
+logical mount binding consists only of the resolved mount point, filesystem
+type, and source/export. Absolute `st_dev` is retained for same-execution and
+transaction-local checks and is excluded from cross-run fingerprints.
+
+Administrative update (2026-09-14): after separate read-only qualification,
+Control authorized the V2 durable fingerprint and logical mount binding as
+explicit source pins. Sentinel capture ties the selected mountinfo entry to the
+live production-root `st_dev`: among the longest enclosing candidates exactly
+one must have the same major/minor device identity. Zero or multiple matches
+fail closed. That device identity remains runtime evidence and is not persisted
+in the durable production fingerprint or logical mount-binding pin.
+
 ## Context
 
 Phase 3 established proof-only writer contracts. Phase 4 exercised those
@@ -165,9 +180,10 @@ reconciliation failure never rolls back the night.
 - Measure filesystem bytes and inodes separately on the target mount.
 - Report quota separately. Arnor exposed no user quota through `quota`; this is
   not evidence of unlimited capacity.
-- Re-prove canonical containment, ownership, mount identity, device, cache/data
-  separation, target absence, lock state, and baseline identity immediately
-  before mutation.
+- Re-prove canonical containment, ownership, durable logical mount binding,
+  current-session device relationships, cache/data separation, target absence,
+  lock state, and baseline identity immediately before mutation. Do not compare
+  an absolute current device number with a historical release pin.
 - Deploy immutable release-specific environments under
   `/astro/users/mdarim/opt/antares-analysis/releases/<git-sha>/venv`.
 - CLI and Jupyter must import the same installed operations package. A source

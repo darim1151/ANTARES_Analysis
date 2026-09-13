@@ -150,6 +150,11 @@ Immediately before publication the writer re-proves:
 - target absence;
 - same-device staging and publication.
 
+These device and inode identities are transaction-local observations. Sentinel
+V2's exclusion of historical absolute `st_dev` from durable production identity
+does not weaken or replace any staged-artifact, capability-root, target-parent,
+hard-link, lock, journal, or recovery device check in this contract.
+
 Publication follows ADR-0002. It atomically reserves the absent target with a
 descriptor-relative `mkdir`, pins the directory, hard-links validated loci and
 alerts, fsyncs and re-proves them, links the validated manifest to a pending

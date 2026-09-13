@@ -6,6 +6,28 @@ This project still uses ANTARES as the broker/source. The workflows can run on
 Middle Earth or Rubin Science Platform (RSP); neither environment is a direct
 Rubin Butler/TAP replacement.
 
+## Release 0.4.3 candidate
+
+The production sentinel now separates durable cross-run state from live
+filesystem-session evidence. Durable production identity retains the canonical
+namespace, exact file and manifest inventories, hashes, counts, sizes, inodes,
+modes, and modification times. Linux `st_dev` values are recorded and compared
+only within one protected execution. A separate logical mount binding records
+the resolved mount point, filesystem type, and source/export.
+
+The corresponding offline-source identity applies the same separation. Version
+1 sentinels and preparation bindings, mixed V1/V2 observations, and prepared
+0.4.2 recovery roots are refused by the V2 path. Existing roots remain
+historical evidence and are never modified.
+
+This source tree contains the separately qualified, Control-authorized
+production V2 durable fingerprint and logical mount-binding pins as explicit
+constants. Runtime device identity is not part of either pin. Release 0.4.3 is
+still a candidate only: no recovery, publication, deployment, immutable
+release, or tag is claimed by these changes. Query, checkpoint, scientific
+reconstruction, artifact serialization, and publication transaction semantics
+are unchanged.
+
 ## Release 0.4.2
 
 Survey identifier comparison now preserves exact numeric identity, distinguishes

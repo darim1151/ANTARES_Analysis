@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import tempfile
 import threading
 import time
@@ -18,11 +19,15 @@ import numpy as np
 import pandas as pd
 
 from src import cli, history, query as query_module
+from src.operations import offline_recovery as recovery
 from src.operations.commissioning import (
+    PRODUCTION_SENTINEL_SCHEMA_VERSION,
+    CommissioningError,
     TARGET_DATE_UTC,
     capture_production_sentinel,
     compare_production_sentinels,
     establish_target_eligibility,
+    production_mount_binding,
     qualify_live_night,
 )
 from src.operations.live_antares import (
@@ -286,6 +291,7 @@ def _mock_provider(
 
 
 def _accepted_fixture(root):
+    root = Path(root).resolve()
     data_root = root / "production"
     nightly_root = history.survey_data_root(data_root) / "nightly"
     start = date(2026, 2, 25)
@@ -334,6 +340,45 @@ def _accepted_fixture(root):
     )
     pd.DataFrame({"locus_id": []}).to_parquet(cumulative["loci_index"], index=False)
     return data_root, root / "cache"
+
+
+def _mountinfo_for(
+    path,
+    *,
+    source="fixture:/production",
+    filesystem_type="nfs4",
+    device=None,
+):
+    mount_point = Path(path).resolve()
+    encoded = str(mount_point).replace(" ", r"\040")
+    if device is None:
+        device = mount_point.stat().st_dev
+    major_minor = f"{os.major(device)}:{os.minor(device)}"
+    return [
+        f"101 1 {major_minor} / {encoded} rw - "
+        f"{filesystem_type} {source} rw"
+    ]
+
+
+class _StatWithDevice:
+    def __init__(self, observed, device):
+        self._observed = observed
+        self.st_dev = device
+
+    def __getattr__(self, name):
+        return getattr(self._observed, name)
+
+
+def _durable_digest(value):
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _commissioning_capabilities(base, run_id):
@@ -1725,30 +1770,319 @@ class CarriedInvariantTests(unittest.TestCase):
 
 
 class CommissioningOrchestrationTests(unittest.TestCase):
-    def test_target_eligibility_and_tripwire(self):
+    def test_target_eligibility_and_v2_tripwire(self):
         with tempfile.TemporaryDirectory() as temporary:
             data_root, cache_root = _accepted_fixture(Path(temporary))
+            mountinfo = _mountinfo_for(data_root)
             eligibility = establish_target_eligibility(data_root)
             self.assertTrue(eligibility["passed"])
             self.assertEqual(eligibility["mjd_min"], 61218.0)
             self.assertEqual(eligibility["mjd_max"], 61219.0)
-            before = capture_production_sentinel(data_root, cache_root)
+            before = capture_production_sentinel(
+                data_root, cache_root, mountinfo_lines=mountinfo
+            )
+            self.assertEqual(
+                before["schema_version"], PRODUCTION_SENTINEL_SCHEMA_VERSION
+            )
+            state = before["durable_state"]
             normalized_manifest = "".join(
                 f"{item['sha256']}  ./{item['path']}\n"
-                for item in before["durable_file_inventory"]
+                for item in state["durable_file_inventory"]
             ).encode("utf-8")
             self.assertEqual(
-                before["checksum_manifest_sha256"],
+                state["checksum_manifest_sha256"],
                 hashlib.sha256(normalized_manifest).hexdigest(),
             )
-            after = capture_production_sentinel(data_root, cache_root)
+            self.assertEqual(
+                before["durable_fingerprint_sha256"], _durable_digest(state)
+            )
+            self.assertFalse(
+                any(
+                    "device" in item
+                    for item in state["durable_file_inventory"]
+                )
+            )
+            after = capture_production_sentinel(
+                data_root, cache_root, mountinfo_lines=mountinfo
+            )
             self.assertTrue(compare_production_sentinels(before, after)["passed"])
             paths = history.nightly_paths(data_root, "2026-06-26")
             paths["loci"].write_bytes(b"changed-in-place")
-            changed = capture_production_sentinel(data_root, cache_root)
+            changed = capture_production_sentinel(
+                data_root, cache_root, mountinfo_lines=mountinfo
+            )
             comparison = compare_production_sentinels(before, changed)
             self.assertFalse(comparison["passed"])
             self.assertIsNone(comparison["scientific_bytes_changed"])
+
+    def test_v2_real_capture_cross_session_device_regression(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data_root, cache_root = _accepted_fixture(Path(temporary))
+            first_device = data_root.stat().st_dev
+            first = capture_production_sentinel(
+                data_root,
+                cache_root,
+                mountinfo_lines=_mountinfo_for(
+                    data_root, device=first_device
+                ),
+            )
+            second_device = os.makedev(
+                os.major(first_device), os.minor(first_device) + 1
+            )
+            real_stat = Path.stat
+            real_lstat = Path.lstat
+
+            def stat_with_second_device(path, *args, **kwargs):
+                return _StatWithDevice(
+                    real_stat(path, *args, **kwargs), second_device
+                )
+
+            def lstat_with_second_device(path, *args, **kwargs):
+                return _StatWithDevice(
+                    real_lstat(path, *args, **kwargs), second_device
+                )
+
+            with mock.patch.object(
+                Path, "stat", stat_with_second_device
+            ), mock.patch.object(Path, "lstat", lstat_with_second_device):
+                second = capture_production_sentinel(
+                    data_root,
+                    cache_root,
+                    mountinfo_lines=_mountinfo_for(
+                        data_root, device=second_device
+                    ),
+                )
+
+            self.assertNotEqual(first_device, second_device)
+            self.assertEqual(first["durable_state"], second["durable_state"])
+            self.assertEqual(
+                first["durable_fingerprint_sha256"],
+                second["durable_fingerprint_sha256"],
+            )
+            expected = {
+                "expected_schema": PRODUCTION_SENTINEL_SCHEMA_VERSION,
+                "expected_durable_fingerprint": first[
+                    "durable_fingerprint_sha256"
+                ],
+                "expected_mount_binding": first["mount_binding"],
+            }
+            self.assertTrue(
+                recovery.qualify_production_sentinel(first, **expected)[
+                    "passed"
+                ]
+            )
+            self.assertTrue(
+                recovery.qualify_production_sentinel(second, **expected)[
+                    "passed"
+                ]
+            )
+            comparison = compare_production_sentinels(first, second)
+            self.assertFalse(comparison["passed"])
+            self.assertFalse(comparison["runtime_device_projection_equal"])
+            for observed in (first, second):
+                durable = observed["durable_state"]
+                self.assertTrue(
+                    all(
+                        "device" not in item
+                        for item in durable["directory_metadata"].values()
+                    )
+                )
+                self.assertTrue(
+                    all(
+                        "device" not in item
+                        for item in durable["manifest_inventory"]
+                    )
+                )
+                self.assertTrue(
+                    all(
+                        "device" not in item
+                        for item in durable["durable_file_inventory"]
+                    )
+                )
+
+    def test_v2_tripwire_rejects_runtime_mount_inventory_and_predicate_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data_root, cache_root = _accepted_fixture(Path(temporary))
+            before = capture_production_sentinel(
+                data_root, cache_root, mountinfo_lines=_mountinfo_for(data_root)
+            )
+
+            runtime_changed = deepcopy(before)
+            runtime_changed["runtime_observation"]["directory_devices"][
+                "data_root"
+            ]["device"] += 1
+            result = compare_production_sentinels(before, runtime_changed)
+            self.assertFalse(result["passed"])
+            self.assertFalse(result["runtime_device_projection_equal"])
+
+            mount_changed = deepcopy(before)
+            mount_changed["mount_binding"]["source"] = "substitute:/export"
+            self.assertFalse(
+                compare_production_sentinels(before, mount_changed)["passed"]
+            )
+            for component in ("mount_binding", "runtime_observation"):
+                malformed = deepcopy(before)
+                malformed.pop(component)
+                with self.subTest(missing_component=component):
+                    self.assertFalse(
+                        compare_production_sentinels(before, malformed)["passed"]
+                    )
+
+            for field, value in (
+                ("target_absent", False),
+                ("cache_absent", False),
+                ("transaction_artifacts", ["transaction-residue"]),
+            ):
+                changed = deepcopy(before)
+                changed["qualification_predicates"][field] = value
+                with self.subTest(predicate=field):
+                    self.assertFalse(
+                        compare_production_sentinels(before, changed)["passed"]
+                    )
+
+            mutations = (
+                ("path", "renamed/path"),
+                ("inode", before["durable_state"]["durable_file_inventory"][0]["inode"] + 1),
+                ("mode", "0600"),
+                ("mtime_ns", before["durable_state"]["durable_file_inventory"][0]["mtime_ns"] + 1),
+            )
+            for field, value in mutations:
+                changed = deepcopy(before)
+                changed["durable_state"]["durable_file_inventory"][0][field] = value
+                changed["durable_fingerprint_sha256"] = _durable_digest(
+                    changed["durable_state"]
+                )
+                with self.subTest(durable_field=field):
+                    self.assertFalse(
+                        compare_production_sentinels(before, changed)["passed"]
+                    )
+
+    def test_v2_tripwire_rejects_v1_and_mixed_schema_observations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data_root, cache_root = _accepted_fixture(Path(temporary))
+            current = capture_production_sentinel(
+                data_root, cache_root, mountinfo_lines=_mountinfo_for(data_root)
+            )
+            old = deepcopy(current)
+            old["schema_version"] = "phase6.production-sentinel.v1"
+            self.assertFalse(compare_production_sentinels(old, old)["passed"])
+            self.assertFalse(compare_production_sentinels(old, current)["passed"])
+
+    def test_mountinfo_binding_longest_escape_and_fail_closed_cases(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "mount with space"
+            production = root / "ANTARES" / "data"
+            production.mkdir(parents=True)
+            encoded_root = str(root).replace(" ", r"\040")
+            encoded_production = str(production).replace(" ", r"\040")
+            invalid_escaped_production = str(production).replace(" ", r"\041")
+            device = production.stat().st_dev
+            major_minor = f"{os.major(device)}:{os.minor(device)}"
+            lines = [
+                "1 0 0:1 / / rw - rootfs root rw",
+                f"2 1 0:2 / {encoded_root} rw - nfs4 fixture:/shire rw",
+                f"3 2 {major_minor} / {encoded_production} rw "
+                "- nfs4 fixture:/production rw",
+            ]
+            self.assertEqual(
+                production_mount_binding(production, mountinfo_lines=lines),
+                {
+                    "mount_point": str(production),
+                    "filesystem_type": "nfs4",
+                    "source": "fixture:/production",
+                },
+            )
+            for bad_lines in (
+                ["malformed mountinfo"],
+                [
+                    f"not-an-id 2 0:3 / {encoded_production} rw "
+                    "- nfs4 fixture:/production rw"
+                ],
+                [
+                    f"3 2 0:3 / {invalid_escaped_production} rw "
+                    "- nfs4 fixture:/production rw"
+                ],
+                ["1 0 0:1 / /unrelated rw - nfs4 fixture:/other rw"],
+                [lines[-1], lines[-1]],
+            ):
+                with self.subTest(lines=bad_lines), self.assertRaises(
+                    CommissioningError
+                ):
+                    production_mount_binding(
+                        production, mountinfo_lines=bad_lines
+                    )
+
+    def test_mountinfo_binding_requires_unique_longest_device_match(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            production = root / "production"
+            production.mkdir()
+            encoded_root = str(root).replace(" ", r"\040")
+            encoded_production = str(production).replace(" ", r"\040")
+            device = production.stat().st_dev
+            matching = f"{os.major(device)}:{os.minor(device)}"
+            mismatch_one = f"{os.major(device) + 1}:{os.minor(device)}"
+            mismatch_two = f"{os.major(device) + 2}:{os.minor(device)}"
+            parent = (
+                f"1 0 {matching} / {encoded_root} rw "
+                "- nfs4 fixture:/parent rw"
+            )
+
+            def candidate(identifier, major_minor, source):
+                return (
+                    f"{identifier} 1 {major_minor} / {encoded_production} rw "
+                    f"- nfs4 {source} rw"
+                )
+
+            accepted = candidate(2, matching, "fixture:/accepted")
+            self.assertEqual(
+                production_mount_binding(
+                    production, mountinfo_lines=[parent, accepted]
+                ),
+                {
+                    "mount_point": str(production),
+                    "filesystem_type": "nfs4",
+                    "source": "fixture:/accepted",
+                },
+            )
+            with self.assertRaises(CommissioningError):
+                production_mount_binding(
+                    production,
+                    mountinfo_lines=[
+                        parent,
+                        candidate(2, mismatch_one, "fixture:/wrong"),
+                    ],
+                )
+
+            one_match = [
+                parent,
+                candidate(2, mismatch_one, "fixture:/wrong"),
+                candidate(3, matching, "fixture:/selected"),
+            ]
+            self.assertEqual(
+                production_mount_binding(
+                    production, mountinfo_lines=one_match
+                )["source"],
+                "fixture:/selected",
+            )
+            for candidates in (
+                [
+                    parent,
+                    candidate(2, mismatch_one, "fixture:/wrong-one"),
+                    candidate(3, mismatch_two, "fixture:/wrong-two"),
+                ],
+                [
+                    parent,
+                    candidate(2, matching, "fixture:/match-one"),
+                    candidate(3, matching, "fixture:/match-two"),
+                ],
+            ):
+                with self.subTest(candidates=candidates), self.assertRaises(
+                    CommissioningError
+                ):
+                    production_mount_binding(
+                        production, mountinfo_lines=candidates
+                    )
 
     def test_mocked_commissioning_retains_candidate_without_publication(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1789,6 +2123,7 @@ class CommissioningOrchestrationTests(unittest.TestCase):
                 spec,
                 production_data_root=data_root,
                 production_cache_root=cache_root,
+                production_mountinfo_lines=_mountinfo_for(data_root),
             )
             self.assertTrue(result.report.success, result.report.to_json())
             self.assertIsNotNone(result.stage)
@@ -1864,6 +2199,7 @@ class CommissioningOrchestrationTests(unittest.TestCase):
                             spec,
                             production_data_root=data_root,
                             production_cache_root=cache_root,
+                            production_mountinfo_lines=_mountinfo_for(data_root),
                         )
 
                     self.assertFalse(result.report.success)
@@ -1941,6 +2277,7 @@ class CommissioningOrchestrationTests(unittest.TestCase):
                 ),
                 production_data_root=data_root,
                 production_cache_root=cache_root,
+                production_mountinfo_lines=_mountinfo_for(data_root),
                 checkpoint_event_hook=stop,
             )
             self.assertFalse(first.report.success)
@@ -1976,6 +2313,7 @@ class CommissioningOrchestrationTests(unittest.TestCase):
                 ),
                 production_data_root=data_root,
                 production_cache_root=cache_root,
+                production_mountinfo_lines=_mountinfo_for(data_root),
             )
             self.assertTrue(resumed.report.success, resumed.report.to_json())
             self.assertTrue(resumed.report.details["query_checkpoint_reused"])
@@ -2029,6 +2367,7 @@ class CommissioningOrchestrationTests(unittest.TestCase):
                         ),
                         production_data_root=data_root,
                         production_cache_root=cache_root,
+                        production_mountinfo_lines=_mountinfo_for(data_root),
                     )
                 self.assertFalse(first.report.success)
                 self.assertEqual(
@@ -2062,6 +2401,7 @@ class CommissioningOrchestrationTests(unittest.TestCase):
                     ),
                     production_data_root=data_root,
                     production_cache_root=cache_root,
+                    production_mountinfo_lines=_mountinfo_for(data_root),
                 )
                 self.assertTrue(resumed.report.success, resumed.report.to_json())
                 self.assertTrue(resumed.report.details["query_checkpoint_reused"])
@@ -2297,6 +2637,7 @@ class CommissioningOrchestrationTests(unittest.TestCase):
                 ),
                 production_data_root=data_root,
                 production_cache_root=cache_root,
+                production_mountinfo_lines=_mountinfo_for(data_root),
             )
             self.assertFalse(result.report.success)
             comparison = json.loads(

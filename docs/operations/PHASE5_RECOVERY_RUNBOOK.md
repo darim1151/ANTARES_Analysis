@@ -123,6 +123,18 @@ Retain:
 - whether `manifest.json` and `.manifest.pending` are visible;
 - whether client fsync and independent reopen were durably recorded.
 
+Interpret device values as evidence about the observed transaction and mount
+session. They must continue to agree wherever same-filesystem publication,
+hard-link closure, or same-execution identity requires it, but they are not a
+release-pinned production-state identifier. Production sentinel V2 instead
+uses a durable state fingerprint plus the reviewed logical mount point,
+filesystem type, and source/export. Its production pins are explicit,
+Control-authorized source constants. During capture, the live production-root
+`st_dev` must match exactly one of the longest enclosing mountinfo candidates;
+zero or multiple device matches fail closed. The device is retained only as
+runtime evidence and is excluded from the durable fingerprint and logical
+mount-binding pin.
+
 Do not include credentials, ANTARES tokens, or private science in a shareable
 report.
 
@@ -141,4 +153,6 @@ or production-cleanup command.
 Stop and obtain a reviewed, transaction-specific operator decision if any path
 is outside the expected run, any identity differs between observations,
 production science is involved, a lock is active or ambiguous, publication is
-indeterminate, or accepted science/checksum sentinels change.
+indeterminate, accepted durable science/checksum state changes, the logical
+mount binding changes, or a device transition occurs during the protected
+execution.
