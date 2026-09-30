@@ -102,11 +102,11 @@ PRIOR_FREE_ACQUISITION_ATTESTATIONS: Tuple[Mapping[str, str], ...] = (
         "scenario": "commissioning-v1",
         "provider_module": "src.operations.live_antares",
         "provider_implementation_sha256": (
-            "5e7d4240ed97ac0dea9a4887c0d39ddc7f61b2b225b5237a5bb3c8ab10f11713"
+            "f22578a51ca65a3cf41d7fc8690fc026ccc0a16aefb300fc9c488cfb99c04199"
         ),
         "adapter": "src.operations.live_antares.LiveAntaresProvider",
         "adapter_implementation_sha256": (
-            "5e7d4240ed97ac0dea9a4887c0d39ddc7f61b2b225b5237a5bb3c8ab10f11713"
+            "f22578a51ca65a3cf41d7fc8690fc026ccc0a16aefb300fc9c488cfb99c04199"
         ),
         "evidence": "V3-G5 local qualification: same prior-free selection and fetch; durable tile traversal",
     },
@@ -118,9 +118,9 @@ RANGE_PRIOR_FREE_ACQUISITION_ATTESTATIONS: Tuple[Mapping[str, str], ...] = (
     {
         "provider_name": "live-antares", "scenario": "commissioning-v1",
         "provider_module": "src.operations.live_antares",
-        "provider_implementation_sha256": "5e7d4240ed97ac0dea9a4887c0d39ddc7f61b2b225b5237a5bb3c8ab10f11713",
+        "provider_implementation_sha256": "f22578a51ca65a3cf41d7fc8690fc026ccc0a16aefb300fc9c488cfb99c04199",
         "adapter": "src.operations.production_range.LiveRangeAdapter",
-        "adapter_implementation_sha256": "1e5e8d8c9717aea9ef489ee6c0282a238842ad41b3754d349c1bfdc2d6694555",
+        "adapter_implementation_sha256": "81ce9209f182d61ca5f9c6bdb5c7722c90c09421b78156d1ac36be0a0da78f1c",
         "evidence": "V3-G5 local qualification of per-night prior-free live range adapter",
     },
 )
@@ -1297,6 +1297,8 @@ class BackfillController:
             self.range_authorization.digest if self.range_authorization else None
         )
         document["cache"] = self.cache.statistics() if self.cache is not None else None
+        # Range provenance: the detached Control approval activating publication.
+        document["control_approval_sha256"] = getattr(self.publisher, "control_approval_sha256", None)
         with self._range_lock:
             path = self._range_path(start, end)
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

@@ -20,7 +20,8 @@ from .query_checkpoint import (
     _parse_canonical_object, _read_regular_at, _sha256, _write_new_file_at,
 )
 
-SCHEMA = "v3.adaptive-query-progress.v1"
+SCHEMA = "v3.adaptive-query-progress.v2"  # v2: explicit invocation boundaries
+DIRECTORY = "query-progress-v2"
 
 
 class QueryProgress:
@@ -48,10 +49,10 @@ class QueryProgress:
                     pass
             parent_fd = _open_directory_at(root_fd, "checkpoints", "Query checkpoints")
             try:
-                os.mkdir("query-progress-v1", 0o700, dir_fd=parent_fd)
+                os.mkdir(DIRECTORY, 0o700, dir_fd=parent_fd)
             except FileExistsError:
                 pass
-            self.fd = _open_directory_at(parent_fd, "query-progress-v1", "Query progress")
+            self.fd = _open_directory_at(parent_fd, DIRECTORY, "Query progress")
             for descriptor in (parent_fd, self.fd):
                 if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o700:
                     raise QueryCheckpointError("Query-progress directories must have mode 0700.")

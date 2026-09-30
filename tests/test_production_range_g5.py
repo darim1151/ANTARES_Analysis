@@ -3,6 +3,7 @@ import contextlib
 import dataclasses
 from datetime import datetime, timezone
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -80,6 +81,36 @@ def provider_fixture(root, mode=None, calls=None):
     return provider, request, binding
 
 
+def outage_provider(root, failing=(180.0, 360.0)):
+    """Fixture provider whose service keeps failing one tile transiently."""
+    provider, request, bindings = provider_fixture(root)
+    original, seen = provider._search_fn, []
+    def outage(body):
+        tile = body["query"]["bool"]["filter"][1]["range"]["ra"]
+        seen.append((tile["gte"], tile["lt"]))
+        if seen[-1] == failing:
+            raise ConnectionError("transient outage")
+        yield from original(body)
+    provider._search_fn = outage
+    return provider, request, bindings, seen
+
+
+def journal_events(root):
+    journal = root / "checkpoints/query-progress-v2"
+    return [json.loads(path.read_text())["payload"]["event"] for path in sorted(journal.glob("event-*.json"))]
+
+
+def control_approval(authority, token, path, *, range_digest=None, approved_by="ANTARES-Control-G5"):
+    """Test-only stand-in for Control: the package itself never creates approvals."""
+    body = {"schema_version": R.APPROVAL_SCHEMA, "range_authorization_sha256": range_digest or authority.digest,
+            "approved_by": approved_by, "approved_at_utc": F.AUTHORIZED_AT}
+    mac = hmac.new(token.encode("ascii"), B._canonical(body), hashlib.sha256).hexdigest()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(body, approval_hmac_sha256=mac)))
+    path.chmod(0o600)
+    return path
+
+
 def crash_child(root, mode):
     root = Path(root)
     provider, request, bindings = provider_fixture(root, mode=mode)
@@ -138,7 +169,7 @@ class QueryProgressTests(unittest.TestCase):
         with self.assertRaises(QueryCheckpointError):
             provider.query_resumable(request, dataclasses.replace(binding, configuration_hash="d" * 64))
         self.assertEqual(calls, [])
-        event = self.root / "checkpoints/query-progress-v1/event-00000001.json"
+        event = self.root / "checkpoints/query-progress-v2/event-00000001.json"
         document = json.loads(event.read_text())
         document["payload"]["event"]["records"] = []
         event.write_text(json.dumps(document))
@@ -149,7 +180,7 @@ class QueryProgressTests(unittest.TestCase):
     def test_missing_event_symlink_and_unknown_schema_fail_closed(self):
         provider, request, binding = provider_fixture(self.root)
         provider.query_resumable(request, binding)
-        journal = self.root / "checkpoints/query-progress-v1"
+        journal = self.root / "checkpoints/query-progress-v2"
         path = journal / "event-00000001.json"
         content = path.read_bytes()
         path.unlink()
@@ -180,7 +211,7 @@ class QueryProgressTests(unittest.TestCase):
             provider.query_resumable(request, binding)
         self.assertEqual(calls, [])
         provider, request, binding = provider_fixture(self.root, calls=calls)
-        (self.root / "checkpoints/query-progress-v1/event-00000002.json").unlink()
+        (self.root / "checkpoints/query-progress-v2/event-00000002.json").unlink()
         with self.assertRaises(QueryCheckpointError):
             provider.query_resumable(request, binding)
         self.assertEqual(calls, [])
@@ -207,6 +238,79 @@ class QueryProgressTests(unittest.TestCase):
         self.assertEqual(result.evidence.details["retry_count"], 1)
         self.assertEqual(result.evidence.details["tile_trace"][-1]["attempt"], 2)
         pd.testing.assert_frame_equal(result.loci, resumed_provider.query(request).loci)
+
+    def test_terminal_transient_exhaustion_resumes_with_fresh_bounded_invocation(self):
+        split, first, second = (0., 360.), (0., 180.), (180., 360.)
+        for invocation, expected in ((1, [split, first, second, second]), (2, [second, second])):
+            provider, request, binding, seen = outage_provider(self.root)
+            failed = provider.query_resumable(request, binding)
+            self.assertFalse(failed.clean)
+            self.assertTrue(failed.evidence.errors and all(issue.retryable for issue in failed.evidence.errors))
+            # Bounded: exactly max_query_attempts searches per invocation, never a loop.
+            self.assertEqual(seen, expected, invocation)
+            self.assertFalse((self.root / "checkpoints/query-result/COMMITTED.json").exists())
+        events = journal_events(self.root)
+        boundary = [index for index, event in enumerate(events) if "invocation_boundary" in event]
+        self.assertEqual(len(boundary), 1)
+        self.assertEqual(events[boundary[0] + 1]["trace"]["attempt"], 1)
+        calls = []
+        provider, request, binding = provider_fixture(self.root, calls=calls)
+        resumed = provider.query_resumable(request, binding)
+        # Completed split and terminal tile are skipped; only the unfinished tile is repeated.
+        self.assertEqual(calls, [second])
+        self.assertTrue(resumed.clean)
+        self.assertEqual(sum("invocation_boundary" in event for event in journal_events(self.root)), 2)
+        reference = provider.query(request)
+        pd.testing.assert_frame_equal(resumed.loci, reference.loci)
+        self.assertEqual(dict(resumed.evidence.details), dict(reference.evidence.details))
+        calls.clear()
+        repeated = provider.query_resumable(request, binding)
+        self.assertEqual(calls, [])
+        pd.testing.assert_frame_equal(repeated.loci, resumed.loci)
+        self.assertEqual(sum("invocation_boundary" in event for event in journal_events(self.root)), 2)
+
+    def test_invocation_boundary_contradictions_fail_closed(self):
+        from src.operations.query_progress import QueryProgress
+        second = {"mjd_min": request_for().mjd_min, "mjd_max": request_for().mjd_max,
+                  "ra_min": 180., "ra_max": 360., "dec_min": -90., "dec_max": 90.}
+        from src.operations.live_antares import _build_tile_query, _sha256_json
+        def boundary(tile):
+            return {"invocation_boundary": {"tile": tile, "query_sha256": _sha256_json(_build_tile_query(tile)),
+                                            "reason": "terminal_transient_retry_exhaustion"}}
+        def forged_retry(events):
+            event = json.loads(json.dumps(events[-1]))
+            event["trace"]["attempt"], event["retry_scheduled"] = 1, True
+            return event
+        cases = {
+            "retry_without_boundary": lambda events: [forged_retry(events)],
+            "duplicate_boundary": lambda events: [boundary(second), boundary(second)],
+            "boundary_for_wrong_tile": lambda events: [boundary(dict(second, ra_min=0., ra_max=180.))],
+        }
+        for name, forged in cases.items():
+            with self.subTest(name=name):
+                root = self.parent / name / f"night-{NIGHT}"
+                root.mkdir(mode=0o700, parents=True)
+                provider, request, binding, _ = outage_provider(root)
+                self.assertFalse(provider.query_resumable(request, binding).clean)
+                identity = json.loads((root / "checkpoints/query-progress-v2/identity.json").read_text())["identity"]
+                with QueryProgress(root, root.name, identity) as progress:
+                    for event in forged(progress.events):
+                        progress.commit(event)
+                calls = []
+                provider, request, binding = provider_fixture(root, calls=calls)
+                with self.assertRaises(QueryCheckpointError):
+                    provider.query_resumable(request, binding)
+                self.assertEqual(calls, [])
+        # A boundary is never needed or accepted after a completed traversal.
+        root = self.parent / "complete" / f"night-{NIGHT}"
+        root.mkdir(mode=0o700, parents=True)
+        provider, request, binding = provider_fixture(root)
+        self.assertTrue(provider.query_resumable(request, binding).clean)
+        identity = json.loads((root / "checkpoints/query-progress-v2/identity.json").read_text())["identity"]
+        with QueryProgress(root, root.name, identity) as progress:
+            progress.commit(boundary(second))
+        with self.assertRaises(QueryCheckpointError):
+            provider.query_resumable(request, binding)
 
 
 class DateAndRequestTests(unittest.TestCase):
@@ -384,7 +488,9 @@ class ProductionAuthorityTests(unittest.TestCase):
         self.authority = R.ProductionRangeAuthorization(scope, str(self.work_root), "arnor.fixture",
             os.geteuid(), hashlib.sha256(self.token.encode()).hexdigest(), R.implementation_identity(),
             publisher_wheel_sha256="e" * 64, segment_size=2)
-        self.publisher = R.ProductionRangePublisher(self.authority, control_token=self.token)
+        self.approval_path = control_approval(self.authority, self.token, self.parent / "control" / "approval.json")
+        self.approval = R.ControlRangeApproval.load(self.approval_path, work_root=self.work_root)
+        self.publisher = R.ProductionRangePublisher(self.authority, control_token=self.token, approval=self.approval)
         self.publisher.mountinfo_lines = F.mountinfo_for(self.capability.published_root)
 
     def controller(self, publisher=None, scope=None):
@@ -413,6 +519,8 @@ class ProductionAuthorityTests(unittest.TestCase):
         self.assertEqual([binding.night_utc for binding in parsed], [NIGHT, "2026-06-29"])
         self.assertNotEqual(parsed[0].digest, parsed[1].digest)
         self.assertEqual({binding.range_authorization_sha256 for binding in parsed}, {self.authority.digest})
+        self.assertEqual({binding.control_approval_sha256 for binding in parsed}, {self.approval.sha256})
+        self.assertEqual(result["control_approval_sha256"], self.approval.sha256)
         self.assertEqual({binding.max_successful_uses for binding in parsed}, {1})
         counts = len(self.queried), len(self.fetched)
         result = controller.run(NIGHT, "2026-06-29", resume=True)
@@ -437,6 +545,7 @@ class ProductionAuthorityTests(unittest.TestCase):
         binding = P.ProductionPublicationBinding(**dict(capability.binding))
         saved = P._read_json(next((self.work_root / "production-bindings").glob("*.sentinel.json")))
         for changed in (dataclasses.replace(binding, range_authorization_sha256="0" * 64),
+                        dataclasses.replace(binding, control_approval_sha256="0" * 64),
                         dataclasses.replace(binding, night_utc="2026-06-29", predecessor_night_utc=NIGHT),
                         dataclasses.replace(binding, candidate_record_sha256="0" * 64)):
             with self.subTest(changed=changed.digest), self.assertRaises((B.BackfillRefused, P.PublicationRefused, P.ProductionAuthorizationUnavailable)):
@@ -444,7 +553,13 @@ class ProductionAuthorityTests(unittest.TestCase):
                     control_token=self.token, sentinel=saved, range_authorization=self.authority)
         with self.assertRaises(P.ProductionAuthorizationUnavailable):
             P.issue_production_publication_capability(binding, authorization, candidate,
-                control_token="f" * 64, sentinel=saved, range_authorization=self.authority)
+                control_token="f" * 64, sentinel=saved, range_authorization=self.authority,
+                range_approval=self.approval)
+        with self.assertRaises(B.BackfillRefused):  # the token alone never activates range authority
+            P.issue_production_publication_capability(binding, authorization, candidate,
+                control_token=self.token, sentinel=saved, range_authorization=self.authority)
+        with self.assertRaises(P.PublicationRefused):  # range bindings always record their approval
+            dataclasses.replace(binding, control_approval_sha256=None)
         other = F.make_backfill_candidate(self.parent, "2026-06-29")
         publisher = P.NightPublisher(capability, publisher_release_sha=F.PUBLISHER_RELEASE,
             cache_root=R.SENTINEL_CACHE, mountinfo_lines=self.publisher.mountinfo_lines)
@@ -479,7 +594,7 @@ class ProductionAuthorityTests(unittest.TestCase):
             self.authority.verify(control_token=self.token, hostname="other.fixture")
         with self.assertRaises(B.BackfillRefused):
             R.range_read_capability(self.authority, self.work_root, "wrong", "2026-06-30",
-                                    RELEASE, control_token=self.token)
+                                    RELEASE, control_token=self.token, approval=self.approval)
 
     def test_token_free_recovery_finishes_only_the_exact_gated_transaction(self):
         controller, candidate, authorization = self.build_first()
@@ -508,6 +623,12 @@ class ProductionAuthorityTests(unittest.TestCase):
             self.assertEqual(recovered["nights"][0]["stage"], "PUBLISHED", recovered)
             self.assertEqual(recovered["nights"][1]["stage"], "PLANNED")
             recovered_controller.run(NIGHT, "2026-06-29", resume=True, recovery_only=True)
+            # A detached approval without the token grants no new acquisition or publication.
+            approved = R.ProductionRangePublisher(self.authority, control_token=None, approval=self.approval)
+            approved.mountinfo_lines = self.publisher.mountinfo_lines
+            again = self.controller(approved, self.authority.scope).run(
+                NIGHT, "2026-06-29", resume=True, recovery_only=True)
+            self.assertEqual([night["stage"] for night in again["nights"]], ["PUBLISHED", "PLANNED"])
         self.assertEqual((len(self.queried), len(self.fetched)), counts)
 
     def test_token_free_issuance_before_gate_is_refused(self):
@@ -523,12 +644,103 @@ class ProductionAuthorityTests(unittest.TestCase):
         recovery.mountinfo_lines = self.publisher.mountinfo_lines
         with self.assertRaises(P.ProductionAuthorizationUnavailable):
             recovery.publish(candidate, authorization)
+        approved = R.ProductionRangePublisher(self.authority, control_token=None, approval=self.approval)
+        approved.mountinfo_lines = self.publisher.mountinfo_lines
+        with self.assertRaises(P.ProductionAuthorizationUnavailable):
+            approved.publish(candidate, authorization)
+
+    def test_detached_control_approval_is_required_and_exact(self):
+        night_root = self.work_root / "nights" / f"night-{NIGHT}"
+        night_root.mkdir(mode=0o700, parents=True)
+        def read(approval, authority=None):
+            return R.range_read_capability(authority or self.authority, night_root, night_root.name, NIGHT,
+                                           RELEASE, control_token=self.token, approval=approval)
+        self.assertEqual(read(self.approval).target_date_utc, NIGHT)
+        changed = dataclasses.replace(self.authority, publisher_wheel_sha256="f" * 64)
+        control = self.parent / "control"
+        refused = {
+            "missing": None,
+            "wrong_token": R.ControlRangeApproval.load(control_approval(
+                self.authority, "f" * 64, control / "wrong-token.json"), work_root=self.work_root),
+            "other_authorization": R.ControlRangeApproval.load(control_approval(
+                changed, self.token, control / "other.json"), work_root=self.work_root),
+            "tampered_approval": dataclasses.replace(self.approval, approved_by="someone-else"),
+        }
+        for name, approval in refused.items():
+            with self.subTest(name=name), self.assertRaises(B.BackfillRefused):
+                read(approval)
+        with self.assertRaises(B.BackfillRefused):  # changed authorization invalidates its approval
+            read(self.approval, changed)
+        journals = sorted(path.name for path in self.capability.journal_root.iterdir())
+        controller, candidate, authorization = self.build_first()
+        for approval in (None, refused["other_authorization"]):
+            with self.subTest(approval=approval), self.assertRaises(B.BackfillRefused):
+                R.ProductionRangePublisher(self.authority, control_token=self.token,
+                                           approval=approval).publish(candidate, authorization)
+        self.assertFalse((self.work_root / "production-bindings").exists())
+        self.assertEqual(sorted(path.name for path in self.capability.journal_root.iterdir()), journals)
+
+    def test_control_approval_file_is_strict_and_detached(self):
+        good = json.loads(self.approval_path.read_text())
+        control = self.parent / "control"
+        link = control / "link.json"
+        link.symlink_to(self.approval_path)
+        writable = control_approval(self.authority, self.token, control / "writable.json")
+        writable.chmod(0o620)
+        extra = control / "extra.json"
+        extra.write_text(json.dumps(dict(good, token="d" * 64)))
+        extra.chmod(0o600)
+        inside = control_approval(self.authority, self.token, self.work_root / "approval.json")
+        for path in (link, writable, extra, inside, Path("approval.json")):
+            with self.subTest(path=str(path)), self.assertRaises((B.BackfillRefused, OSError)):
+                R.ControlRangeApproval.load(path, work_root=self.work_root)
+
+    def test_operator_cli_requires_detached_approval_before_live_access(self):
+        base = ["--start", NIGHT, "--end", "2026-06-29", "--work-root", str(self.work_root),
+                "--candidate-release", RELEASE, "--authorization", str(self.parent / "authorization.json"),
+                "--publisher-wheel-sha256", "e" * 64, "--execute-authorized-range"]
+        token_file = self.parent / "token"
+        token_file.write_text(self.token)
+        with mock.patch.object(R, "range_read_capability", side_effect=AssertionError("live call")), \
+                mock.patch.object(R, "_read_json", side_effect=AssertionError("authorization read")):
+            for argv in (["execute", *base, "--control-token-file", str(token_file)],
+                         ["recover", *base, "--resume", "--control-approval", str(self.approval_path)]):
+                with self.subTest(argv=argv[0]), self.assertRaises(B.BackfillRefused):
+                    R.main(argv)
+        self.assertFalse((self.work_root / "nights").exists())
+
+    def test_controller_resume_after_transient_retry_exhaustion_skips_completed_tiles(self):
+        original = self.adapter.provider_factory
+        searches, armed = [], [True]
+        def flaky(capability):
+            provider = original(capability)
+            search = provider._search_fn
+            def outage(body):
+                searches.append(body)
+                if armed[0] and len(searches) in (11, 12):
+                    raise ConnectionError("transient outage")
+                return search(body)
+            provider._search_fn = outage
+            return provider
+        self.adapter.provider_factory = flaky
+        controller = self.controller()
+        first = controller.run(NIGHT, NIGHT)["nights"][0]
+        self.assertEqual(first["stage"], "BLOCKED", first)
+        self.assertTrue(first["blocked"]["retryable"], first)
+        self.assertEqual(len(searches), 12)
+        armed[0] = False
+        searches.clear()
+        resumed = controller.run(NIGHT, NIGHT, resume=True)["nights"][0]
+        # Candidate construction independently re-validated the canonical trace.
+        self.assertEqual(resumed["stage"], "WAITING_FOR_PUBLICATION", resumed)
+        self.assertEqual(len(searches), 6912 - 10)
 
     def test_g4_legacy_binding_digest_is_preserved(self):
         from test_publication_authority_v3 import JUNE27
         with mock.patch.object(P, "CONTROL_APPROVED_LOCK", Path(JUNE27["authority_lock"]["path"])):
             binding = P.ProductionPublicationBinding(**JUNE27)
         self.assertNotIn("range_authorization_sha256", binding.as_dict())
+        self.assertNotIn("control_approval_sha256", binding.as_dict())
         self.assertEqual(binding.digest, hashlib.sha256(P._canonical(JUNE27 | {
             "schema_version": P.PRODUCTION_CAPABILITY_SCHEMA, "operation": P.AUTHORIZED_OPERATION,
             "max_successful_uses": 1})).hexdigest())

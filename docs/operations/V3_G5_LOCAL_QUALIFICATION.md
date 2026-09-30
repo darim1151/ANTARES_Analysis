@@ -7,10 +7,12 @@ to temporary directories. No ANTARES request, Arnor access, production/cache
 namespace creation, production publication, push, tag, or release occurred.
 
 Baseline: `0226753288de0dd1a1f917ad8aa735e764d2c534`, branch
-`codex/feature-space-diagnostics`, tag `v0.4.4`; clean before editing. HEAD and
-tag remain unchanged. Implementation changes are uncommitted. Package version
-remains `0.4.4`; source hashes and the later Control-approved wheel/release
-identities distinguish this local candidate. No release artifact was changed.
+`codex/feature-space-diagnostics`, tag `v0.4.4`. The G5 implementation was
+committed as `535c740496052d309dcb77871a3060c91a95990a` and independently
+reviewed; the final remediation below is committed on top of it. Package
+version remains `0.4.4`; source hashes and the later Control-approved
+wheel/release identities distinguish this candidate. No release artifact,
+tag or version was changed.
 
 ## Resulting architecture
 
@@ -21,7 +23,7 @@ identities distinguish this local candidate. No release artifact was changed.
   50-row saturation discards provisional rows, deterministic binary splitting
   preserves the frontier, and only exhausted sub-threshold tiles contribute.
 - `QueryProgress` adds versioned per-night, non-authoritative durability below
-  `checkpoints/query-progress-v1`. Request, science, implementation, client,
+  `checkpoints/query-progress-v2`. Request, science, implementation, client,
   configuration, initial tiling and release identities must match on reopen.
 - Hash-chained events record terminal tile records, split decisions and retry
   evidence. An atomic head binds the committed sequence, detecting tail loss
@@ -162,8 +164,7 @@ years. Neither warning is a test failure. Raw local logs are in
 `/private/tmp/antares-g5-*.log`, including `antares-g5-baseline.log`,
 `antares-g5-authority6.log` and `antares-g5-full.log`.
 
-Final working tree: six tracked files modified, four new files, no commit;
-HEAD remains the baseline SHA. Changes:
+Changes in the reviewed candidate `535c740`:
 
 | File | Purpose |
 | --- | --- |
@@ -203,7 +204,7 @@ shared-cache activation never occurred.
 
 These are proposed commands for a separately approved installed release.
 `G5_PYTHON`, `G5_WORK`, `G5_SHA`, `G5_WHEEL`, `G5_AUTHORIZATION` and
-`G5_CONTROL_TOKEN_FILE` must be resolved by Control. The work root must be an
+`G5_CONTROL_TOKEN_FILE` and `G5_CONTROL_APPROVAL` must be resolved by Control. The work root must be an
 existing canonical `work/backfill/<run>` directory, outside publication roots.
 Control must provision/qualify infrastructure separately; these commands do not.
 
@@ -225,11 +226,12 @@ Control must provision/qualify infrastructure separately; these commands do not.
   --publisher-wheel-sha256 "$G5_WHEEL" \
   --authorization "$G5_AUTHORIZATION" \
   --control-token-file "$G5_CONTROL_TOKEN_FILE" \
+  --control-approval "$G5_CONTROL_APPROVAL" \
   --acquisition-concurrency 2 --execute-authorized-range
 
 # NOT EXECUTED: same execute command with --resume reuses existing acquisition.
 
-# NOT EXECUTED: only recover an already-journaled publication, without a token
+# NOT EXECUTED: only recover an already-journaled publication, without token or approval
 "$G5_PYTHON" -m src.operations.production_range recover \
   --start 2026-06-28 --end 2026-06-29 \
   --work-root "$G5_WORK" --candidate-release "$G5_SHA" \
@@ -243,3 +245,56 @@ candidate SHA and wheel; qualify the installed Linux 3.11.16 release; capture
 fresh Sentinel V2 proving June 27 COMPLETE, exact authority tail and absent
 cache; approve the exact two-night authorization, service UID, roots, expiry
 and token digest. Only that later gate may authorize the live canary.
+
+## Final bounded remediation (after independent review)
+
+Reviewed candidate: `535c740496052d309dcb77871a3060c91a95990a`. Only the two
+material review findings were remediated; medium/low findings were not.
+
+**H1 — transient retry exhaustion wedged resume.** The final permitted
+transient attempt was journaled as a terminal `attempt_error` that replay
+rejected forever. Progress schema is now `v3.adaptive-query-progress.v2`
+(`checkpoints/query-progress-v2`). Attempt errors stay provisional until their
+tile resolves. A terminal retryable failure ends that invocation; the next
+explicit invocation commits one hash-chained `invocation_boundary` event bound
+to the exact unfinished tile and query hash, and only then receives a fresh
+bounded budget. The failed invocation's attempts contribute no rows, counters
+or trace entries, matching the pre-G5 re-query semantics and the unchanged
+independent trace validator. Committed accepted tiles and splits are never
+repeated. A missing, duplicate, wrong-tile or post-completion boundary fails
+closed; non-retryable (malformed) terminal evidence still fails closed.
+
+**H2 — self-attested range authority.** Execution now also requires a detached
+Control approval (`--control-approval`, schema `v3.control-range-approval.v1`):
+`range_authorization_sha256`, `approved_by`, `approved_at_utc` and
+`approval_hmac_sha256` = HMAC-SHA256 keyed by the Control token over the
+canonical body (sorted keys, `,`/`:` separators, UTF-8). The package never
+creates it; `plan` and `inspect` are unchanged. It must be an exact absolute,
+non-symlink, not group/world-writable regular file outside the range work root
+with exact fields. It is verified with the token before any live read
+(`range_read_capability`), before per-night binding creation, and again at
+capability issuance. Its SHA-256 is recorded in every range
+`ProductionPublicationBinding` (`control_approval_sha256`, required for range
+bindings) and in the range document. Token-free `recover` accepts neither
+token nor approval and still only completes a matching gated/journaled
+transaction. Legacy June-27 bindings omit both optional fields, preserving
+their digests.
+
+Tests added to `tests/test_production_range_g5.py`: terminal exhaustion then
+bounded resume with reference-equal science; boundary contradictions fail
+closed; controller-level BLOCKED-retryable resume skipping completed tiles with
+canonical-trace candidate validation; approval required/exact (missing, wrong
+token, other authorization, tampered, changed authorization); strict detached
+approval file; CLI refusal before live access; approval identity in per-night
+bindings; approval without token cannot initiate work in recovery.
+
+Results, with the same network-denial guard and forbidden data/cache roots:
+focused G5 24/24 passed; touched suites (`test_operations_phase6`,
+`test_backfill_v3`, `test_publication_authority_v3`, `test_fetch_checkpoint`,
+`test_phase6_query_checkpoint`) 178 passed; full discovery **451 tests passed**;
+`compileall` and `git diff --check` passed.
+
+Remaining UNKNOWN: Linux x86_64 / CPython 3.11.16 installed-release
+qualification, including real `/astro/store` `flock` and directory `fsync`
+semantics. No ANTARES request, Arnor access, production publication,
+production/cache mutation, tag, release or live June 28–29 execution occurred.

@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import stat
 import sys
 from typing import Any, Mapping
 
@@ -130,10 +131,93 @@ class ProductionRangeAuthorization:
             raise BackfillRefused("Range module must load from the exact immutable release venv.")
 
 
-def range_read_capability(authority, run_root, run_id, night, release_sha, *, control_token):
+APPROVAL_SCHEMA = "v3.control-range-approval.v1"
+_APPROVAL_FIELDS = frozenset({"schema_version", "range_authorization_sha256", "approved_by",
+                              "approved_at_utc", "approval_hmac_sha256"})
+MAX_APPROVAL_BYTES = 64 * 1024
+
+
+@dataclasses.dataclass(frozen=True)
+class ControlRangeApproval:
+    """Detached Control approval activating one exact range authorization.
+
+    Control creates it outside this package: ``approval_hmac_sha256`` is
+    HMAC-SHA256, keyed by the Control token, over the canonical approval body
+    (every other field). Nothing here can create it; an authorization and a
+    token whose digest it declares are therefore never sufficient alone.
+    """
+
+    range_authorization_sha256: str
+    approved_by: str
+    approved_at_utc: str
+    approval_hmac_sha256: str
+    schema_version: str = APPROVAL_SCHEMA
+
+    def __post_init__(self):
+        if (self.schema_version != APPROVAL_SCHEMA
+                or not _is_hex64(self.range_authorization_sha256)
+                or not _is_hex64(self.approval_hmac_sha256)
+                or not isinstance(self.approved_by, str) or not self.approved_by.strip()
+                or self.approved_by.startswith("range:")):
+            raise BackfillRefused("Control range approval is malformed.")
+        _parse_utc(self.approved_at_utc, "approved_at_utc")
+
+    def as_dict(self):
+        return {"schema_version": self.schema_version,
+                "range_authorization_sha256": self.range_authorization_sha256,
+                "approved_by": self.approved_by, "approved_at_utc": self.approved_at_utc,
+                "approval_hmac_sha256": self.approval_hmac_sha256}
+
+    @property
+    def sha256(self):
+        return hashlib.sha256(_canonical(self.as_dict())).hexdigest()
+
+    @classmethod
+    def load(cls, path, *, work_root):
+        """Strict no-follow read of a Control-supplied file outside range work."""
+        path = Path(path)
+        if (not path.is_absolute() or path.resolve(strict=True) != path
+                or Path(work_root) == path or Path(work_root) in path.parents):
+            raise BackfillRefused("Control approval must be an exact absolute path outside range work.")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+        try:
+            observed = os.fstat(descriptor)
+            if (not stat.S_ISREG(observed.st_mode) or observed.st_mode & 0o022
+                    or observed.st_size > MAX_APPROVAL_BYTES):
+                raise BackfillRefused("Control approval must be a private regular file.")
+            payload = os.read(descriptor, MAX_APPROVAL_BYTES + 1)
+        finally:
+            os.close(descriptor)
+        try:
+            document = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BackfillRefused("Control approval is not JSON.") from exc
+        if not isinstance(document, dict) or set(document) != _APPROVAL_FIELDS:
+            raise BackfillRefused("Control approval fields are not exact.")
+        return cls(**document)
+
+    def verify(self, authority, *, control_token):
+        """Bind this approval to the exact authorization and Control token."""
+        body = {key: value for key, value in self.as_dict().items() if key != "approval_hmac_sha256"}
+        if (type(authority) is not ProductionRangeAuthorization
+                or not isinstance(control_token, str) or not _is_hex64(control_token)
+                or not hmac.compare_digest(self.range_authorization_sha256, authority.digest)
+                or not hmac.compare_digest(hashlib.sha256(control_token.encode("ascii")).hexdigest(),
+                                           authority.control_token_sha256)
+                or not hmac.compare_digest(hmac.new(control_token.encode("ascii"), _canonical(body),
+                                                    hashlib.sha256).hexdigest(), self.approval_hmac_sha256)
+                or _parse_utc(self.approved_at_utc, "approved_at_utc")
+                >= _parse_utc(authority.scope.expires_at_utc, "expires_at_utc")):
+            raise BackfillRefused("Detached Control approval does not approve this exact range authorization.")
+
+
+def range_read_capability(authority, run_root, run_id, night, release_sha, *, control_token, approval):
     if type(authority) is not ProductionRangeAuthorization or control_token is None:
         raise BackfillRefused("Live range reads require explicit Control authority and token.")
+    if type(approval) is not ControlRangeApproval:
+        raise BackfillRefused("Live range reads require the detached Control approval.")
     authority.verify(control_token=control_token)
+    approval.verify(authority, control_token=control_token)
     expected = Path(authority.work_root) / "nights" / f"night-{night}"
     if (night not in _dates(authority.scope.start_date_utc, authority.scope.end_date_utc)
             or Path(run_root) != expected or expected.resolve(strict=True) != expected
@@ -204,9 +288,16 @@ class LiveRangeAdapter:
         return provider.fetch_resumable(request, query_result, checkpoint)
 
 
-def qualify_range_night(authority, binding, authorization, candidate, *, resume=False):
+def qualify_range_night(authority, binding, authorization, candidate, *, resume=False, approval=None):
     if type(authority) is not ProductionRangeAuthorization:
         raise BackfillRefused("Exact production range authority required.")
+    if not _is_hex64(binding.control_approval_sha256):
+        raise BackfillRefused("Range night binding lacks its detached Control approval identity.")
+    if not resume and (type(approval) is not ControlRangeApproval
+                       or binding.control_approval_sha256 != approval.sha256
+                       or approval.range_authorization_sha256 != authority.digest):
+        # Its HMAC is re-verified with the Control token at issuance.
+        raise BackfillRefused("One-shot night issuance requires its exact detached Control approval.")
     scope = authority.scope
     expected = Path(authority.work_root) / "nights" / f"night-{binding.night_utc}"
     if (binding.range_authorization_sha256 != authority.digest
@@ -253,9 +344,11 @@ class ProductionRangePublisher:
     roots = PublicationRoots()
     capability = roots  # Observation compatibility, never consumed by a writer.
 
-    def __init__(self, authority, *, control_token):
+    def __init__(self, authority, *, control_token, approval=None):
         self.authority = authority
         self.control_token = control_token
+        self.approval = approval
+        self.control_approval_sha256 = approval.sha256 if approval is not None else None
         self.publisher_release_sha = authority.scope.publisher_release_sha
         self.data_root = self.roots.published_root
         self.cache_root = SENTINEL_CACHE
@@ -270,6 +363,11 @@ class ProductionRangePublisher:
 
     def publish(self, candidate, authorization, *, lock_wait_seconds=120.0):
         self.authority.verify(control_token=self.control_token, allow_expired=self.control_token is None)
+        if self.control_token is not None:
+            # New authority is never initiated without the detached approval.
+            if type(self.approval) is not ControlRangeApproval:
+                raise BackfillRefused("Publication requires the detached Control approval.")
+            self.approval.verify(self.authority, control_token=self.control_token)
         directory = Path(self.authority.work_root) / "production-bindings"
         path = directory / f"{candidate.date_utc}-{authorization.digest}.json"
         sentinel_path = path.with_suffix(".sentinel.json")
@@ -302,6 +400,7 @@ class ProductionRangePublisher:
                 authorization_sha256=authorization.digest, control_token_sha256=self.authority.control_token_sha256,
                 nonce=authorization.nonce, expires_at_utc=authorization.expires_at_utc,
                 range_authorization_sha256=self.authority.digest,
+                control_approval_sha256=self.approval.sha256,
             )
             directory.mkdir(mode=0o700, exist_ok=True)
             if not sentinel_path.exists():
@@ -312,6 +411,7 @@ class ProductionRangePublisher:
         capability = issue_production_publication_capability(
             binding, authorization, candidate, control_token=None if recovering else self.control_token,
             sentinel=_read_json(sentinel_path), range_authorization=self.authority,
+            range_approval=self.approval,
         )
         return NightPublisher(capability, publisher_release_sha=self.publisher_release_sha,
                               cache_root=self.cache_root, mountinfo_lines=self.mountinfo_lines,
@@ -329,6 +429,7 @@ def main(argv=None):
     parser.add_argument("--authorization")
     parser.add_argument("--publisher-wheel-sha256")
     parser.add_argument("--control-token-file")
+    parser.add_argument("--control-approval")
     parser.add_argument("--execute-authorized-range", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--acquisition-concurrency", type=int, default=2)
@@ -360,9 +461,10 @@ def main(argv=None):
     else:
         recovery_only = args.operation == "recover"
         if (not args.execute_authorized_range or not args.authorization or not args.publisher_wheel_sha256
-                or (not recovery_only and not args.control_token_file)
-                or (recovery_only and (not args.resume or args.control_token_file))):
-            raise BackfillRefused("Execution requires explicit --execute-authorized-range, authorization and Control token file.")
+                or (not recovery_only and (not args.control_token_file or not args.control_approval))
+                or (recovery_only and (not args.resume or args.control_token_file or args.control_approval))):
+            raise BackfillRefused("Execution requires explicit --execute-authorized-range, authorization, "
+                                  "Control token file and detached Control approval; recovery takes neither.")
         authority = ProductionRangeAuthorization.from_dict(_read_json(Path(args.authorization)))
         if args.publisher_wheel_sha256 != authority.publisher_wheel_sha256:
             raise BackfillRefused("Operator wheel identity differs from Control authorization.")
@@ -370,14 +472,18 @@ def main(argv=None):
         authority.verify(control_token=token, allow_expired=recovery_only)
         if args.work_root != authority.work_root or args.candidate_release != authority.scope.candidate_release_sha:
             raise BackfillRefused("Operator arguments differ from Control authorization.")
+        approval = None
+        if not recovery_only:
+            approval = ControlRangeApproval.load(Path(args.control_approval), work_root=authority.work_root)
+            approval.verify(authority, control_token=token)
         read_factory = lambda root, run_id, night, release: range_read_capability(
-            authority, root, run_id, night, release, control_token=token)
+            authority, root, run_id, night, release, control_token=token, approval=approval)
         adapter.read_factory = None if recovery_only else read_factory
         work = RangeWorkCapability.for_arnor(Path(args.work_root), Path(args.work_root).name)
         settings = dataclasses.replace(settings, segment_size=authority.segment_size)
         controller = BackfillController(None, adapter, release_sha=args.candidate_release,
             work_capability=work, publication_roots=PublicationRoots(), read_capability_factory=None if recovery_only else read_factory,
-            settings=settings, publisher=ProductionRangePublisher(authority, control_token=token),
+            settings=settings, publisher=ProductionRangePublisher(authority, control_token=token, approval=approval),
             range_authorization=authority.scope)
         document = controller.run(args.start, args.end, resume=args.resume, recovery_only=recovery_only)
     print(json.dumps(document, sort_keys=True, indent=2))

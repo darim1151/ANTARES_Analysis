@@ -810,14 +810,33 @@ class LiveAntaresProvider:
                 if _event_hook is not None:
                     _event_hook("query_tile_committed", {"status": entry["status"], "tile": {k: entry[k] for k in _TILE_KEYS}})
 
+        def boundary_for(tile):
+            return {"tile": dict(tile), "query_sha256": _sha256_json(_build_tile_query(tile)),
+                    "reason": "terminal_transient_retry_exhaustion"}
+
         if _progress is not None:
             from .query_progress import decode_records
             from .query_checkpoint import QueryCheckpointError
+            # Attempt errors stay provisional until their tile resolves. A
+            # terminal transient failure ends that invocation; only an explicit
+            # boundary committed by a later invocation may renew the tile's
+            # bounded budget, discarding the failed invocation's attempts.
+            provisional = []
+            awaiting_boundary = False
             for event in _progress.events:
-                if not pending or set(event) != {"trace", "records", "retry_scheduled"}:
+                if not pending:
+                    raise QueryCheckpointError("Query-progress traversal is inconsistent.")
+                tile = pending[0]
+                if set(event) == {"invocation_boundary"}:
+                    if not awaiting_boundary or event["invocation_boundary"] != boundary_for(tile):
+                        raise QueryCheckpointError("Query-progress invocation boundary is invalid.")
+                    provisional.clear()
+                    awaiting_boundary = False
+                    resumed_attempt = 1
+                    continue
+                if awaiting_boundary or set(event) != {"trace", "records", "retry_scheduled"}:
                     raise QueryCheckpointError("Query-progress traversal is inconsistent.")
                 entry = event["trace"]
-                tile = pending[0]
                 if (not isinstance(entry, dict) or {k: entry.get(k) for k in _TILE_KEYS} != tile
                         or entry.get("query_sha256") != _sha256_json(_build_tile_query(tile))
                         or type(entry.get("attempt")) is not int
@@ -826,6 +845,14 @@ class LiveAntaresProvider:
                     raise QueryCheckpointError("Query-progress tile lineage/ref mismatch.")
                 records = decode_records(event["records"])
                 status = entry.get("status")
+                if status in {"accepted_exhausted", "split_saturated"}:
+                    for retried in provisional:
+                        aggregate_partial_rows += retried["partial_rows_discarded"]
+                        retry_exception_types.add(retried["exception_type"])
+                        retry_count += 1
+                        search_request_count += 1
+                        trace.append(retried)
+                    provisional.clear()
                 if status == "accepted_exhausted":
                     if (entry.get("iterator_exhausted") is not True or len(records) >= PROBE_LIMIT
                             or entry.get("returned_loci") != len(records)
@@ -852,20 +879,30 @@ class LiveAntaresProvider:
                             or not 0 <= entry["partial_rows_discarded"] < PROBE_LIMIT
                             or not isinstance(entry.get("exception_type"), str)
                             or entry.get("retryable") is not True
-                            or event["retry_scheduled"] is not True
                             or type(event["retry_scheduled"]) is not bool
                             or event["retry_scheduled"] != (entry["attempt"] < self.max_query_attempts)):
                         raise QueryCheckpointError("Query-progress retry evidence is invalid.")
-                    aggregate_partial_rows += entry["partial_rows_discarded"]
-                    retry_exception_types.add(entry["exception_type"])
-                    retry_count += int(event["retry_scheduled"])
-                    resumed_attempt = entry["attempt"] + 1 if event["retry_scheduled"] else 1
+                    provisional.append(entry)
+                    awaiting_boundary = not event["retry_scheduled"]
+                    resumed_attempt = entry["attempt"] + 1
+                    continue
                 else:
                     raise QueryCheckpointError("Query-progress decision is unsupported.")
                 search_request_count += 1
                 trace.append(entry)
-                if status != "attempt_error":
-                    resumed_attempt = 1
+                resumed_attempt = 1
+            if awaiting_boundary:
+                # New explicit invocation: the unfinished tile gets one fresh
+                # bounded budget; its failed attempts contributed no science.
+                _progress.commit({"invocation_boundary": boundary_for(pending[0])})
+                provisional.clear()
+                resumed_attempt = 1
+            for retried in provisional:  # interrupted scheduled retry continues
+                aggregate_partial_rows += retried["partial_rows_discarded"]
+                retry_exception_types.add(retried["exception_type"])
+                retry_count += 1
+                search_request_count += 1
+                trace.append(retried)
 
         def deduplicated_frame() -> Tuple[pd.DataFrame, int, list[str]]:
             if not accepted_records:
