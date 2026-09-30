@@ -28,6 +28,49 @@ PRODUCTION_PUBLICATION_ROOT = PRODUCTION_AUTHORITY_ROOT / "work" / "publication"
 PRODUCTION_STAGE_ROOT = PRODUCTION_PUBLICATION_ROOT / "staging"
 PRODUCTION_CONTROL_ROOT = PRODUCTION_PUBLICATION_ROOT / "control"
 PRODUCTION_EVIDENCE_ROOT = PRODUCTION_PUBLICATION_ROOT / "evidence"
+RANGE_WORK_PARENT = PRODUCTION_AUTHORITY_ROOT / "work" / "backfill"
+_RANGE_WORK_TOKEN = object()
+
+
+@dataclass(frozen=True)
+class RangeWorkCapability:
+    """Run-scoped checkpoints/candidates only; no publication paths or methods."""
+
+    root: Path
+    run_id: str
+    _token: object = field(repr=False, compare=False)
+
+    def __post_init__(self):
+        if self._token is not _RANGE_WORK_TOKEN:
+            raise StorageContractError("Range work authority requires the sealed factory.")
+
+    @classmethod
+    def for_arnor(cls, root, run_id, *, hostname=None):
+        if (hostname or socket.gethostname()).split(".", 1)[0].lower() != "arnor":
+            raise StorageContractError("Range work is Arnor-only.")
+        identity = _validated_run_id(run_id)
+        expected = RANGE_WORK_PARENT / identity
+        proposed = Path(root)
+        if proposed != expected or proposed.resolve(strict=True) != expected:
+            raise StorageContractError("Range work requires its exact canonical work/backfill/run root.")
+        resolved = _existing_real_directory(proposed, label="Range work")
+        return cls(resolved, identity, _RANGE_WORK_TOKEN)
+
+    @classmethod
+    def for_local(cls, root, run_id):
+        synthetic = SyntheticWriteCapability.for_local_run_root(root, run_id)
+        return cls(synthetic.root, run_id, _RANGE_WORK_TOKEN)
+
+
+@dataclass(frozen=True)
+class PublicationRoots:
+    """Observation addresses, deliberately without write authority."""
+
+    published_root: Path = PRODUCTION_DATA_ROOT
+    staging_root: Path = PRODUCTION_STAGE_ROOT
+    journal_root: Path = PRODUCTION_CONTROL_ROOT / "journals"
+    lock_root: Path = PRODUCTION_CONTROL_ROOT / "locks"
+    evidence_root: Path = PRODUCTION_EVIDENCE_ROOT
 
 
 class StorageContractError(ValueError):

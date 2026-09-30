@@ -83,7 +83,7 @@ from .query_checkpoint import (
     load_query_result_checkpoint,
     seal_query_result_checkpoint,
 )
-from .storage import SyntheticWriteCapability
+from .storage import SyntheticWriteCapability, RangeWorkCapability, PublicationRoots
 
 
 RANGE_SCHEMA = "v3.backfill-range.v1"
@@ -102,13 +102,26 @@ PRIOR_FREE_ACQUISITION_ATTESTATIONS: Tuple[Mapping[str, str], ...] = (
         "scenario": "commissioning-v1",
         "provider_module": "src.operations.live_antares",
         "provider_implementation_sha256": (
-            "5dbda5e41a1f93291759c3232b68dc54949d5c7a34aa95213fdeb691beaa606f"
+            "5e7d4240ed97ac0dea9a4887c0d39ddc7f61b2b225b5237a5bb3c8ab10f11713"
         ),
         "adapter": "src.operations.live_antares.LiveAntaresProvider",
         "adapter_implementation_sha256": (
-            "5dbda5e41a1f93291759c3232b68dc54949d5c7a34aa95213fdeb691beaa606f"
+            "5e7d4240ed97ac0dea9a4887c0d39ddc7f61b2b225b5237a5bb3c8ab10f11713"
         ),
-        "evidence": "V3-G3R independent review of LiveAntaresProvider at v0.4.3 (4378bce)",
+        "evidence": "V3-G5 local qualification: same prior-free selection and fetch; durable tile traversal",
+    },
+)
+
+# Separate from the historical provider attestation: the range adapter is
+# reviewed and pinned independently, so an edited adapter fails closed too.
+RANGE_PRIOR_FREE_ACQUISITION_ATTESTATIONS: Tuple[Mapping[str, str], ...] = (
+    {
+        "provider_name": "live-antares", "scenario": "commissioning-v1",
+        "provider_module": "src.operations.live_antares",
+        "provider_implementation_sha256": "5e7d4240ed97ac0dea9a4887c0d39ddc7f61b2b225b5237a5bb3c8ab10f11713",
+        "adapter": "src.operations.production_range.LiveRangeAdapter",
+        "adapter_implementation_sha256": "1e5e8d8c9717aea9ef489ee6c0282a238842ad41b3754d349c1bfdc2d6694555",
+        "evidence": "V3-G5 local qualification of per-night prior-free live range adapter",
     },
 )
 
@@ -434,6 +447,9 @@ class NightWorkspace:
         self.events = self.root / "events.jsonl"
 
     def ensure(self) -> None:
+        proposed = self.root.absolute()
+        if proposed.resolve(strict=False) != proposed:
+            raise BackfillRefused("Night work root rejects path aliases and symlinks.")
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     def append_event(self, event: str, **details: Any) -> None:
@@ -578,6 +594,7 @@ def inspect_backfill(
     *,
     journal_root: Optional[Path] = None,
     evidence_root: Optional[Path] = None,
+    work_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Inspect a complete range while publication is serialized."""
     from .. import history
@@ -590,6 +607,7 @@ def inspect_backfill(
             end,
             journal_root=journal_root,
             evidence_root=evidence_root,
+            work_root=work_root,
         )
 
 
@@ -601,6 +619,7 @@ def _inspect_backfill_locked(
     *,
     journal_root: Optional[Path] = None,
     evidence_root: Optional[Path] = None,
+    work_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Read-only range state reconstructed from per-night evidence.
 
@@ -611,7 +630,7 @@ def _inspect_backfill_locked(
     run_root = Path(run_root)
     journal_root = Path(journal_root) if journal_root else run_root / "control" / "journals"
     evidence_root = Path(evidence_root) if evidence_root else run_root / "evidence"
-    nights_root = run_root / "backfill" / "nights"
+    nights_root = (Path(work_root) if work_root is not None else run_root / "backfill") / "nights"
     nights = [
         derive_night_state(
             NightWorkspace(nights_root, day), Path(data_root), journal_root, evidence_root
@@ -708,15 +727,29 @@ class BackfillController:
         range_authorization: Optional[RangePublicationAuthorization] = None,
         cache: Any = None,
         event_hook: Optional[Callable[[str, Mapping[str, Any]], None]] = None,
-        prior_free_attestations: Sequence[Mapping[str, str]] = PRIOR_FREE_ACQUISITION_ATTESTATIONS,
+        prior_free_attestations: Sequence[Mapping[str, str]] = (PRIOR_FREE_ACQUISITION_ATTESTATIONS + RANGE_PRIOR_FREE_ACQUISITION_ATTESTATIONS),
+        work_capability: Optional[RangeWorkCapability] = None,
+        publication_roots: Optional[PublicationRoots] = None,
     ) -> None:
-        if type(capability) is not SyntheticWriteCapability:
-            raise BackfillRefused("Backfill requires a sealed synthetic capability in this release.")
+        if work_capability is None:
+            if type(capability) is not SyntheticWriteCapability:
+                raise BackfillRefused("Backfill requires separate work authority or a synthetic capability.")
+            work_root = capability.root / "backfill"
+        else:
+            if (capability is not None or type(work_capability) is not RangeWorkCapability
+                    or type(publication_roots) is not PublicationRoots):
+                raise BackfillRefused("Range work and publication observation roots must be explicit and separate.")
+            work_root = work_capability.root
+            capability = publication_roots
+            for root in (capability.published_root, capability.staging_root,
+                         capability.journal_root.parent, capability.evidence_root):
+                if work_root == root or work_root in root.parents or root in work_root.parents:
+                    raise BackfillRefused("Range work overlaps publication authority.")
         if not _is_sha40(release_sha):
             raise BackfillRefused("release_sha must be a full commit SHA.")
         if range_authorization is not None and publisher is None:
             raise BackfillRefused("Range authorization requires a publisher.")
-        if publisher is not None and publisher.capability != capability:
+        if publisher is not None and getattr(publisher, "roots", publisher.capability) != capability:
             raise BackfillRefused("Publisher and backfill capabilities differ.")
         if range_authorization is not None and (
             range_authorization.candidate_release_sha != release_sha
@@ -726,7 +759,7 @@ class BackfillController:
         if cache is not None:
             cache.require_disjoint(
                 (
-                    capability.root, capability.published_root, capability.staging_root,
+                    work_root, capability.published_root, capability.staging_root,
                     capability.journal_root, capability.lock_root, capability.evidence_root,
                 )
             )
@@ -736,11 +769,15 @@ class BackfillController:
         self.read_capability_factory = read_capability_factory
         self.settings = settings
         self.publisher = publisher
+        if type(publisher) is NightPublisher:
+            # Construction reads may briefly overlap the single writer. Wait
+            # for their existing authority lock instead of failing the range.
+            publisher.lock_wait_seconds = max(publisher.lock_wait_seconds, PUBLICATION_QUIESCENCE_WAIT_SECONDS)
         self.range_authorization = range_authorization
         self.cache = cache
         self.event_hook = event_hook
         self.prior_free_attestations = tuple(prior_free_attestations)
-        self.work_root = capability.root / "backfill"
+        self.work_root = work_root
         self.nights_root = self.work_root / "nights"
         self._range_lock = threading.Lock()
 
@@ -805,7 +842,7 @@ class BackfillController:
             "publication_concurrency": self.settings.publication_concurrency,
         }
 
-    def _verify_range_authorization(self, start: str, end: str) -> None:
+    def _verify_range_authorization(self, start: str, end: str, *, recovery_only: bool = False) -> None:
         authority = self.range_authorization
         if authority is None:
             return
@@ -816,7 +853,7 @@ class BackfillController:
         if observed != bound:
             differing = sorted(key for key in observed if observed[key] != bound[key])
             raise BackfillRefused(f"Range authorization does not bind this run: {differing}.")
-        if _utc_now() >= _parse_utc(authority.expires_at_utc, "expires_at_utc"):
+        if not recovery_only and _utc_now() >= _parse_utc(authority.expires_at_utc, "expires_at_utc"):
             raise BackfillRefused("Range publication authorization has expired.")
 
     def _request(self, workspace: NightWorkspace):
@@ -924,7 +961,11 @@ class BackfillController:
                     raise BackfillRefused("No live-read authority is issued for acquisition.")
                 workspace.append_event("stage", stage=stage)
                 self._hook("before_query", date_utc=date_utc)
-                query_result = self.adapter.query(request)
+                resumable_query = getattr(self.adapter, "query_resumable", None)
+                query_result = (
+                    resumable_query(request, bindings, event_hook=lambda event, details: self._hook(event, date_utc=date_utc, **details))
+                    if resumable_query is not None else self.adapter.query(request)
+                )
                 query_result.require_completed()
                 seal_query_result_checkpoint(workspace.root, query_result, bindings)
                 loaded = load_query_result_checkpoint(workspace.root, request, bindings)
@@ -1038,7 +1079,10 @@ class BackfillController:
             construction_request = dataclasses.replace(request, prior_locus_ids=prior)
             query_result = dataclasses.replace(loaded.query_result, request=construction_request)
             self._hook("before_construct", date_utc=date_utc)
-            result = self.adapter.construct(construction_request, query_result, alerts, completion)
+            checkpoint_constructor = getattr(self.adapter, "construct_checkpoint", None)
+            result = (checkpoint_constructor(construction_request, query_result, checkpoint)
+                      if checkpoint_constructor is not None else
+                      self.adapter.construct(construction_request, query_result, alerts, completion))
             result.require_publishable()
             artifacts = build_night_artifacts(result)
             reopen_and_validate_artifacts(artifacts, expected=result)
@@ -1062,6 +1106,15 @@ class BackfillController:
                 "constructed_at_utc": _utc_now().isoformat(),
                 "prior_locus_identity_sha256": _identifier_hash(prior),
                 "provenance": {
+                    "range_authorization_sha256": self.range_authorization.digest if self.range_authorization else None,
+                    "configuration_sha256": self._configuration_hash(),
+                    "night_query_contract_sha256": loaded.query_result.evidence.details["query_contract_sha256"],
+                    "binding_sha256": _sha256(_canonical({
+                        "request": _read_json(workspace.request_path),
+                        "query_identity": loaded.integrity_sha256,
+                        "fetch_identity": binding.identity_sha256,
+                        "prior_identity": _identifier_hash(prior),
+                    })),
                     "night_run_id": workspace.run_id,
                     "provider": self.adapter.provider_name,
                     "scenario": self.adapter.scenario,
@@ -1250,13 +1303,13 @@ class BackfillController:
             _write_json_atomic(path, document)
         return document
 
-    def run(self, start: str, end: str, *, resume: bool = False) -> Dict[str, Any]:
+    def run(self, start: str, end: str, *, resume: bool = False, recovery_only: bool = False) -> Dict[str, Any]:
         dates = _dates(start, end)
         # Exact provider+adapter and science/configuration identities must be
         # proven before any query or fetch.  Range authorization then binds the
         # same composite record when publication is enabled.
         self.range_binding(start, end)
-        self._verify_range_authorization(start, end)
+        self._verify_range_authorization(start, end, recovery_only=recovery_only)
         wall_started = time.monotonic()
         with _ControllerLock(self.work_root / "controller.lock"):
             if not resume and any(self.workspace(day).root.exists() for day in dates):
@@ -1265,6 +1318,18 @@ class BackfillController:
 
             with history.authority_read_lock(self.capability.published_root):
                 states = {day: self.night_state(day) for day in dates}
+            if recovery_only:
+                if not resume or self.publisher is None or self.range_authorization is None:
+                    raise BackfillRefused("Recovery-only requires an existing authorized publication and resume.")
+                for day, state in states.items():
+                    if state["stage"] == NightStage.PUBLISHED.value:
+                        self._emit_terminal_evidence(day)
+                    elif state["stage"] == NightStage.RECONCILIATION_REQUIRED.value:
+                        if not self.resume_publication(day)["ok"]:
+                            break
+                    else:
+                        break  # Never start acquisition/construction/a new publication.
+                return self._write_range(start, end, time.monotonic() - wall_started)
             for day, state in states.items():
                 if state["stage"] == NightStage.BLOCKED.value:
                     if state["blocked"].get("retryable"):

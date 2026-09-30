@@ -1065,14 +1065,14 @@ _PHASE6_TILE_KEYS = (
 )
 
 
-def _phase6_initial_tiles() -> list[Dict[str, float]]:
+def _phase6_initial_tiles(mjd_min: float = 61218.0, mjd_max: float = 61219.0) -> list[Dict[str, float]]:
     step = 30.0 / 1440.0
-    time_count = int(math.ceil((61219.0 - 61218.0) / step))
+    time_count = int(math.ceil((mjd_max - mjd_min) / step))
     time_edges = [
-        round(min(61218.0 + index * step, 61219.0), 12)
+        round(min(mjd_min + index * step, mjd_max), 12)
         for index in range(time_count + 1)
     ]
-    time_edges[-1] = 61219.0
+    time_edges[-1] = mjd_max
     ra_edges = [360.0 * index / 24 for index in range(25)]
     dec_edges = [-90.0 + 180.0 * index / 6 for index in range(7)]
     return [
@@ -1188,9 +1188,9 @@ def _phase6_trace_tile(row: Mapping[str, Any]) -> Dict[str, float]:
     return tile
 
 
-def _phase6_replay_trace(trace: list[Any]) -> Mapping[str, Any]:
+def _phase6_replay_trace(trace: list[Any], mjd_min: float = 61218.0, mjd_max: float = 61219.0) -> Mapping[str, Any]:
     """Independently replay the canonical queue and every binary split."""
-    initial = _phase6_initial_tiles()
+    initial = _phase6_initial_tiles(mjd_min, mjd_max)
     if len(initial) != 6912:
         _raise_artifact(
             "phase6_initial_tiling_invalid", "Canonical initial tiling is not 6,912 tiles."
@@ -1311,10 +1311,20 @@ def _validate_phase6_manifest_evidence(
     """Fail closed on missing or contradictory live completion evidence."""
     from .. import query as historical_query
 
+    night = manifest.get("date_utc")
+    try:
+        parsed_night = date.fromisoformat(night)
+    except (TypeError, ValueError):
+        _raise_artifact("phase6_request_evidence_invalid", "Live manifest night must be canonical YYYY-MM-DD.")
+    if parsed_night.isoformat() != night:
+        _raise_artifact("phase6_request_evidence_invalid", "Live manifest night must be canonical YYYY-MM-DD.")
+    mjd_min = float((parsed_night - date(1858, 11, 17)).days)
+    mjd_max = mjd_min + 1.0
+
     expected_filter = historical_query.lsst_identifier_filter()
     expected_interval = {
-        "mjd_min": 61218.0,
-        "mjd_max": 61219.0,
+        "mjd_min": mjd_min,
+        "mjd_max": mjd_max,
         "lower_bound": "inclusive",
         "upper_bound": "exclusive",
         "timezone": "UTC",
@@ -1330,7 +1340,7 @@ def _validate_phase6_manifest_evidence(
         "dec_upper_bound": "inclusive_at_90_only",
     }
     expected_contract = {
-        "target_date_utc": "2026-06-27",
+        "target_date_utc": night,
         "interval": expected_interval,
         "spatial_domain": expected_spatial_domain,
         "query_tag": None,
@@ -1356,9 +1366,8 @@ def _validate_phase6_manifest_evidence(
         or manifest.get("status") != "complete"
         or manifest.get("survey_mode") != "lsst"
         or manifest.get("paths") != expected_paths
-        or manifest.get("date_utc") != "2026-06-27"
-        or manifest.get("mjd_min") != 61218.0
-        or manifest.get("mjd_max") != 61219.0
+        or manifest.get("mjd_min") != mjd_min
+        or manifest.get("mjd_max") != mjd_max
         or manifest.get("query_tag") is not None
         or manifest.get("target_loci") is not None
         or manifest.get("parallel_shards") != 1
@@ -1385,7 +1394,7 @@ def _validate_phase6_manifest_evidence(
         or query_evidence.get("errors") != []
         or not isinstance(query_details, dict)
         or query_details.get("completion_classification") != expected_query_class
-        or query_details.get("target_date_utc") != "2026-06-27"
+        or query_details.get("target_date_utc") != night
         or query_details.get("query_tag") is not None
         or query_details.get("lsst_only") is not True
         or query_details.get("lsst_filter") != expected_filter
@@ -1504,7 +1513,7 @@ def _validate_phase6_manifest_evidence(
             "Probe-first tile counts or terminal evidence are invalid.",
         )
 
-    replay = _phase6_replay_trace(trace)
+    replay = _phase6_replay_trace(trace, mjd_min, mjd_max)
     if (
         replay["initial"] != 6912
         or replay["accepted"] != accepted_count
@@ -1707,7 +1716,7 @@ def _validate_phase6_manifest_evidence(
             mjd.isna().any()
             or ra.isna().any()
             or dec.isna().any()
-            or not ((mjd >= 61218.0) & (mjd < 61219.0)).all()
+            or not ((mjd >= mjd_min) & (mjd < mjd_max)).all()
             or not ((ra >= 0.0) & (ra < 360.0)).all()
             or not ((dec >= -90.0) & (dec <= 90.0)).all()
         ):

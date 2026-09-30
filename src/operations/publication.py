@@ -1829,11 +1829,12 @@ class NightPublisher:
         self,
         candidate: NightCandidate,
         authorization: PublicationAuthorization,
+        *, lock_wait_seconds: Optional[float] = None,
     ) -> PublicationOutcome:
         started_clock = self.clock()
         try:
             with PublicationAuthorityLock(
-                self.capability, wait_seconds=self.lock_wait_seconds
+                self.capability, wait_seconds=self.lock_wait_seconds if lock_wait_seconds is None else lock_wait_seconds
             ):
                 self._verify_authorization(candidate, authorization)
                 return self._publish_locked(candidate, authorization, started_clock)
@@ -3298,14 +3299,15 @@ _PRODUCTION_BINDING_FIELDS = (
     "nonce",
     "expires_at_utc",
     "max_successful_uses",
+    "range_authorization_sha256",
 )
 
 
 def production_authority_lock_identity(
-    path: Path = CONTROL_APPROVED_LOCK,
+    path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Return the exact no-follow identity of the canonical authority lock."""
-    path = Path(path)
+    path = CONTROL_APPROVED_LOCK if path is None else Path(path)
     if not path.is_absolute() or path != CONTROL_APPROVED_LOCK:
         raise PublicationRefused(
             "path_contradiction", "Production authority lock path is not canonical."
@@ -3372,6 +3374,7 @@ class ProductionPublicationBinding:
     control_token_sha256: str
     nonce: str
     expires_at_utc: str
+    range_authorization_sha256: Optional[str] = None
     max_successful_uses: int = 1
     operation: str = AUTHORIZED_OPERATION
     schema_version: str = PRODUCTION_CAPABILITY_SCHEMA
@@ -3434,7 +3437,8 @@ class ProductionPublicationBinding:
             or not all(_is_hex64(v) for v in self.artifact_sha256.values())
             or not _is_sha40(self.publisher_release_sha)
             or not _is_sha40(self.candidate_release_sha)
-            or self.publisher_release_sha == self.candidate_release_sha
+            or (self.publisher_release_sha == self.candidate_release_sha and self.range_authorization_sha256 is None)
+            or (self.range_authorization_sha256 is not None and not _is_hex64(self.range_authorization_sha256))
             or not all(
                 isinstance(value, Mapping)
                 and set(value) == set(_CUMULATIVE_KEYS)
@@ -3462,7 +3466,11 @@ class ProductionPublicationBinding:
             )
 
     def as_dict(self) -> Dict[str, Any]:
-        return json.loads(_canonical({name: getattr(self, name) for name in _PRODUCTION_BINDING_FIELDS}))
+        payload = {name: getattr(self, name) for name in _PRODUCTION_BINDING_FIELDS}
+        # Preserve the accepted G4 binding digest and its deterministic recovery.
+        if self.range_authorization_sha256 is None:
+            payload.pop("range_authorization_sha256")
+        return json.loads(_canonical(payload))
 
     @property
     def digest(self) -> str:
@@ -3580,6 +3588,7 @@ def issue_production_publication_capability(
     hostname: Optional[str] = None,
     uid: Optional[int] = None,
     authority_lock: Optional[Mapping[str, Any]] = None,
+    range_authorization: Any = None,
 ) -> ProductionPublicationCapability:
     """Issue the exact one-shot June 27 capability or its gated resume.
 
@@ -3599,17 +3608,23 @@ def issue_production_publication_capability(
         else production_authority_lock_identity()
     )
     fixed = {
-        "night": binding.night_utc == CONTROL_APPROVED_NIGHT,
-        "predecessor": binding.predecessor_night_utc == CONTROL_APPROVED_PREDECESSOR,
         "production": Path(binding.production_root) == PRODUCTION_DATA_ROOT,
         "stage": Path(binding.stage_root) == PRODUCTION_STAGE_ROOT,
         "control": Path(binding.control_root) == PRODUCTION_CONTROL_ROOT,
         "evidence": Path(binding.evidence_root) == PRODUCTION_EVIDENCE_ROOT,
-        "candidate_root": Path(binding.candidate_root)
-        == CONTROL_APPROVED_CANDIDATE_ROOT,
-        "candidate_release": binding.candidate_release_sha
-        == CONTROL_APPROVED_CANDIDATE_RELEASE,
     }
+    if range_authorization is None:
+        fixed.update({
+            "night": binding.night_utc == CONTROL_APPROVED_NIGHT,
+            "predecessor": binding.predecessor_night_utc == CONTROL_APPROVED_PREDECESSOR,
+            "candidate_root": Path(binding.candidate_root) == CONTROL_APPROVED_CANDIDATE_ROOT,
+            "candidate_release": binding.candidate_release_sha == CONTROL_APPROVED_CANDIDATE_RELEASE,
+            "range_absent": binding.range_authorization_sha256 is None,
+        })
+    else:
+        from .production_range import qualify_range_night
+        qualify_range_night(range_authorization, binding, authorization, candidate,
+                            resume=control_token is None)
     if not all(fixed.values()):
         failed = ",".join(sorted(name for name, passed in fixed.items() if not passed))
         raise ProductionAuthorizationUnavailable(
@@ -3650,7 +3665,7 @@ def issue_production_publication_capability(
         ):
             raise ProductionAuthorizationUnavailable("Control token digest differs.")
     return _issue_production_publication_capability(
-        run_id=f"production-{CONTROL_APPROVED_NIGHT}-{authorization.digest[:16]}",
+        run_id=f"production-{binding.night_utc}-{authorization.digest[:16]}",
         binding=binding.as_dict(),
         binding_sha256=binding.digest,
         authorization_sha256=authorization.digest,

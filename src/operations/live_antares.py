@@ -123,6 +123,13 @@ def _canonical_date(value: str) -> str:
     return value
 
 
+def night_mjd_interval(value: str) -> Tuple[float, float]:
+    """Exact UTC civil-midnight MJD bounds, independent of local timezone."""
+    canonical = _canonical_date(value)
+    first = float((date.fromisoformat(canonical) - date(1858, 11, 17)).days)
+    return first, first + 1.0
+
+
 def _real_directory(path: Path, label: str) -> Path:
     lexical = Path(path).expanduser()
     if lexical.is_symlink() or not lexical.is_dir():
@@ -179,10 +186,7 @@ class LiveAntaresReadCapability:
         if observed_host.strip().lower().split(".", 1)[0] != "arnor":
             raise LiveCapabilityError("Live commissioning authority is Arnor-only.")
         identity = _safe_run_id(run_id)
-        if target_date_utc != PHASE6_TARGET_DATE_UTC:
-            raise LiveCapabilityError(
-                f"Arnor Phase 6 authority is restricted to {PHASE6_TARGET_DATE_UTC}."
-            )
+        _canonical_date(target_date_utc)
         expected = ARNOR_CANARY_ROOT / identity
         lexical = Path(os.path.abspath(os.fspath(Path(run_root).expanduser())))
         if lexical != expected or lexical.parent != ARNOR_CANARY_ROOT:
@@ -696,9 +700,7 @@ class LiveAntaresProvider:
                 )
             )
         if (
-            self.capability.target_date_utc != PHASE6_TARGET_DATE_UTC
-            or request.date_utc != PHASE6_TARGET_DATE_UTC
-            or request.date_utc != self.capability.target_date_utc
+            request.date_utc != self.capability.target_date_utc
         ):
             raise ProviderContractError(
                 ProviderIssue(
@@ -709,8 +711,7 @@ class LiveAntaresProvider:
                 )
             )
         if (
-            request.mjd_min != PHASE6_MJD_MIN
-            or request.mjd_max != PHASE6_MJD_MAX
+            (request.mjd_min, request.mjd_max) != night_mjd_interval(request.date_utc)
             or request.query_tag is not None
             or request.target_loci is not None
             or request.lsst_only is not True
@@ -724,7 +725,30 @@ class LiveAntaresProvider:
                 )
             )
 
-    def query(self, request: NightScienceRequest) -> NightQueryResult:
+    def query_resumable(self, request, bindings, *, event_hook=None):
+        """Reprove committed tile decisions and acquire only the pending frontier."""
+        from .query_progress import QueryProgress
+        from .query_checkpoint import _binding_payload, _request_binding, QueryCheckpointError
+
+        self._validate_request(request)
+        if (bindings.run_id != self.capability.run_id
+                or bindings.release_sha != self.capability.release_sha
+                or bindings.provider_name != self.provider_name
+                or bindings.provider_scenario != self.scenario
+                or dict(bindings.query_policy) != {
+                    "scientific_contract": self.scientific_contract(request),
+                    "execution_policy": self.execution_policy()}):
+            raise QueryCheckpointError("Query-progress caller binding differs from provider.")
+        identity = {
+            "bindings": _binding_payload(bindings), "request": _request_binding(request),
+            "provider_implementation_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "client": self.client_identity(),
+            "initial_tiles": list(self._initial_tiles_fn(request.mjd_min, request.mjd_max)),
+        }
+        with QueryProgress(self.capability.run_root, self.capability.run_id, identity) as progress:
+            return self.query(request, _progress=progress, _event_hook=event_hook)
+
+    def query(self, request: NightScienceRequest, *, _progress=None, _event_hook=None) -> NightQueryResult:
         """Run the accepted probe-first time/RA/Dec extractor to exhaustion.
 
         Every tile uses a half-open time interval.  A 50-row probe is
@@ -776,6 +800,72 @@ class LiveAntaresProvider:
         retry_count = 0
         aggregate_partial_rows = 0
         retry_exception_types = set()
+        resumed_attempt = 1
+
+        def commit_decision(entry, records=(), retry_scheduled=False):
+            if _progress is not None:
+                from .query_progress import encode_records
+                _progress.commit({"trace": entry, "records": encode_records(records),
+                                  "retry_scheduled": retry_scheduled})
+                if _event_hook is not None:
+                    _event_hook("query_tile_committed", {"status": entry["status"], "tile": {k: entry[k] for k in _TILE_KEYS}})
+
+        if _progress is not None:
+            from .query_progress import decode_records
+            from .query_checkpoint import QueryCheckpointError
+            for event in _progress.events:
+                if not pending or set(event) != {"trace", "records", "retry_scheduled"}:
+                    raise QueryCheckpointError("Query-progress traversal is inconsistent.")
+                entry = event["trace"]
+                tile = pending[0]
+                if (not isinstance(entry, dict) or {k: entry.get(k) for k in _TILE_KEYS} != tile
+                        or entry.get("query_sha256") != _sha256_json(_build_tile_query(tile))
+                        or type(entry.get("attempt")) is not int
+                        or not 1 <= entry["attempt"] <= self.max_query_attempts
+                        or entry["attempt"] != resumed_attempt):
+                    raise QueryCheckpointError("Query-progress tile lineage/ref mismatch.")
+                records = decode_records(event["records"])
+                status = entry.get("status")
+                if status == "accepted_exhausted":
+                    if (entry.get("iterator_exhausted") is not True or len(records) >= PROBE_LIMIT
+                            or entry.get("returned_loci") != len(records)
+                            or event["retry_scheduled"] is not False
+                            or any(not isinstance(r, dict) or not r.get("locus_id")
+                                   or not _record_matches_tile(r, tile) for r in records)):
+                        raise QueryCheckpointError("Query-progress terminal tile is incomplete.")
+                    pending.popleft()
+                    accepted_tiles.append(tile)
+                    accepted_records.extend(records)
+                elif status == "split_saturated":
+                    children = _split_tile(tile)
+                    if (not children or records or entry.get("returned_before_split") != PROBE_LIMIT
+                            or entry.get("iterator_exhausted") is not False
+                            or event["retry_scheduled"] is not False):
+                        raise QueryCheckpointError("Query-progress split is invalid.")
+                    pending.popleft()
+                    pending.extendleft(reversed(children))
+                    split_count += 1
+                    aggregate_partial_rows += PROBE_LIMIT
+                elif status == "attempt_error":
+                    if (records or entry.get("iterator_exhausted") is not False
+                            or type(entry.get("partial_rows_discarded")) is not int
+                            or not 0 <= entry["partial_rows_discarded"] < PROBE_LIMIT
+                            or not isinstance(entry.get("exception_type"), str)
+                            or entry.get("retryable") is not True
+                            or event["retry_scheduled"] is not True
+                            or type(event["retry_scheduled"]) is not bool
+                            or event["retry_scheduled"] != (entry["attempt"] < self.max_query_attempts)):
+                        raise QueryCheckpointError("Query-progress retry evidence is invalid.")
+                    aggregate_partial_rows += entry["partial_rows_discarded"]
+                    retry_exception_types.add(entry["exception_type"])
+                    retry_count += int(event["retry_scheduled"])
+                    resumed_attempt = entry["attempt"] + 1 if event["retry_scheduled"] else 1
+                else:
+                    raise QueryCheckpointError("Query-progress decision is unsupported.")
+                search_request_count += 1
+                trace.append(entry)
+                if status != "attempt_error":
+                    resumed_attempt = 1
 
         def deduplicated_frame() -> Tuple[pd.DataFrame, int, list[str]]:
             if not accepted_records:
@@ -916,7 +1006,7 @@ class LiveAntaresProvider:
             tile_records = []
             saturated = False
             exhausted = False
-            for attempt in range(1, self.max_query_attempts + 1):
+            for attempt in range(resumed_attempt, self.max_query_attempts + 1):
                 tile_records = []
                 saturated = False
                 exhausted = False
@@ -963,6 +1053,7 @@ class LiveAntaresProvider:
                             "query_sha256": _sha256_json(body),
                         }
                     )
+                    commit_decision(trace[-1], retry_scheduled=retryable and attempt < self.max_query_attempts)
                     if retryable and attempt < self.max_query_attempts:
                         retry_count += 1
                         self.sleeper(self.retry_delay_seconds * attempt)
@@ -977,6 +1068,8 @@ class LiveAntaresProvider:
                         ),
                     )
                 break
+
+            resumed_attempt = 1
 
             if saturated:
                 aggregate_partial_rows += len(tile_records)
@@ -1010,6 +1103,7 @@ class LiveAntaresProvider:
                         "query_sha256": _sha256_json(body),
                     }
                 )
+                commit_decision(trace[-1])
                 continue
             if not exhausted:
                 return failed_result(
@@ -1028,6 +1122,7 @@ class LiveAntaresProvider:
                     "query_sha256": _sha256_json(body),
                 }
             )
+            commit_decision(trace[-1], tile_records)
 
         coverage_complete = bool(
             len(accepted_tiles) == len(initial_tiles) + split_count
@@ -1223,6 +1318,56 @@ class LiveAntaresProvider:
             combined,
         )
 
+    def fetch_segment(self, request: NightScienceRequest, requested: Tuple[str, ...]):
+        """The existing segmented per-object fetch path, shared by range acquisition."""
+        from .fetch_checkpoint import FetchObjectResult, FetchCheckpointFetchError
+        self._validate_request(request)
+        _search, get_by_id, _connectivity = self._load_client()
+        if not requested:
+            return ()
+        results: Dict[str, Mapping[str, Any]] = {}
+        workers = min(self.max_fetch_workers, len(requested))
+        batch_size = max(workers, workers * 4)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for offset in range(0, len(requested), batch_size):
+                batch = requested[offset : offset + batch_size]
+                futures = {
+                    pool.submit(
+                        self._fetch_one,
+                        locus_id,
+                        get_by_id,
+                        request.range_label,
+                    ): locus_id
+                    for locus_id in batch
+                }
+                for future in as_completed(futures):
+                    locus_id = futures[future]
+                    try:
+                        results[locus_id] = future.result()
+                    except Exception as exc:
+                        results[locus_id] = {
+                            "locus_id": locus_id,
+                            "completed": False,
+                            "frame": None,
+                            "retry_count": 0,
+                            "attempt_errors": [_exception_type(exc)],
+                        }
+        failed = [value for value in requested if not results[value]["completed"]]
+        if failed:
+            raise FetchCheckpointFetchError(
+                "A deterministic fetch segment did not complete every object."
+            )
+        return tuple(
+            FetchObjectResult(
+                locus_id,
+                results[locus_id]["frame"],
+                retry_count=int(results[locus_id]["retry_count"]),
+                retry_exception_types=tuple(results[locus_id]["attempt_errors"]),
+            )
+            for locus_id in requested
+        )
+
+
     def fetch_resumable(
         self,
         request: NightScienceRequest,
@@ -1316,63 +1461,12 @@ class LiveAntaresProvider:
         )
         started = self.clock()
         t0 = self.monotonic()
-        checkpoint_get_by_id: Optional[Callable[[str], Any]] = None
-
-        def fetch_segment(requested: Tuple[str, ...]) -> Tuple[FetchObjectResult, ...]:
-            nonlocal checkpoint_get_by_id
-            if checkpoint_get_by_id is None:
-                _search, checkpoint_get_by_id, _connectivity = self._load_client()
-            get_by_id = checkpoint_get_by_id
-            if not requested:
-                return ()
-            results: Dict[str, Mapping[str, Any]] = {}
-            workers = min(self.max_fetch_workers, len(requested))
-            batch_size = max(workers, workers * 4)
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                for offset in range(0, len(requested), batch_size):
-                    batch = requested[offset : offset + batch_size]
-                    futures = {
-                        pool.submit(
-                            self._fetch_one,
-                            locus_id,
-                            get_by_id,
-                            request.range_label,
-                        ): locus_id
-                        for locus_id in batch
-                    }
-                    for future in as_completed(futures):
-                        locus_id = futures[future]
-                        try:
-                            results[locus_id] = future.result()
-                        except Exception as exc:
-                            results[locus_id] = {
-                                "locus_id": locus_id,
-                                "completed": False,
-                                "frame": None,
-                                "retry_count": 0,
-                                "attempt_errors": [_exception_type(exc)],
-                            }
-            failed = [value for value in requested if not results[value]["completed"]]
-            if failed:
-                raise FetchCheckpointFetchError(
-                    "A deterministic fetch segment did not complete every object."
-                )
-            return tuple(
-                FetchObjectResult(
-                    locus_id,
-                    results[locus_id]["frame"],
-                    retry_count=int(results[locus_id]["retry_count"]),
-                    retry_exception_types=tuple(results[locus_id]["attempt_errors"]),
-                )
-                for locus_id in requested
-            )
+        def fetch_segment(requested):
+            return self.fetch_segment(request, requested)
 
         try:
-            completion = checkpoint.fetch_missing(
-                locus_ids,
-                fetch_segment,
-                event_hook=event_hook,
-            )
+            completion = (checkpoint.inspect_complete(locus_ids) if checkpoint.read_only else
+                          checkpoint.fetch_missing(locus_ids, fetch_segment, event_hook=event_hook))
             segment_frames = []
             lightcurves_with_rows = 0
             lightcurves_empty = 0

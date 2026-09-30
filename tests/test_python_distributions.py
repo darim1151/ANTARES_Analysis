@@ -19,9 +19,11 @@ class PythonDistributionTests(unittest.TestCase):
         (root / "src" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
         (root / "pyproject.toml").write_text("[build-system]\n", encoding="utf-8")
         (root / "README.md").write_text("# Example\n", encoding="utf-8")
+        (root / "MANIFEST.in").write_text("recursive-include tests *.py\n", encoding="utf-8")
 
     def make_sdist(self, path, source_root, *, mtime, metadata="Metadata-Version: 2.4\n"):
         files = {
+            "MANIFEST.in": (source_root / "MANIFEST.in").read_bytes(),
             "README.md": (source_root / "README.md").read_bytes(),
             "pyproject.toml": (source_root / "pyproject.toml").read_bytes(),
             "src/__init__.py": (source_root / "src" / "__init__.py").read_bytes(),
