@@ -414,4 +414,3 @@ echo "exit=$?"
 Expected result: both nights `PUBLISHED`, `summary.nights_published == 2`,
 `publication_frontier: null`, authority tail `2026-06-29`, and a new Sentinel
 V2 equal to the 2026-06-29 journal's `resulting_production_fingerprint`.
-
