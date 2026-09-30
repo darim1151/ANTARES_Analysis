@@ -6,6 +6,43 @@ This project still uses ANTARES as the broker/source. The workflows can run on
 Middle Earth or Rubin Science Platform (RSP); neither environment is a direct
 Rubin Butler/TAP replacement.
 
+## Release 0.4.5
+
+This release freezes the reviewed V3-G5 range implementation (source
+`a01947386fb7aaf9eb2a59609137b3a5cd79ed0f`) for manual, Control-authorized
+production ranges of at most 31 UTC nights.
+
+- **Acquisition.** Each night uses resumable, hash-chained query progress plus
+  the existing sealed query and segmented fetch checkpoints. Acquisition is
+  concurrent. Construction is chained in date order.
+- **Publication.** A single ordered writer uses one-shot per-night production
+  capabilities under the unchanged Sentinel V2, gate, journal and
+  reconciliation rules.
+- **Operator module.** `src.operations.production_range` provides offline
+  `plan`, read-only `inspect`, gated `execute`/`--resume`, and `recover`
+  limited to an already-journaled publication.
+- **Authorization.** Execution needs a `ProductionRangeAuthorization` and a
+  detached Control approval. Control creates the approval outside the
+  package.
+
+Relative to the accepted source, only release metadata changed:
+
+- the package version and `cli.SOURCE_VERSION`;
+- the installed-version pin in the shared immutable-release check
+  (`production_canary._verify_release`), which range execution reuses.
+
+The completed June 27 canary shares that check and is never re-run.
+Scientific extraction, publication semantics, the cache policy, and the
+attested `live_antares.py` and `production_range.py` sources are unchanged.
+The production cache stays absent.
+
+Invoke the operator module by importing `main()`. Running
+`python -m src.operations.production_range` executes the module as
+`__main__` and fails closed on the adapter attestation. The operator runbook
+and the Linux/Arnor qualification evidence are in
+`docs/operations/V3_G5_MANUAL_RANGE_RUNBOOK.md` and
+`docs/operations/V3_G5_PLATFORM_RELEASE_QUALIFICATION.md`.
+
 ## Release 0.4.4 candidate
 
 This release adds an explicit, separately authorized publication mechanism for

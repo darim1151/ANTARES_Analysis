@@ -45,7 +45,7 @@ from src.operations.writer import WriterError, production_ingest_refusal
 
 
 DIST_NAME = "antares-analysis"
-SOURCE_VERSION = "0.4.4"
+SOURCE_VERSION = "0.4.5"
 PROFILE_CHOICES = ("auto", "environment", *sorted(BUILTIN_PROFILES))
 
 
