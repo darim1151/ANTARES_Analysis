@@ -26,6 +26,7 @@ from importlib import import_module
 from types import ModuleType
 
 __all__ = [
+    "authority",
     "cache",
     "chunked_query",
     "cli",

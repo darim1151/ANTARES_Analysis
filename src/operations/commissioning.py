@@ -268,6 +268,20 @@ def establish_target_eligibility(
     data_root: Path,
     target_date_utc: str = TARGET_DATE_UTC,
 ) -> Mapping[str, Any]:
+    """Prove target eligibility from one authority generation."""
+    try:
+        with history.authoritative_read(data_root):
+            return _establish_target_eligibility_locked(data_root, target_date_utc)
+    except history.PublicationInProgress as exc:
+        raise CommissioningError(
+            f"Production authority is unavailable for eligibility: {exc}"
+        ) from exc
+
+
+def _establish_target_eligibility_locked(
+    data_root: Path,
+    target_date_utc: str = TARGET_DATE_UTC,
+) -> Mapping[str, Any]:
     """Prove the intended target is the next chronological accepted night."""
     if target_date_utc != TARGET_DATE_UTC:
         raise CommissioningError(
@@ -388,6 +402,27 @@ def establish_target_eligibility(
 
 
 def resource_preflight(
+    run_root: Path,
+    data_root: Path,
+    predecessor_date: str = ACCEPTED_PREDECESSOR_DATE,
+    provider_policy: Optional[Mapping[str, Any]] = None,
+) -> Mapping[str, Any]:
+    """Read predecessor capacity evidence from one authority generation."""
+    try:
+        with history.authoritative_read(data_root):
+            return _resource_preflight_locked(
+                run_root,
+                data_root,
+                predecessor_date=predecessor_date,
+                provider_policy=provider_policy,
+            )
+    except history.PublicationInProgress as exc:
+        raise CommissioningError(
+            f"Production authority is unavailable for resource preflight: {exc}"
+        ) from exc
+
+
+def _resource_preflight_locked(
     run_root: Path,
     data_root: Path,
     predecessor_date: str = ACCEPTED_PREDECESSOR_DATE,
@@ -801,6 +836,28 @@ def _sentinel_predicates_valid(value: Mapping[str, Any]) -> bool:
 
 
 def capture_production_sentinel(
+    data_root: Path,
+    cache_root: Path,
+    target_date_utc: str = TARGET_DATE_UTC,
+    *,
+    mountinfo_lines: Optional[Sequence[str]] = None,
+) -> Mapping[str, Any]:
+    """Capture Sentinel V2 from one shared authority generation."""
+    try:
+        with history.authoritative_read(data_root):
+            return _capture_production_sentinel_locked(
+                data_root,
+                cache_root,
+                target_date_utc,
+                mountinfo_lines=mountinfo_lines,
+            )
+    except history.PublicationInProgress as exc:
+        raise CommissioningError(
+            f"Production authority is unavailable for Sentinel capture: {exc}"
+        ) from exc
+
+
+def _capture_production_sentinel_locked(
     data_root: Path,
     cache_root: Path,
     target_date_utc: str = TARGET_DATE_UTC,

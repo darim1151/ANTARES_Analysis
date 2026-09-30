@@ -6,7 +6,58 @@ This project still uses ANTARES as the broker/source. The workflows can run on
 Middle Earth or Rubin Science Platform (RSP); neither environment is a direct
 Rubin Butler/TAP replacement.
 
-## Release 0.4.3 candidate
+## Release 0.4.4 candidate
+
+This release adds an explicit, separately authorized publication mechanism for
+validated nightly candidates, and a resumable multi-night backfill controller.
+
+- **Publication.**
+  - Candidate bytes, including the accepted June 27 recovery candidate, are
+    never rewritten. Loci and alert Parquet files are published unchanged,
+    manifest-last, through the existing transaction.
+  - The authoritative manifest is new metadata. It carries an `authority`
+    block and correct publication chronology. The known June 27
+    candidate-manifest `finished_at_utc` placeholder is kept only as
+    provenance.
+  - Publication is refused on:
+    - predecessor gaps;
+    - Sentinel V2 drift;
+    - candidate hash or release mismatches;
+    - residue, an unresolved gate, or an unfinished journal of any class;
+    - an absent authorization;
+    - a duplicate authority.
+  - One server-coordinated NFS authority lock is shared by canonical readers
+    for their entire logical operation and held exclusively by publication for
+    its full lifecycle, so readers cannot see a mixed nightly/cumulative
+    generation. The durable gate remains crash/reconciliation evidence; its
+    removal is the authority commit, not the cross-host mutex. Every crash
+    boundary classifies as `NOT_COMMITTED`, `RECONCILIATION_REQUIRED`, or
+    `COMPLETE`, and re-running `publish` with the same authorization rolls
+    forward. Replays are idempotent.
+  - Authorization binds the full Sentinel V2 context and the planned
+    cumulative hashes. Production deployment must provision the persistent
+    authority lock in the publication control root before readers are enabled.
+- **Backfill.**
+  - Each night owns its sealed query checkpoint, fetch checkpoint, candidate
+    and event log, and its state is derived from that evidence.
+  - Acquisition is concurrent: 3 by default and configurable. Construction is
+    chained in date order. Publication uses exactly one ordered writer and
+    never crosses a blocked predecessor.
+  - Prior-free acquisition is admitted only for the exact attested provider
+    and adapter implementation, with the science-contract and configuration
+    identities bound before any query or fetch.
+  - Resume reuses sealed queries and every valid segment. It never re-queries,
+    re-fetches, or re-publishes.
+- **Cache.** An optional content-addressed segment cache is disposable and
+  verified before reuse. It refuses `/astro/store/shire/ANTARES/cache`, because
+  the Sentinel V2 predicate requires that path to be absent.
+
+No production write capability, live multi-night acquisition adapter, cache
+namespace, or June 27 publication is authorized by this release. The 0.4.3
+offline-recovery command is consumer-pinned and refuses to run under 0.4.4. See
+`docs/operations/V3_PUBLICATION_AND_BACKFILL.md`.
+
+## Release 0.4.3
 
 The production sentinel now separates durable cross-run state from live
 filesystem-session evidence. Durable production identity retains the canonical

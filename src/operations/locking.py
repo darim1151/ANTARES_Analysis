@@ -17,6 +17,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple, Union
 
 from .storage import (
     DevelopmentWriteCapability,
+    ProductionPublicationCapability,
     SyntheticWriteCapability,
     contained_path,
 )
@@ -30,7 +31,11 @@ class LockOwnershipError(RuntimeError):
     pass
 
 
-WriteCapability = Union[DevelopmentWriteCapability, SyntheticWriteCapability]
+WriteCapability = Union[
+    DevelopmentWriteCapability,
+    SyntheticWriteCapability,
+    ProductionPublicationCapability,
+]
 LOCK_SCHEMA_VERSION = "2.0"
 
 
@@ -364,7 +369,12 @@ class WriterLock:
         process_start_identity: Optional[str] = None,
     ) -> None:
         if not isinstance(
-            capability, (DevelopmentWriteCapability, SyntheticWriteCapability)
+            capability,
+            (
+                DevelopmentWriteCapability,
+                SyntheticWriteCapability,
+                ProductionPublicationCapability,
+            ),
         ):
             raise TypeError("WriterLock requires a sealed write capability.")
         if not isinstance(target_identity, str) or not target_identity:

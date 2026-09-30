@@ -17,6 +17,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Optional, Sequence
 
+from src.authority import AuthorityLockError
 from src.cli_diagnostics import (
     collect_data_status,
     collect_doctor_checks,
@@ -44,7 +45,7 @@ from src.operations.writer import WriterError, production_ingest_refusal
 
 
 DIST_NAME = "antares-analysis"
-SOURCE_VERSION = "0.4.3"
+SOURCE_VERSION = "0.4.4"
 PROFILE_CHOICES = ("auto", "environment", *sorted(BUILTIN_PROFILES))
 
 
@@ -383,6 +384,36 @@ def _handle_backfill_plan(args: argparse.Namespace) -> int:
     return _render_operation_report(report, json_output=args.json)
 
 
+def _handle_backfill_status(args: argparse.Namespace) -> int:
+    from src.operations.backfill import BackfillError, inspect_backfill
+
+    data_root = args.data_root or (args.run_root / "published")
+    try:
+        document = inspect_backfill(
+            args.run_root, data_root, args.start_date, args.end_date,
+            journal_root=args.journal_root, evidence_root=args.evidence_root,
+        )
+    except (BackfillError, ValueError) as exc:
+        print(f"Refused: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        _print_json(document)
+    else:
+        for night in document["nights"]:
+            blocked = night.get("blocked") or {}
+            suffix = f" ({blocked.get('stage')}: {blocked.get('error_type')})" if blocked else ""
+            print(f"{night['date_utc']}  {night['stage']}{suffix}")
+        summary = document["summary"]
+        print(
+            f"published {summary['nights_published']}/{summary['nights_total']}, "
+            f"blocked {summary['nights_blocked']}, "
+            f"reconciliation required {summary['nights_reconciliation_required']}, "
+            f"frontier {summary['publication_frontier']}"
+        )
+    summary = document["summary"]
+    return 1 if summary["nights_blocked"] or summary["nights_reconciliation_required"] else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the stable, navigable parser used by the console entry point."""
     parser = argparse.ArgumentParser(
@@ -532,7 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
     night_offline.set_defaults(handler=offline_handler)
 
     backfill_parser = commands.add_parser(
-        "backfill", help="plan sequential backlog handling without executing it"
+        "backfill", help="plan or inspect sequential backlog handling without executing it"
     )
     backfill_commands = backfill_parser.add_subparsers(
         dest="backfill_command", metavar="COMMAND"
@@ -546,6 +577,30 @@ def build_parser() -> argparse.ArgumentParser:
     _add_profile_options(backfill_plan)
     backfill_plan.add_argument("--json", action="store_true", help="emit versioned JSON")
     backfill_plan.set_defaults(handler=_handle_backfill_plan)
+    backfill_status = backfill_commands.add_parser(
+        "status",
+        help="derive per-night backfill state read-only from durable evidence",
+    )
+    backfill_status.add_argument("start_date", help="inclusive start YYYY-MM-DD")
+    backfill_status.add_argument("end_date", help="inclusive end YYYY-MM-DD")
+    backfill_status.add_argument(
+        "--run-root", type=Path, required=True,
+        help="root that owns backfill/nights (never created or modified)",
+    )
+    backfill_status.add_argument(
+        "--data-root", type=Path, default=None,
+        help="authoritative data root (default: RUN_ROOT/published)",
+    )
+    backfill_status.add_argument(
+        "--journal-root", type=Path, default=None,
+        help="publication journal root (default: RUN_ROOT/control/journals)",
+    )
+    backfill_status.add_argument(
+        "--evidence-root", type=Path, default=None,
+        help="publication evidence root (default: RUN_ROOT/evidence)",
+    )
+    backfill_status.add_argument("--json", action="store_true", help="emit JSON")
+    backfill_status.set_defaults(handler=_handle_backfill_status)
 
     recovery = commands.add_parser(
         "recovery", help="inspect durable interrupted-writer evidence read-only"
@@ -603,7 +658,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         handler = args.handler
         return int(handler(args))
-    except (OSError, ValueError, WriterError) as exc:
+    except (OSError, ValueError, WriterError, AuthorityLockError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 2
 

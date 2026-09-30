@@ -31,6 +31,13 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.authority import AuthorityLockError, shared_authority_lock
+
+
 EXIT_OK = 0
 EXIT_INTEGRITY_ISSUES = 1
 EXIT_ERROR = 2
@@ -2522,7 +2529,29 @@ def _write_outputs_exclusively(out, outputs):
         ) from exc
 
 
+# Mirrors src.history.PUBLICATION_GATE_NAME; this script stays standalone.
+PUBLICATION_GATE_NAME = "PUBLICATION_TRANSACTION_IN_PROGRESS.json"
+
+
 def audit_data_root(data_root, out, batch_size=DEFAULT_BATCH_SIZE):
+    """Audit one complete authority generation and write its reports."""
+    try:
+        root = Path(data_root).expanduser().resolve(strict=True)
+        with shared_authority_lock(root, wait_seconds=30.0):
+            gate = root / "data" / "lsst_only" / PUBLICATION_GATE_NAME
+            if gate.exists() or gate.is_symlink():
+                raise AuditPreflightError(
+                    "A publication authority transition is unresolved; refusing "
+                    "to audit a non-authoritative generation."
+                )
+            return _audit_data_root_locked(data_root, out, batch_size=batch_size)
+    except AuthorityLockError as exc:
+        raise AuditPreflightError(
+            f"Could not obtain the authoritative shared-read lock: {exc}"
+        ) from exc
+
+
+def _audit_data_root_locked(data_root, out, batch_size=DEFAULT_BATCH_SIZE):
     """Audit ``data_root``, write all ten reports to a new ``out`` directory.
 
     The returned object is the same dictionary written to ``summary.json``.
@@ -2540,6 +2569,14 @@ def audit_data_root(data_root, out, batch_size=DEFAULT_BATCH_SIZE):
     # Inventory is deliberately captured before the external output directory
     # is created, so the source snapshot always precedes report persistence.
     inventories = _scan_root_inventory(root, issues)
+    gate = root / "data" / "lsst_only" / PUBLICATION_GATE_NAME
+    if gate.exists() or gate.is_symlink():
+        issues.add(
+            "publication_transaction_in_progress",
+            "A publication authority transition is unresolved; nightly and "
+            "cumulative products may belong to different generations.",
+            _relative(gate, root),
+        )
     nightly = _inspect_nightly(root, pq, issues, batch_size)
     cumulative = _inspect_cumulative(
         root,

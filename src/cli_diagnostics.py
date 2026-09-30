@@ -13,8 +13,12 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
+from src.authority import shared_authority_lock
 from src.cli_notebooks import NOTEBOOKS, discover_repo_root
 from src.cli_profiles import StorageProfile
+
+# Mirrors src.history.PUBLICATION_GATE_NAME without importing the science stack.
+PUBLICATION_GATE_NAME = "PUBLICATION_TRANSACTION_IN_PROGRESS.json"
 
 
 REQUIRED_IMPORTS = (
@@ -117,6 +121,12 @@ def _manifest_inventory(nightly_root: Path) -> tuple[list[Path], list[str]]:
 
 
 def collect_data_status(profile: StorageProfile) -> dict[str, object]:
+    """Collect status from one complete authority generation."""
+    with shared_authority_lock(profile.data_root, wait_seconds=30.0):
+        return _collect_data_status_locked(profile)
+
+
+def _collect_data_status_locked(profile: StorageProfile) -> dict[str, object]:
     """Collect a bounded manifest/layout summary without decoding Parquet data."""
     data_root = profile.data_root
     lsst_root = data_root / "data" / "lsst_only"
@@ -124,6 +134,45 @@ def collect_data_status(profile: StorageProfile) -> dict[str, object]:
     cumulative_root = lsst_root / "cumulative"
     loci_index = cumulative_root / "loci_index.parquet"
     nightly_summary = cumulative_root / "nightly_summary.parquet"
+    gate = lsst_root / PUBLICATION_GATE_NAME
+    if gate.exists() or gate.is_symlink():
+        # Status may describe the recovery condition, but it must not scan or
+        # total a generation whose durable authority transition is unresolved.
+        path_states = {
+            "data_root": _path_state(data_root),
+            "data_directory": _path_state(data_root / "data"),
+            "lsst_root": _path_state(lsst_root),
+            "nightly_root": _path_state(nightly_root),
+            "cumulative_root": _path_state(cumulative_root),
+            "loci_index": _path_state(loci_index),
+            "nightly_summary": _path_state(nightly_summary),
+            "cache_root": _path_state(profile.cache_root),
+            "forbidden_in_tree_cache": _path_state(data_root / "cache"),
+            "publication_gate": _path_state(gate),
+        }
+        return {
+            "profile": profile.as_dict(),
+            "read_only": True,
+            "publication_in_progress": True,
+            "ok": False,
+            "paths": path_states,
+            "summary": {
+                "manifest_count": None,
+                "complete_nights": None,
+                "under_target_nights": None,
+                "saturated_unresolved_nights": None,
+                "append_ready_nights": None,
+                "first_date": None,
+                "last_date": None,
+                "total_loci": None,
+                "total_alerts": None,
+                "zero_row_nights": [],
+            },
+            "errors": [
+                f"{gate}: a publication authority transition is unresolved; "
+                "authoritative inventory and counts were not read"
+            ],
+        }
     manifest_paths, inventory_errors = _manifest_inventory(nightly_root)
 
     dates: list[str] = []
@@ -205,6 +254,7 @@ def collect_data_status(profile: StorageProfile) -> dict[str, object]:
         "nightly_summary": _path_state(nightly_summary),
         "cache_root": _path_state(profile.cache_root),
         "forbidden_in_tree_cache": _path_state(data_root / "cache"),
+        "publication_gate": _path_state(lsst_root / PUBLICATION_GATE_NAME),
     }
     required_directories = (
         "data_root",
@@ -255,9 +305,19 @@ def collect_data_status(profile: StorageProfile) -> dict[str, object]:
             f"{path_states['forbidden_in_tree_cache']['path']}: "
             "cache must remain outside durable data"
         )
+    publication_in_progress = bool(
+        path_states["publication_gate"]["exists"]
+        or path_states["publication_gate"]["is_symlink"]
+    )
+    if publication_in_progress:
+        errors.append(
+            f"{path_states['publication_gate']['path']}: a publication authority "
+            "transition is unresolved; nightly and cumulative counts are not authoritative"
+        )
     return {
         "profile": profile.as_dict(),
         "read_only": True,
+        "publication_in_progress": publication_in_progress,
         "ok": bool(required_paths_ok and manifest_paths and not errors and forbidden_cache_ok),
         "paths": path_states,
         "summary": {

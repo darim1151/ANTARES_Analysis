@@ -329,6 +329,33 @@ def repair_zero_row_nights(
     apply=False,
     min_headroom_mib=DEFAULT_MIN_HEADROOM_MIB,
 ):
+    """Inspect under a shared lock or apply under the universal exclusive lock."""
+    root = Path(data_root).resolve()
+    lock = (
+        history.exclusive_authority_lock(root, create=True)
+        if apply
+        else history.authoritative_read(root)
+    )
+    try:
+        with lock:
+            return _repair_zero_row_nights_locked(
+                root,
+                dates,
+                backup_dir,
+                apply=apply,
+                min_headroom_mib=min_headroom_mib,
+            )
+    except (history.AuthorityLockError, history.PublicationInProgress) as exc:
+        raise RepairError(f"Could not establish the authority lock: {exc}") from exc
+
+
+def _repair_zero_row_nights_locked(
+    data_root,
+    dates,
+    backup_dir,
+    apply=False,
+    min_headroom_mib=DEFAULT_MIN_HEADROOM_MIB,
+):
     data_root = Path(data_root).resolve()
     dates = tuple(dict.fromkeys(dates))
     if not data_root.is_dir():

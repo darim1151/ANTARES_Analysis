@@ -136,6 +136,13 @@ def _sha256_file(path):
 
 
 def _source_inventory(data_root):
+    # Nightly partitions are immutable once committed; discovering them inside
+    # one committed generation is enough to keep snapshots unmixed.
+    with history.authoritative_read(data_root):
+        return _committed_source_inventory(data_root)
+
+
+def _committed_source_inventory(data_root):
     data_root = Path(data_root)
     inventory = []
     for manifest_path in _manifest_files(data_root):
@@ -426,6 +433,12 @@ def _normalize_snapshot_frame(df, source):
 
 
 def build_or_load_feature_snapshots(data_root, force=False):
+    """Build/load snapshots from one authority generation."""
+    with history.authoritative_read(data_root):
+        return _build_or_load_feature_snapshots_locked(data_root, force=force)
+
+
+def _build_or_load_feature_snapshots_locked(data_root, force=False):
     """Build or load the compact locus-feature snapshot table.
 
     Returns ``(snapshots, coverage, manifest)``. Source validation streams all

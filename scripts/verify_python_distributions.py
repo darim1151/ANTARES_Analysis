@@ -12,7 +12,13 @@ from typing import Dict, Tuple
 
 
 FileRecord = Tuple[int, int, str]
-ROOT_FILES = {"PKG-INFO", "README.md", "pyproject.toml", "setup.cfg"}
+ROOT_FILES = {
+    "MANIFEST.in",
+    "PKG-INFO",
+    "README.md",
+    "pyproject.toml",
+    "setup.cfg",
+}
 EGG_INFO_FILES = {
     "PKG-INFO",
     "SOURCES.txt",
@@ -98,6 +104,7 @@ def sdist_inventory(path: Path, source_root: Path) -> Dict[str, FileRecord]:
     )
     expected_sources["pyproject.toml"] = source_root / "pyproject.toml"
     expected_sources["README.md"] = source_root / "README.md"
+    expected_sources["MANIFEST.in"] = source_root / "MANIFEST.in"
     for relative, source in expected_sources.items():
         if relative not in inventory:
             raise ValueError(f"{path}: missing source file: {relative}")

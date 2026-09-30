@@ -20,7 +20,14 @@ ACCEPTED_ZERO_ROW_NIGHTS = frozenset({"2026-03-05", "2026-03-11"})
 OPERATIONS_DIRECTORY = ".antares-operations"
 _DEVELOPMENT_CAPABILITY_TOKEN = object()
 _SYNTHETIC_CAPABILITY_TOKEN = object()
+_PRODUCTION_PUBLICATION_CAPABILITY_TOKEN = object()
 ARNOR_CANARY_ROOT = MIDDLE_EARTH_CANARY_ROOT
+PRODUCTION_AUTHORITY_ROOT = Path("/astro/store/shire/ANTARES")
+PRODUCTION_DATA_ROOT = PRODUCTION_AUTHORITY_ROOT / "data"
+PRODUCTION_PUBLICATION_ROOT = PRODUCTION_AUTHORITY_ROOT / "work" / "publication"
+PRODUCTION_STAGE_ROOT = PRODUCTION_PUBLICATION_ROOT / "staging"
+PRODUCTION_CONTROL_ROOT = PRODUCTION_PUBLICATION_ROOT / "control"
+PRODUCTION_EVIDENCE_ROOT = PRODUCTION_PUBLICATION_ROOT / "evidence"
 
 
 class StorageContractError(ValueError):
@@ -516,3 +523,97 @@ class SyntheticWriteCapability:
             "arnor-canary",
             _SYNTHETIC_CAPABILITY_TOKEN,
         )
+
+
+@dataclass(frozen=True)
+class ProductionPublicationCapability:
+    """Sealed one-shot authority for the Control-approved June 27 canary.
+
+    There is intentionally no public factory.  The publication module issues
+    this object only after validating the external Control token, exact
+    binding, authorization, host, UID, Sentinel, and canonical lock identity.
+    The plaintext token is never retained.
+    """
+
+    run_id: str
+    binding: Mapping[str, Any]
+    binding_sha256: str
+    authorization_sha256: str
+    control_token_sha256: str
+    publisher_release_sha: str
+    _token: object = field(repr=False, compare=False)
+    environment: str = "arnor-production-one-shot"
+
+    def __post_init__(self) -> None:
+        if self._token is not _PRODUCTION_PUBLICATION_CAPABILITY_TOKEN:
+            raise StorageContractError(
+                "Production publication capabilities must be issued by the "
+                "Control-token verifier."
+            )
+        _validated_run_id(self.run_id)
+        if self.environment != "arnor-production-one-shot":
+            raise StorageContractError("Unknown production capability environment.")
+        for label, value, length in (
+            ("binding", self.binding_sha256, 64),
+            ("authorization", self.authorization_sha256, 64),
+            ("Control token", self.control_token_sha256, 64),
+            ("publisher release", self.publisher_release_sha, 40),
+        ):
+            if (
+                not isinstance(value, str)
+                or len(value) != length
+                or any(character not in "0123456789abcdef" for character in value)
+            ):
+                raise StorageContractError(f"Production {label} identity is malformed.")
+        if not isinstance(self.binding, Mapping):
+            raise StorageContractError("Production binding must be a mapping.")
+        object.__setattr__(
+            self,
+            "binding",
+            json.loads(json.dumps(dict(self.binding), sort_keys=True)),
+        )
+
+    @property
+    def root(self) -> Path:
+        return PRODUCTION_AUTHORITY_ROOT
+
+    @property
+    def published_root(self) -> Path:
+        return PRODUCTION_DATA_ROOT
+
+    @property
+    def staging_root(self) -> Path:
+        return PRODUCTION_STAGE_ROOT
+
+    @property
+    def lock_root(self) -> Path:
+        return PRODUCTION_CONTROL_ROOT / "locks"
+
+    @property
+    def journal_root(self) -> Path:
+        return PRODUCTION_CONTROL_ROOT / "journals"
+
+    @property
+    def evidence_root(self) -> Path:
+        return PRODUCTION_EVIDENCE_ROOT
+
+
+def _issue_production_publication_capability(
+    *,
+    run_id: str,
+    binding: Mapping[str, Any],
+    binding_sha256: str,
+    authorization_sha256: str,
+    control_token_sha256: str,
+    publisher_release_sha: str,
+) -> ProductionPublicationCapability:
+    """Internal constructor used only after publication-layer qualification."""
+    return ProductionPublicationCapability(
+        run_id=run_id,
+        binding=binding,
+        binding_sha256=binding_sha256,
+        authorization_sha256=authorization_sha256,
+        control_token_sha256=control_token_sha256,
+        publisher_release_sha=publisher_release_sha,
+        _token=_PRODUCTION_PUBLICATION_CAPABILITY_TOKEN,
+    )

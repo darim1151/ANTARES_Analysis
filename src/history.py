@@ -13,10 +13,20 @@ built night by night and resumed after disconnects:
 
 Each nightly partition is saved immediately after ingestion. The cumulative
 tables are compact indexes rebuilt from those manifests and parquet files.
+
+A V3 publication changes the nightly partition and both cumulative tables in
+several filesystem steps. Canonical readers hold one server-coordinated shared
+authority lock for their full logical operation while publication holds it
+exclusively. If publication crashes, the durable
+``PUBLICATION_TRANSACTION_IN_PROGRESS.json`` beside ``nightly/`` and
+``cumulative/`` remains recovery evidence; readers refuse with
+:class:`PublicationInProgress` instead of consuming unresolved state.
 """
 
 import json
+import os
 import time
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +35,11 @@ import pandas as pd
 from astropy.time import Time
 
 from . import chunked_query, lightcurves, query
+from .authority import (
+    AuthorityLockError,
+    exclusive_authority_lock,
+    shared_authority_lock,
+)
 try:
     from . import rsp_permissions
 except ImportError:  # Backward compatibility with older clean RSP checkouts.
@@ -91,8 +106,15 @@ ZERO_ROW_ALERTS_REQUIRED_COLUMNS = {
 ZERO_ROW_REVALIDATION_POLICY = "valid_zero_row_lsst_only_v1"
 
 
+PUBLICATION_GATE_NAME = "PUBLICATION_TRANSACTION_IN_PROGRESS.json"
+
+
 class ProductionWriterUnavailable(RuntimeError):
     """Direct live-query publication is absent from the Phase 5 release."""
+
+
+class PublicationInProgress(RuntimeError):
+    """An authority transition is unresolved; authoritative state is not readable."""
 
 
 def _ensure_storage_path(path):
@@ -178,6 +200,66 @@ def cumulative_paths(data_root):
     }
 
 
+def publication_gate_path(data_root):
+    """Return the marker that exists exactly while a publication is unresolved."""
+    return survey_data_root(data_root) / PUBLICATION_GATE_NAME
+
+
+def authority_generation(data_root):
+    """Return a cheap identity of the committed generation, or refuse.
+
+    Every V3 publication replaces both cumulative files with new inodes before
+    it removes the gate, so an unchanged token observed before and after a
+    read proves no authority transition started or committed in between.
+    """
+    gate = publication_gate_path(data_root)
+    if gate.exists() or gate.is_symlink():
+        raise PublicationInProgress(
+            f"A publication authority transition is unresolved ({gate}); "
+            "authoritative nightly and cumulative state is not readable."
+        )
+    token = []
+    for key in ("loci_index", "nightly_summary"):
+        try:
+            observed = os.stat(cumulative_paths(data_root)[key])
+        except FileNotFoundError:
+            token.append(None)
+        else:
+            token.append((observed.st_ino, observed.st_size, observed.st_mtime_ns))
+    return tuple(token)
+
+
+@contextmanager
+def authority_read_lock(data_root, *, wait_seconds=30.0):
+    """Hold the universal shared authority lock without interpreting the gate.
+
+    Status/recovery readers use this lower-level form because they must inspect
+    an unresolved durable gate.  Science readers should use
+    :func:`authoritative_read`, which additionally refuses gated state.
+    """
+    try:
+        with shared_authority_lock(data_root, wait_seconds=wait_seconds) as lock:
+            yield lock
+    except AuthorityLockError as exc:
+        raise PublicationInProgress(
+            f"Authoritative state is unavailable because its shared lock "
+            f"could not be established: {exc}"
+        ) from exc
+
+
+@contextmanager
+def authoritative_read(data_root, *, wait_seconds=30.0):
+    """Hold one generation for the entire logical authoritative read."""
+    with authority_read_lock(data_root, wait_seconds=wait_seconds):
+        before = authority_generation(data_root)
+        yield before
+        if authority_generation(data_root) != before:
+            raise PublicationInProgress(
+                "Authoritative state changed despite the shared lock; a writer "
+                "bypassed the authority protocol."
+            )
+
+
 def iter_night_windows(mjd_start, mjd_stop):
     """
     Yield one-day MJD windows from `mjd_start` up to `mjd_stop`.
@@ -195,10 +277,11 @@ def iter_night_windows(mjd_start, mjd_stop):
 def read_manifest(data_root, date_utc):
     """Load a nightly manifest if it exists; otherwise return None."""
     path = nightly_paths(data_root, date_utc)["manifest"]
-    if not path.exists():
-        return None
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    with authoritative_read(data_root):
+        if not path.exists():
+            return None
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
 
 
 def _write_json(path, payload):
@@ -431,6 +514,12 @@ def recorded_query_fetch_errors(manifest):
 
 
 def revalidate_zero_row_night(data_root, date_utc):
+    """Validate one zero-row night from one complete authority generation."""
+    with authoritative_read(data_root):
+        return _revalidate_zero_row_night_locked(data_root, date_utc)
+
+
+def _revalidate_zero_row_night_locked(data_root, date_utc):
     """Regenerate one valid empty-night manifest from its durable products.
 
     This is intentionally conservative: it accepts only a completed,
@@ -847,17 +936,44 @@ def update_cumulative_indexes(
     By default, manifests with `validation.append_ready == False` are not
     included in the cumulative loci index.
     """
-    if output_dir is None:
-        paths = cumulative_paths(data_root)
-    else:
+    if output_dir is not None:
         output_root = Path(output_dir)
         paths = {
             "dir": output_root,
             "loci_index": output_root / "loci_index.parquet",
             "nightly_summary": output_root / "nightly_summary.parquet",
         }
-    _ensure_storage_path(paths["dir"])
+        _ensure_storage_path(paths["dir"])
+        with authoritative_read(data_root):
+            loci_index, summary_df = _rebuild_cumulative_frames(
+                data_root, require_append_ready, manifest_overrides
+            )
+        _safe_to_parquet(summary_df, paths["nightly_summary"])
+        _safe_to_parquet(loci_index, paths["loci_index"])
+        return loci_index, summary_df
 
+    # A canonical rebuild is itself a writer.  It takes the same exclusive
+    # authority lock as publication, so no reader can observe its two-file
+    # replacement halfway through and no publication can overlap it.
+    paths = cumulative_paths(data_root)
+    try:
+        with exclusive_authority_lock(data_root, create=True):
+            authority_generation(data_root)
+            _ensure_storage_path(paths["dir"])
+            loci_index, summary_df = _rebuild_cumulative_frames(
+                data_root, require_append_ready, manifest_overrides
+            )
+            _safe_to_parquet(summary_df, paths["nightly_summary"])
+            _safe_to_parquet(loci_index, paths["loci_index"])
+            return loci_index, summary_df
+    except AuthorityLockError as exc:
+        raise PublicationInProgress(
+            f"Canonical rebuild could not obtain the exclusive authority lock: {exc}"
+        ) from exc
+
+
+def _rebuild_cumulative_frames(data_root, require_append_ready, manifest_overrides):
+    """Compute the canonical full-rebuild cumulative frames from nightly partitions."""
     overrides = dict(manifest_overrides or {})
     manifests = []
     loci_frames = []
@@ -906,24 +1022,32 @@ def update_cumulative_indexes(
             loci_index = loci_index.sort_values(["night_mjd_min", LOCUS_ID_COL]).reset_index(drop=True)
     else:
         loci_index = pd.DataFrame(columns=CUMULATIVE_INDEX_COLUMNS)
-
-    _safe_to_parquet(summary_df, paths["nightly_summary"])
-    _safe_to_parquet(loci_index, paths["loci_index"])
     return loci_index, summary_df
 
 
 def load_cumulative_loci_index(data_root=HISTORY_DATA_ROOT, before_mjd=None, before_date=None):
     """Load the cumulative loci index, optionally excluding current/future nights."""
     path = cumulative_paths(data_root)["loci_index"]
-    if not path.exists():
-        return pd.DataFrame(columns=CUMULATIVE_INDEX_COLUMNS)
-
-    df = pd.read_parquet(path)
+    with authoritative_read(data_root):
+        if not path.exists():
+            return pd.DataFrame(columns=CUMULATIVE_INDEX_COLUMNS)
+        df = pd.read_parquet(path)
     if before_mjd is not None and "night_mjd_max" in df.columns:
         df = df[df["night_mjd_max"] <= float(before_mjd)].copy()
     if before_date is not None and "night_date_utc" in df.columns:
         df = df[df["night_date_utc"] < before_date].copy()
     return df.reset_index(drop=True)
+
+
+def load_nightly_summary(data_root=HISTORY_DATA_ROOT):
+    """Load the cumulative nightly summary from one committed generation."""
+    path = cumulative_paths(data_root)["nightly_summary"]
+    with authoritative_read(data_root):
+        if not path.exists():
+            return pd.DataFrame(
+                columns=list(_manifest_to_summary_row({"date_utc": None}).keys())
+            )
+        return pd.read_parquet(path)
 
 
 def load_cumulative_alerts(data_root=HISTORY_DATA_ROOT, before_mjd=None, before_date=None,
@@ -936,6 +1060,11 @@ def load_cumulative_alerts(data_root=HISTORY_DATA_ROOT, before_mjd=None, before_
     instead of silently omitting scientific rows. Use `max_nights` for a
     bounded plotting sample from a very large platform store.
     """
+    with authoritative_read(data_root):
+        return _load_cumulative_alerts(data_root, before_mjd, before_date, max_nights)
+
+
+def _load_cumulative_alerts(data_root, before_mjd, before_date, max_nights):
     manifests = []
     for manifest_path in _manifest_paths(data_root):
         manifest = _load_manifest_path(manifest_path)

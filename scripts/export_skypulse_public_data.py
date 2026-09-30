@@ -23,12 +23,18 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.authority import AuthorityLockError, shared_authority_lock
 DEFAULT_OUT = ROOT / "web" / "public" / "data"
 DEFAULT_SAMPLE = ROOT / "data" / "antares_raw_data.csv"
 DEFAULT_MANIFEST = ROOT / "data" / "manifest_example.json"
 SCHEMA_VERSION = 2
 MJD_EPOCH = datetime(1858, 11, 17, tzinfo=timezone.utc)
 SURVEY_SUBDIR = "lsst_only"
+# Mirrors src.history.PUBLICATION_GATE_NAME; this script stays standalone.
+PUBLICATION_GATE_NAME = "PUBLICATION_TRANSACTION_IN_PROGRESS.json"
 USABLE_STATUSES = {"complete", "under_target", "saturated_unresolved"}
 PREFERRED_LATEST_STATUSES = {"complete", "under_target"}
 RSP_LOCI_COLUMNS = [
@@ -423,6 +429,12 @@ def discover_nights(data_root: Path) -> list[dict[str, Any]]:
     nightly_root = data_root / "data" / SURVEY_SUBDIR / "nightly"
     if not nightly_root.exists():
         raise ExportError(f"Nightly RSP directory is missing: {nightly_root}")
+    gate = data_root / "data" / SURVEY_SUBDIR / PUBLICATION_GATE_NAME
+    if gate.exists() or gate.is_symlink():
+        raise ExportError(
+            f"A publication authority transition is unresolved ({gate}); refusing to "
+            "export a possibly mixed nightly/cumulative generation."
+        )
 
     nights: list[dict[str, Any]] = []
     for manifest_path in sorted(nightly_root.glob("*/*/*/manifest.json")):
@@ -950,6 +962,17 @@ def build_demo_payloads(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
 
 
 def build_rsp_payloads(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
+    """Build the complete RSP export while holding one shared generation."""
+    try:
+        with shared_authority_lock(args.data_root, wait_seconds=30.0):
+            return _build_rsp_payloads_locked(args)
+    except AuthorityLockError as exc:
+        raise ExportError(
+            f"Could not obtain the authoritative shared-read lock: {exc}"
+        ) from exc
+
+
+def _build_rsp_payloads_locked(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
     selected = choose_rsp_night(args)
     frames = load_rsp_frames(selected, args.data_root)
     selected_manifest = selected["manifest"]
