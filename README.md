@@ -6,6 +6,30 @@ This project still uses ANTARES as the broker/source. The workflows can run on
 Middle Earth or Rubin Science Platform (RSP); neither environment is a direct
 Rubin Butler/TAP replacement.
 
+## Release 0.4.6
+
+This patch release freezes the accepted V3-G6.2 remediation (source
+`04d0b13e6d0b5ea73800965b2c955c52c24842cc`) on top of 0.4.5.
+
+- **Query transport retry.** antares-client 1.14.0 decodes every result page
+  as JSON, including HTTP error bodies, so a non-JSON page (for example an
+  HTML gateway error) raises `requests.exceptions.JSONDecodeError`. That class
+  is also a `ValueError`, so 0.4.5 classified it as non-retryable
+  `live_query_malformed` and blocked the night. 0.4.6 retries only that
+  exception, within the existing bounded per-tile budget. A retry restarts
+  the whole tile and discards its partial rows.
+- **Unchanged science.** Provider validation errors stay non-retryable, and a
+  persistent failure still fails closed. Coverage proof, saturation and
+  splitting, LSST selection, publication and Sentinel rules are unchanged.
+- **Attestation.** `live_antares.py` is `afe11a1b…`, and both prior-free
+  acquisition attestations are re-pinned to it. `production_range.py`
+  (`81ce9209…`) is unchanged.
+
+Relative to the accepted source, only release metadata changed: the package
+version, `cli.SOURCE_VERSION`, the installed-version pin in
+`production_canary._verify_release`, and this note. Range checkpoints are
+bound to their release, so 0.4.6 never adopts checkpoints sealed by 0.4.5.
+
 ## Release 0.4.5
 
 This release freezes the reviewed V3-G5 range implementation (source

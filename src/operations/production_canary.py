@@ -100,8 +100,8 @@ def _utc_now() -> datetime:
 def _verify_release(release_sha: str, wheel_sha256: str) -> Dict[str, str]:
     if not _is_sha(release_sha, 40) or not _is_sha(wheel_sha256, 64):
         raise ProductionCanaryRefused("Release or wheel identity is malformed.")
-    if metadata.version("antares-analysis") != "0.4.5":
-        raise ProductionCanaryRefused("Installed package version is not 0.4.5.")
+    if metadata.version("antares-analysis") != "0.4.6":
+        raise ProductionCanaryRefused("Installed package version is not 0.4.6.")
     release_root = Path(sys.prefix).resolve().parent
     if release_root.name != release_sha:
         raise ProductionCanaryRefused("Interpreter is not in the exact release directory.")
@@ -124,7 +124,7 @@ def _verify_release(release_sha: str, wheel_sha256: str) -> Dict[str, str]:
         "wheel_sha256": wheel_sha256,
         "release_root": str(release_root),
         "python": ".".join(str(part) for part in sys.version_info[:3]),
-        "package_version": "0.4.5",
+        "package_version": "0.4.6",
         "module": str(module_root),
     }
 
