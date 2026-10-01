@@ -102,13 +102,13 @@ PRIOR_FREE_ACQUISITION_ATTESTATIONS: Tuple[Mapping[str, str], ...] = (
         "scenario": "commissioning-v1",
         "provider_module": "src.operations.live_antares",
         "provider_implementation_sha256": (
-            "f22578a51ca65a3cf41d7fc8690fc026ccc0a16aefb300fc9c488cfb99c04199"
+            "afe11a1b0846ed20293d503b393d477f3b4309fcfa195b13320170ed4e18d14c"
         ),
         "adapter": "src.operations.live_antares.LiveAntaresProvider",
         "adapter_implementation_sha256": (
-            "f22578a51ca65a3cf41d7fc8690fc026ccc0a16aefb300fc9c488cfb99c04199"
+            "afe11a1b0846ed20293d503b393d477f3b4309fcfa195b13320170ed4e18d14c"
         ),
-        "evidence": "V3-G5 local qualification: same prior-free selection and fetch; durable tile traversal",
+        "evidence": "V3-G6.2: V3-G5 qualification plus non-JSON response-body retry; same prior-free selection and fetch",
     },
 )
 
@@ -118,10 +118,10 @@ RANGE_PRIOR_FREE_ACQUISITION_ATTESTATIONS: Tuple[Mapping[str, str], ...] = (
     {
         "provider_name": "live-antares", "scenario": "commissioning-v1",
         "provider_module": "src.operations.live_antares",
-        "provider_implementation_sha256": "f22578a51ca65a3cf41d7fc8690fc026ccc0a16aefb300fc9c488cfb99c04199",
+        "provider_implementation_sha256": "afe11a1b0846ed20293d503b393d477f3b4309fcfa195b13320170ed4e18d14c",
         "adapter": "src.operations.production_range.LiveRangeAdapter",
         "adapter_implementation_sha256": "81ce9209f182d61ca5f9c6bdb5c7722c90c09421b78156d1ac36be0a0da78f1c",
-        "evidence": "V3-G5 local qualification of per-night prior-free live range adapter",
+        "evidence": "V3-G6.2: V3-G5 per-night prior-free live range adapter; provider re-pinned for response-body retry",
     },
 )
 

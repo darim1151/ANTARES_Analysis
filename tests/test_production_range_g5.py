@@ -18,6 +18,7 @@ from unittest import mock
 
 import pandas as pd
 from astropy.time import Time
+from requests.models import Response
 
 import v3_fixtures as F
 from test_operations_phase6 import FakeLocus, _body_matches_locus
@@ -732,6 +733,38 @@ class ProductionAuthorityTests(unittest.TestCase):
         searches.clear()
         resumed = controller.run(NIGHT, NIGHT, resume=True)["nights"][0]
         # Candidate construction independently re-validated the canonical trace.
+        self.assertEqual(resumed["stage"], "WAITING_FOR_PUBLICATION", resumed)
+        self.assertEqual(len(searches), 6912 - 10)
+
+    def test_controller_non_json_response_page_is_transient_not_malformed(self):
+        # G6.2: an HTML error body makes the client's response.json() raise
+        # requests' JSONDecodeError, a ValueError; v0.4.5 blocked such nights
+        # as non-retryable live_query_malformed with an unresumable journal.
+        original = self.adapter.provider_factory
+        searches, armed = [], [True]
+        def flaky(capability):
+            provider = original(capability)
+            search = provider._search_fn
+            def outage(body):
+                searches.append(body)
+                if armed[0] and len(searches) in (11, 12):
+                    response = Response()
+                    response.status_code, response._content = 502, b"<html>502 Bad Gateway</html>"
+                    response.json()
+                return search(body)
+            provider._search_fn = outage
+            return provider
+        self.adapter.provider_factory = flaky
+        controller = self.controller()
+        first = controller.run(NIGHT, NIGHT)["nights"][0]
+        self.assertEqual(first["stage"], "BLOCKED", first)
+        self.assertEqual(first["blocked"]["failure_category"], P.FailureCategory.TRANSIENT_NETWORK.value, first)
+        self.assertTrue(first["blocked"]["retryable"], first)
+        self.assertTrue(first["blocked"]["message"].startswith("live_query_incomplete:"), first)
+        self.assertEqual(len(searches), 12)
+        armed[0] = False
+        searches.clear()
+        resumed = controller.run(NIGHT, NIGHT, resume=True)["nights"][0]
         self.assertEqual(resumed["stage"], "WAITING_FOR_PUBLICATION", resumed)
         self.assertEqual(len(searches), 6912 - 10)
 

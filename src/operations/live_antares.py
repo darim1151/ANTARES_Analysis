@@ -476,6 +476,26 @@ def _exception_type(error: BaseException) -> str:
     return f"{type(error).__module__}.{type(error).__name__}"
 
 
+def _retryable_query_error(error: BaseException) -> bool:
+    """Whether one failed tile attempt may be repeated within its bounded budget.
+
+    ``TypeError``/``ValueError`` mean a returned locus failed this provider's
+    own validation, which repeating the request cannot repair.  The pinned
+    client's ``requests.exceptions.JSONDecodeError`` is also a ``ValueError``,
+    but it means an HTTP response body was not JSON (for example an HTML
+    gateway error page that the client decodes before raising its own
+    error): a service condition like any other transient failure.  A retry
+    still restarts the whole tile and discards every partial row.
+    """
+    if not isinstance(error, (TypeError, ValueError)):
+        return True
+    try:
+        from requests.exceptions import JSONDecodeError
+    except ImportError:
+        return False
+    return isinstance(error, JSONDecodeError)
+
+
 def _validated_base_url(value: str) -> str:
     parsed = urlsplit(str(value))
     if (
@@ -1075,7 +1095,7 @@ class LiveAntaresProvider:
                             break
                 except Exception as exc:
                     aggregate_partial_rows += len(tile_records)
-                    retryable = not isinstance(exc, (TypeError, ValueError))
+                    retryable = _retryable_query_error(exc)
                     exception_type = _exception_type(exc)
                     retry_exception_types.add(exception_type)
                     trace.append(
