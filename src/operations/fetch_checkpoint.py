@@ -654,6 +654,8 @@ class SegmentedFetchCheckpoint:
             raise FetchCheckpointBindingError("Sealed run root is missing or unsafe.")
         self.capability = capability
         self.read_only = False
+        self.pinned_completion_sha256: Optional[str] = None
+        self.pinned_segments: Optional[Dict[int, Tuple[str, str]]] = None
         self.binding = binding
         self.run_root = run_root.resolve(strict=True)
         self.root = _lexical_child(self.run_root, CHECKPOINT_DIRECTORY)
@@ -682,13 +684,22 @@ class SegmentedFetchCheckpoint:
 
     @classmethod
     def open_read_only(
-        cls, run_root: Path, binding: FetchCheckpointBinding
+        cls,
+        run_root: Path,
+        binding: FetchCheckpointBinding,
+        *,
+        completion_sha256: Optional[str] = None,
     ) -> "SegmentedFetchCheckpoint":
         """Open existing evidence without granting live-read or write authority.
 
         Cross-release authorization belongs to the caller's recovery contract;
         this reader still requires the checkpoint's exact originating binding.
         It never creates, chmods, fsyncs, repairs, or upgrades source entries.
+
+        With ``completion_sha256`` the reader is pinned to that exact
+        completion: its segment identities, read once from bytes with that
+        digest, are what every later receipt and blob read must hash to, so a
+        consumer can only ever see the authorized bytes.
         """
         if not isinstance(binding, FetchCheckpointBinding):
             raise FetchCheckpointBindingError("A FetchCheckpointBinding is required.")
@@ -698,6 +709,8 @@ class SegmentedFetchCheckpoint:
         instance = cls.__new__(cls)
         instance.capability = None
         instance.read_only = True
+        instance.pinned_completion_sha256 = None
+        instance.pinned_segments = None
         instance.binding = binding
         instance.run_root = root
         instance.root = root / CHECKPOINT_DIRECTORY
@@ -708,7 +721,32 @@ class SegmentedFetchCheckpoint:
         instance.complete_path = instance.root / "fetch-complete.json"
         instance._check_read_only_directories()
         instance._open_or_create_header(allow_create=False)
+        if completion_sha256 is not None:
+            instance._pin_completion(completion_sha256)
         return instance
+
+    def _pin_completion(self, completion_sha256: str) -> None:
+        payload = _read_regular(
+            self.complete_path, maximum=MAX_JSON_BYTES, label="fetch completion"
+        )
+        if _sha256(payload) != _require_hash(completion_sha256, "completion_sha256", _HEX_64):
+            raise FetchCheckpointCorrupt("Fetch completion differs from its pinned identity.")
+        document = _parse_canonical_json(payload, "fetch completion")
+        segments = document.get("segments")
+        if (
+            document.get("checkpoint_identity_sha256") != self.binding.identity_sha256
+            or not isinstance(segments, list)
+            or document.get("segments_sha256")
+            != _sha256(_canonical_json({"segments": segments}))
+        ):
+            raise FetchCheckpointCorrupt("Pinned fetch completion is not this checkpoint's.")
+        pinned: Dict[int, Tuple[str, str]] = {}
+        for item in segments:
+            if not isinstance(item, dict) or type(item.get("index")) is not int or item["index"] in pinned:
+                raise FetchCheckpointCorrupt("Pinned fetch completion lists invalid segments.")
+            pinned[item["index"]] = (str(item.get("receipt_sha256")), str(item.get("blob_sha256")))
+        self.pinned_completion_sha256 = completion_sha256
+        self.pinned_segments = pinned
 
     def _check_read_only_directories(self) -> None:
         for path in (
@@ -1154,6 +1192,12 @@ class SegmentedFetchCheckpoint:
         )
         if len(blob) != artifact["bytes"] or _sha256(blob) != digest:
             raise FetchCheckpointCorrupt("Segment Parquet size or hash disagrees.")
+        if (
+            self.pinned_segments is not None
+            and self.pinned_segments.get(plan.index) != (_sha256(payload), digest)
+        ):
+            # These exact receipt and blob bytes are what is parsed below.
+            raise FetchCheckpointCorrupt("Segment differs from the pinned fetch completion.")
         frame = _read_parquet(blob, expected_schema_sha256=schema_digest)
         expected_rows = sum(int(value["alert_rows"]) for value in objects)
         retry_count = sum(int(value["retry_count"]) for value in objects)
@@ -1278,7 +1322,10 @@ class SegmentedFetchCheckpoint:
             payload = _read_regular(
                 self.complete_path, maximum=MAX_JSON_BYTES, label="fetch completion"
             )
-            if _parse_canonical_json(payload, "fetch completion") != document:
+            if _parse_canonical_json(payload, "fetch completion") != document or (
+                self.pinned_completion_sha256 is not None
+                and _sha256(payload) != self.pinned_completion_sha256
+            ):
                 raise FetchCheckpointCorrupt("Read-only completion identity differs.")
             referenced = {
                 record.receipt["artifact"]["sha256"] + ".parquet"

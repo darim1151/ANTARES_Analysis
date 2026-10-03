@@ -12,19 +12,26 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import socket
 import unittest
 import uuid
 from pathlib import Path
 from unittest import mock
 
+import pandas as pd
+
 import v3_fixtures as F
 import test_production_range_g5 as G5
+from test_operations_phase6 import FakeLocus
 from src.operations import backfill as B, publication as P, production_range as R
 from src.operations import storage as S
+from src.operations import query_checkpoint as QC
 from src.operations.fetch_checkpoint import SegmentedFetchCheckpoint
+from src.operations.live_antares import LiveAntaresProvider
 from src.operations.query_checkpoint import load_query_result_checkpoint, seal_query_result_checkpoint
 from src.operations.storage import RangeWorkCapability
+from src.operations.writer import InjectedWriterFailure
 
 OLD_RELEASE = "7" * 40      # v0.4.5-style range acquisition
 CANARY_RELEASE = "6" * 40   # v0.4.6-style canary acquisition
@@ -310,6 +317,207 @@ class SavedAcquisitionAdoptionTests(unittest.TestCase):
             R.main(["execute", *args, "--execute-authorized-range", "--authorization", "a.json",
                     "--publisher-wheel-sha256", "e" * 64, "--control-token-file", "t",
                     "--control-approval", "a"])
+
+    # -- G6.4B.1: independent-review attack reproducers ------------------------
+
+    def coherent_fetch_replacement(self, root, day, release=CANARY_RELEASE):
+        """An internally valid fetch checkpoint B for the same binding, other science."""
+        twin = self.parent / f"twin-{uuid.uuid4().hex}" / root.name
+        twin.parent.mkdir(mode=0o700)
+        shutil.copytree(root, twin, symlinks=True)
+        shutil.rmtree(twin / "checkpoints" / "live-fetch-v1")
+        adapter = R.LiveRangeAdapter(twin, release, None)
+        request = adapter.acquisition_request(day)
+        configuration = B.configuration_sha256(release, adapter, self.settings.segment_size)
+        bindings = B.query_checkpoint_bindings(twin.name, release, configuration, adapter, request)
+        loaded = load_query_result_checkpoint(twin, request, bindings)
+        binding = B.fetch_checkpoint_binding(twin.name, release, configuration, adapter, request,
+                                             loaded, self.settings.segment_size)
+        minimum = request.mjd_min
+        capability = F.mock_read_capability(twin, twin.name, day, release)
+        provider = LiveAntaresProvider(
+            capability, search_fn=lambda body: [], connectivity_fn=lambda: [], sleeper=lambda _: None,
+            get_by_id_fn=lambda locus_id: FakeLocus(locus_id, mjd=minimum + .5, lightcurve=pd.DataFrame({
+                "mjd": [minimum + .5], "ztf_magpsf": [23.25], "ztf_sigmapsf": [.2], "ztf_fid": [2]})))
+        SegmentedFetchCheckpoint.open(capability, binding).fetch_missing(
+            B.BackfillController._ordered_ids(loaded), lambda ids: provider.fetch_segment(request, ids))
+        return twin / "checkpoints" / "live-fetch-v1"
+
+    def swapper(self, root, replacement):
+        live = root / "checkpoints" / "live-fetch-v1"
+        aside = root / "checkpoints" / "live-fetch-v1.authorized"
+
+        def swap():
+            os.rename(live, aside)
+            os.rename(replacement, live)
+
+        def restore():
+            os.rename(live, replacement)
+            os.rename(aside, live)
+        return swap, restore
+
+    def assert_nothing_published(self, controller, day):
+        self.assertEqual(self.published()[-1], "2026-06-27")
+        state = controller.night_state(day)
+        self.assertNotEqual(state["stage"], "PUBLISHED", state)
+        return state
+
+    def test_coherent_fetch_substitution_during_construction_fails_closed(self):
+        day = DAYS[0]
+        root = self.canary_source(day)
+        authority, publisher = self.adoption_authority(day, day, {day: root})
+        swap, _restore = self.swapper(root, self.coherent_fetch_replacement(root, day))
+        controller = self.controller(publisher, authority.scope)
+        controller.event_hook = lambda name, details: swap() if name == "before_construct" else None
+        night = controller.run(day, day)["nights"][0]
+        self.assertEqual(night["stage"], "BLOCKED", night)
+        self.assert_nothing_published(controller, day)
+        self.assertFalse(controller.workspace(day).candidate.exists())
+
+    def test_fetch_swap_then_restore_around_consumption_fails_closed(self):
+        day = DAYS[0]
+        root = self.canary_source(day)
+        authority, publisher = self.adoption_authority(day, day, {day: root})
+        swap, restore = self.swapper(root, self.coherent_fetch_replacement(root, day))
+        original = self.adapter.construct_checkpoint
+
+        def consume_replacement_then_restore(request, query_result, checkpoint):
+            swap()
+            try:
+                return original(request, query_result, checkpoint)
+            finally:
+                restore()
+
+        self.adapter.construct_checkpoint = consume_replacement_then_restore
+        controller = self.controller(publisher, authority.scope)
+        night = controller.run(day, day)["nights"][0]
+        self.assertEqual(night["stage"], "BLOCKED", night)
+        self.assert_nothing_published(controller, day)
+        self.assertFalse(controller.workspace(day).candidate.exists())
+
+    def test_coherent_fetch_replacement_after_approval_is_refused(self):
+        day = DAYS[0]
+        root = self.canary_source(day)
+        authority, publisher = self.adoption_authority(day, day, {day: root})
+        swap, _restore = self.swapper(root, self.coherent_fetch_replacement(root, day))
+        swap()
+        with self.assertRaises(B.BackfillRefused):
+            self.controller(publisher, authority.scope).run(day, day)
+        self.assertEqual(self.published()[-1], "2026-06-27")
+
+    def journal_files(self, root):
+        journal = root / "checkpoints" / "query-progress-v2"
+        return journal, sorted(journal.glob("event-*.json"))
+
+    def test_interior_journal_event_mutation_with_old_head_is_refused(self):
+        day = DAYS[0]
+        for variant in ("empty-object", "event-emptied"):
+            with self.subTest(variant=variant):
+                root = self.canary_source(day, tag=variant)
+                authority, publisher = self.adoption_authority(day, day, {day: root})
+                journal, events = self.journal_files(root)
+                head_before = (journal / "HEAD.json").read_bytes()
+                target = events[len(events) // 2]
+                os.chmod(target, 0o600)
+                if variant == "empty-object":
+                    target.write_bytes(b"{}\n")
+                else:
+                    envelope = json.loads(target.read_text())
+                    envelope["payload"]["event"] = {}
+                    envelope["sha256"] = hashlib.sha256(QC._canonical_json_bytes(envelope["payload"])).hexdigest()
+                    target.write_bytes(QC._canonical_json_bytes(envelope))
+                self.assertEqual((journal / "HEAD.json").read_bytes(), head_before)
+                with self.assertRaises(B.BackfillRefused):
+                    B.describe_saved_acquisition(root, day, self.adapter, self.settings.segment_size)
+                with self.assertRaises(B.BackfillRefused):
+                    self.controller(publisher, authority.scope).run(day, day)
+                self.assertEqual(self.published()[-1], "2026-06-27")
+                self.assertFalse((self.work_root / "nights").exists())
+
+    def test_rechained_replacement_journal_with_new_head_after_approval_is_refused(self):
+        day = DAYS[0]
+        root = self.canary_source(day)
+        authority, publisher = self.adoption_authority(day, day, {day: root})
+        journal, events = self.journal_files(root)
+        identity_path = journal / "identity.json"
+        document = json.loads(identity_path.read_text())
+        document["identity"]["client"] = dict(document["identity"]["client"], distribution="forged-client")
+        raw_identity = QC._canonical_json_bytes(document)
+        for path in [identity_path, journal / "HEAD.json", *events]:
+            os.chmod(path, 0o600)
+        identity_path.write_bytes(raw_identity)
+        identity_sha = hashlib.sha256(raw_identity).hexdigest()
+        previous = "0" * 64
+        for path in events:
+            payload = dict(json.loads(path.read_text())["payload"], previous_sha256=previous,
+                           identity_sha256=identity_sha)
+            raw = QC._canonical_json_bytes({"payload": payload,
+                                             "sha256": hashlib.sha256(QC._canonical_json_bytes(payload)).hexdigest()})
+            path.write_bytes(raw)
+            previous = hashlib.sha256(raw).hexdigest()
+        (journal / "HEAD.json").write_bytes(QC._canonical_json_bytes(
+            {"count": len(events), "last_sha256": previous, "identity_sha256": identity_sha}))
+        # A coherent journal still describes, but not as the authorized evidence.
+        forged = B.describe_saved_acquisition(root, day, self.adapter, self.settings.segment_size).entry
+        self.assertNotEqual(forged["source_journal_head"], authority.scope.adopted_acquisitions[day]["source_journal_head"])
+        with self.assertRaises(B.BackfillRefused):
+            self.controller(publisher, authority.scope).run(day, day)
+        self.assertEqual(self.published()[-1], "2026-06-27")
+
+    def test_symlink_and_path_substitution_are_refused(self):
+        day = DAYS[0]
+        root = self.canary_source(day)
+        authority, publisher = self.adoption_authority(day, day, {day: root})
+        twin = self.parent / "identical" / root.name
+        twin.parent.mkdir(mode=0o700)
+        shutil.copytree(root, twin, symlinks=True)
+        live = root / "checkpoints" / "live-fetch-v1"
+        os.rename(live, live.with_name("live-fetch-v1.moved"))
+        os.symlink(twin / "checkpoints" / "live-fetch-v1", live)
+        with self.assertRaises(B.BackfillRefused):  # identical bytes behind a symlinked directory
+            self.controller(publisher, authority.scope).run(day, day)
+        os.unlink(live)
+        os.rename(live.with_name("live-fetch-v1.moved"), live)
+        moved = root.with_name(root.name + ".moved")
+        os.rename(root, moved)
+        os.symlink(twin, root)
+        with self.assertRaises(B.BackfillRefused):  # the authorized root is now an alias
+            self.controller(publisher, authority.scope).run(day, day)
+        self.assertEqual(self.published()[-1], "2026-06-27")
+
+    def test_source_mutation_before_capability_issuance_is_refused(self):
+        day = DAYS[0]
+        root = self.canary_source(day)
+        authority, publisher = self.adoption_authority(day, day, {day: root})
+        swap, _restore = self.swapper(root, self.coherent_fetch_replacement(root, day))
+        controller = self.controller(publisher, authority.scope)
+        controller.event_hook = lambda name, details: swap() if name == "before_publish" else None
+        night = controller.run(day, day)["nights"][0]
+        self.assertEqual(night["stage"], "BLOCKED", night)
+        self.assert_nothing_published(controller, day)
+
+    def test_gated_recovery_completes_after_source_becomes_unavailable(self):
+        day = DAYS[0]
+        root = self.canary_source(day)
+        authority, publisher = self.adoption_authority(day, day, {day: root})
+        original, fired = P.NightPublisher, []
+
+        def fault(point, details):
+            if point == "after_manifest_commit" and not fired:
+                fired.append(point)
+                raise InjectedWriterFailure(point)
+
+        with mock.patch.object(R, "NightPublisher",
+                               side_effect=lambda *args, **kwargs: original(*args, **kwargs, fault_hook=fault)):
+            first = self.controller(publisher, authority.scope).run(day, day)["nights"][0]
+        self.assertEqual(first["stage"], "RECONCILIATION_REQUIRED", first)
+        os.rename(root, self.parent / "source-gone")  # the historical source is no longer available
+        recovery = R.ProductionRangePublisher(authority, control_token=None)
+        recovery.mountinfo_lines = publisher.mountinfo_lines
+        with self.no_network():
+            recovered = self.controller(recovery, authority.scope).run(day, day, resume=True, recovery_only=True)
+        self.assertEqual(recovered["nights"][0]["stage"], "PUBLISHED", recovered)
+        self.assertEqual(self.published()[-1], day)
 
     def test_real_saved_acquisition_identities(self):
         adapter = R.LiveRangeAdapter(self.work_root, G5.RELEASE, None)

@@ -15,6 +15,8 @@ from pathlib import Path
 import socket
 import stat
 import sys
+import time
+import types
 from typing import Any, Mapping
 
 from .backfill import (
@@ -25,7 +27,7 @@ from .backfill import (
 )
 from .live_antares import (
     LIVE_ANTARES_READ, LiveAntaresReadCapability, LiveAntaresProvider,
-    _LIVE_READ_TOKEN, _real_directory, _scientific_query_contract, night_mjd_interval,
+    _LIVE_READ_TOKEN, _make_initial_tiles, _real_directory, _scientific_query_contract, night_mjd_interval,
 )
 from .publication import (
     AuthorityState, NightPublisher, ProductionPublicationBinding, PublicationRefused,
@@ -280,6 +282,27 @@ class LiveRangeAdapter:
     def fetch_segment(self, request, locus_ids):
         return self._provider(request).fetch_segment(request, locus_ids)
 
+    def replay_query_journal(self, request, events):
+        """Re-derive a sealed query from its saved journal with the provider's own replay.
+
+        The replay-only provider has no capability, client or service: a
+        journal lacking any decision raises instead of querying or committing.
+        """
+        def refuse(*_args, **_kwargs):
+            raise BackfillRefused("A saved query journal is incomplete; replay never queries or commits.")
+        self.scientific_contract(request)
+        provider = object.__new__(LiveAntaresProvider)
+        provider.capability = types.SimpleNamespace(target_date_utc=request.date_utc, environment="journal-replay")
+        provider._search_fn = provider._get_by_id_fn = provider._connectivity_fn = refuse
+        provider._initial_tiles_fn, provider._initial_tiles_overridden = _make_initial_tiles, False
+        provider.max_query_attempts, provider.max_fetch_attempts, provider.max_fetch_workers = 2, 3, 4
+        provider.retry_delay_seconds, provider.sleeper = 0.5, refuse
+        provider.clock, provider.monotonic = _utc_now, time.monotonic
+        provider._client_identity_cache = None
+        if provider.execution_policy() != self.execution_policy():
+            raise BackfillRefused("Journal replay configuration drifted.")
+        return provider.query(request, _progress=types.SimpleNamespace(events=list(events), commit=refuse))
+
     def construct_checkpoint(self, request, query_result, checkpoint):
         # Existing fetch_resumable reopens all segments, prepares and validates;
         # a complete checkpoint calls no service callback.
@@ -325,8 +348,23 @@ def qualify_range_night(authority, binding, authorization, candidate, *, resume=
         raise BackfillRefused("Candidate acquisition evidence belongs to another range/scientific request.")
     # An adopted night publishes only the exact authorized saved acquisition; others none.
     adopted = scope.adopted_acquisitions.get(binding.night_utc)
-    if candidate.provenance.get("acquisition_source") != (dict(adopted) if adopted is not None else None):
+    provenance = candidate.provenance
+    if provenance.get("acquisition_source") != (dict(adopted) if adopted is not None else None):
         raise BackfillRefused("Candidate acquisition source differs from the authorized adoption.")
+    if adopted is not None:
+        if (provenance.get("query_identity") != adopted["query_integrity_sha256"]
+                or provenance.get("fetch_identity") != adopted["fetch_identity_sha256"]
+                or provenance.get("fetch_completion_sha256") != adopted["fetch_completion_sha256"]):
+            raise BackfillRefused("Candidate did not consume its authorized saved acquisition.")
+        if not resume:
+            # Initial issuance re-proves the pinned source; token-free recovery of a
+            # gated transaction relies on the candidate record that bound consumption.
+            adapter = LiveRangeAdapter(authority.work_root, scope.candidate_release_sha, None)
+            observed = describe_saved_acquisition(
+                Path(adopted["source_root"]), binding.night_utc, adapter, authority.segment_size,
+                completion_sha256=adopted["fetch_completion_sha256"]).entry
+            if observed != dict(adopted):
+                raise BackfillRefused("Saved acquisition changed before publication capability issuance.")
     authority.__post_init__()
     # Even a later completed acquisition cannot bypass a blocked predecessor.
     predecessor = classify_night_authority(PRODUCTION_DATA_ROOT,

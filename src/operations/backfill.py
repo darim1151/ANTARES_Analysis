@@ -129,7 +129,7 @@ RANGE_PRIOR_FREE_ACQUISITION_ATTESTATIONS: Tuple[Mapping[str, str], ...] = (
         "provider_module": "src.operations.live_antares",
         "provider_implementation_sha256": "afe11a1b0846ed20293d503b393d477f3b4309fcfa195b13320170ed4e18d14c",
         "adapter": "src.operations.production_range.LiveRangeAdapter",
-        "adapter_implementation_sha256": "21eeb5119af42bf79def9f3c7a7fc29ed2267b69f6adc71d6bbda3b9d0961648",
+        "adapter_implementation_sha256": "54c0fe236989972ab8f3469f3f98b8378f1491d90b4b3700e9d28bd9bc26b7d5",
         "evidence": "V3-G6.4B: V3-G6.2 range adapter plus Control-bound saved-acquisition adoption",
     },
 )
@@ -480,16 +480,145 @@ def validate_adoption_entry(date_utc: str, entry: Any) -> Dict[str, Any]:
     return json.loads(_canonical(dict(entry)))
 
 
+def exact_tile_partition(tiles: Sequence[Mapping[str, float]], mjd_min: float, mjd_max: float) -> bool:
+    """Exact rational proof that half-open tiles partition the night's full sky."""
+    from fractions import Fraction
+    import bisect
+    from .live_antares import _TILE_KEYS, _make_initial_tiles
+
+    def volume(tile):
+        edges = [Fraction(tile[key]) for key in _TILE_KEYS]
+        return (edges[1] - edges[0]) * (edges[3] - edges[2]) * (edges[5] - edges[4])
+
+    def disjoint(a, b):
+        return any(a[high] <= b[low] or b[high] <= a[low]
+                   for low, high in (("mjd_min", "mjd_max"), ("ra_min", "ra_max"), ("dec_min", "dec_max")))
+
+    initial = _make_initial_tiles(mjd_min, mjd_max)
+    domain = {"mjd_min": mjd_min, "mjd_max": mjd_max, "ra_min": 0.0, "ra_max": 360.0,
+              "dec_min": -90.0, "dec_max": 90.0}
+    if not tiles or sum(map(volume, initial), Fraction(0)) != volume(domain):
+        return False
+    axes = [sorted({tile[key] for tile in initial}) for key in ("mjd_min", "ra_min", "dec_min")]
+    owners = {(tile["mjd_min"], tile["ra_min"], tile["dec_min"]): index for index, tile in enumerate(initial)}
+    groups: Dict[int, List[Mapping[str, float]]] = {index: [] for index in range(len(initial))}
+    for tile in tiles:
+        corner = tuple(axis[max(0, bisect.bisect_right(axis, tile[key]) - 1)]
+                       for axis, key in zip(axes, ("mjd_min", "ra_min", "dec_min")))
+        owner = owners.get(corner)
+        outer = initial[owner] if owner is not None else None
+        if outer is None or not all(outer[low] <= tile[low] and tile[high] <= outer[high] for low, high in (
+                ("mjd_min", "mjd_max"), ("ra_min", "ra_max"), ("dec_min", "dec_max"))):
+            return False
+        groups[owner].append(tile)
+    return all(
+        sum(map(volume, members), Fraction(0)) == volume(initial[index])
+        and all(disjoint(members[i], members[j]) for i in range(len(members)) for j in range(i + 1, len(members)))
+        for index, members in groups.items()
+    )
+
+
+def verify_saved_query_journal(
+    root: Path, request: Any, bindings: QueryResultCheckpointBindings, loaded: Any, adapter: Any,
+) -> Tuple[Dict[str, Any], str]:
+    """Strictly re-prove a saved query-progress journal, read-only.
+
+    Never opens it through QueryProgress (which locks and rewrites HEAD).
+    Proves the exact identity, the complete hash chain and ordering, HEAD,
+    and that the provider's own replay of every committed decision yields
+    the sealed query result and an exact 3-D partition. Returns (HEAD,
+    source provider implementation).
+    """
+    from .live_antares import _TILE_KEYS, _make_initial_tiles
+    from .query_checkpoint import (
+        _binding_payload, _canonical_json_bytes, _parse_canonical_object, _request_binding,
+    )
+    from .query_progress import DIRECTORY, SCHEMA
+
+    def normalized(value):
+        return json.loads(_canonical_json_bytes(value))
+
+    journal = root / "checkpoints" / DIRECTORY
+    if journal.is_symlink() or not journal.is_dir() or journal.resolve(strict=True) != journal:
+        raise BackfillRefused("Saved query journal directory is unsafe.")
+    names = sorted(os.listdir(journal))
+    event_names = [name for name in names if name.startswith("event-")]
+    if set(names) - set(event_names) - {"identity.json", "HEAD.json", "LOCK"}:
+        raise BackfillRefused("Saved query journal has unexpected or residual entries.")
+    raw_identity = _read_regular(journal / "identity.json")
+    document = _parse_canonical_object(raw_identity, "Saved query journal identity")
+    identity = document.get("identity")
+    if (
+        set(document) != {"schema_version", "authoritative", "identity"}
+        or document["schema_version"] != SCHEMA
+        or document["authoritative"] is not False
+        or not isinstance(identity, dict)
+        or set(identity) != {"bindings", "request", "provider_implementation_sha256", "client", "initial_tiles"}
+        or identity["bindings"] != normalized(_binding_payload(bindings))
+        or identity["request"] != normalized(_request_binding(request))
+        or identity["provider_implementation_sha256"] not in ADOPTABLE_SOURCE_PROVIDERS
+        or identity["initial_tiles"] != normalized(_make_initial_tiles(request.mjd_min, request.mjd_max))
+    ):
+        raise BackfillRefused("Saved query journal identity is not this acquisition's.")
+    identity_sha = _sha256(raw_identity)
+    previous, events = "0" * 64, []
+    for index, name in enumerate(event_names):
+        raw = _read_regular(journal / name)
+        envelope = _parse_canonical_object(raw, "Saved query journal event")
+        payload = envelope.get("payload")
+        if (
+            name != f"event-{index:08d}.json"
+            or set(envelope) != {"payload", "sha256"}
+            or not isinstance(payload, dict)
+            or set(payload) != {"sequence", "previous_sha256", "identity_sha256", "event"}
+            or payload["sequence"] != index
+            or payload["previous_sha256"] != previous
+            or payload["identity_sha256"] != identity_sha
+            or envelope["sha256"] != _sha256(_canonical_json_bytes(payload))
+        ):
+            raise BackfillRefused("Saved query journal hash chain is broken.")
+        previous = _sha256(raw)
+        events.append(payload["event"])
+    head = _parse_canonical_object(_read_regular(journal / "HEAD.json"), "Saved query journal head")
+    if head != {"count": len(events), "last_sha256": previous, "identity_sha256": identity_sha}:
+        raise BackfillRefused("Saved query journal HEAD does not commit to its event chain.")
+    replayed = adapter.replay_query_journal(request, events)
+    observed, sealed = replayed.evidence.details, loaded.query_result.evidence.details
+    compared = (
+        "tile_trace_sha256", "locus_order_sha256", "query_contract_sha256", "initial_tile_count",
+        "accepted_tile_count", "split_count", "search_request_count", "returned_loci", "raw_returned_loci",
+        "retry_count", "partial_rows_discarded", "coverage_complete", "terminal_pending_tile_count",
+    )
+    replayed_loci, sealed_loci = replayed.loci, loaded.query_result.loci
+    if (
+        not replayed.clean
+        or any(observed.get(key) != sealed.get(key) for key in compared)
+        or (replayed_loci is None) != (sealed_loci is None)
+        or (replayed_loci is not None and not (
+            list(replayed_loci.columns) == list(sealed_loci.columns) and replayed_loci.equals(sealed_loci)))
+    ):
+        raise BackfillRefused("Saved query journal does not replay to its sealed query result.")
+    accepted = [{key: row[key] for key in _TILE_KEYS} for row in observed["tile_trace"]
+                if row["status"] == "accepted_exhausted"]
+    if not exact_tile_partition(accepted, request.mjd_min, request.mjd_max):
+        raise BackfillRefused("Saved query journal does not partition the night exactly.")
+    return head, identity["provider_implementation_sha256"]
+
+
 def describe_saved_acquisition(
     source_root: Path, date_utc: str, adapter: Any, segment_size: int,
+    *, completion_sha256: Optional[str] = None,
 ) -> SavedAcquisition:
     """Re-prove one saved acquisition from its own sealed evidence, read-only.
 
     The source keeps its originating run id, release and configuration; the
     exact query policy, scientific request and segment size must equal this
-    range's. The sealed query checkpoint and every fetch segment blob are
-    re-verified by their own loaders. Nothing is created, repaired or
-    contacted; any difference raises.
+    range's. The sealed query checkpoint, the complete query journal (see
+    :func:`verify_saved_query_journal`) and every fetch segment are
+    re-verified. With ``completion_sha256`` (an authorized adoption) the
+    returned fetch checkpoint is pinned: anything that later reads it can
+    only consume the authorized receipts and blobs. Nothing is created,
+    repaired or contacted; any difference raises.
     """
     root = Path(os.path.abspath(os.fspath(source_root)))
     try:
@@ -511,20 +640,9 @@ def describe_saved_acquisition(
         release, configuration = claimed.get("release_sha"), claimed.get("configuration_hash")
         if not _is_sha40(release) or configuration != configuration_sha256(release, adapter, segment_size):
             raise BackfillRefused("Saved acquisition configuration differs from this range's policy.")
-        journal = root / "checkpoints" / "query-progress-v2"
-        journal_identity = _read_json(journal / "identity.json").get("identity", {})
-        head = _read_json(journal / "HEAD.json")
-        journal_bindings = journal_identity.get("bindings", {})
-        provider_sha = journal_identity.get("provider_implementation_sha256")
-        if (
-            provider_sha not in ADOPTABLE_SOURCE_PROVIDERS
-            or journal_bindings.get("run_id") != root.name
-            or journal_bindings.get("release_sha") != release
-            or journal_bindings.get("configuration_hash") != configuration
-        ):
-            raise BackfillRefused("Saved acquisition journal identity is not adoptable.")
         bindings = query_checkpoint_bindings(root.name, release, configuration, adapter, request)
         loaded = load_query_result_checkpoint(root, request, bindings)
+        head, provider_sha = verify_saved_query_journal(root, request, bindings, loaded, adapter)
         details = loaded.query_result.evidence.details
         if not (
             loaded.query_result.clean
@@ -537,7 +655,7 @@ def describe_saved_acquisition(
         ids = BackfillController._ordered_ids(loaded)
         binding = fetch_checkpoint_binding(root.name, release, configuration, adapter, request,
                                            loaded, segment_size)
-        checkpoint = SegmentedFetchCheckpoint.open_read_only(root, binding)
+        checkpoint = SegmentedFetchCheckpoint.open_read_only(root, binding, completion_sha256=completion_sha256)
         completion = checkpoint.inspect_complete(ids)
     except BackfillRefused:
         raise
@@ -1097,14 +1215,32 @@ class BackfillController:
         return self.range_authorization.adopted_acquisitions.get(date_utc)
 
     def _saved_acquisition(self, date_utc: str) -> SavedAcquisition:
-        """Re-prove the authorized source now; it must equal the authorization exactly."""
+        """Re-prove the authorized source now, pinned to its authorized fetch completion."""
         authorized = self._adoption(date_utc)
         saved = describe_saved_acquisition(
-            Path(authorized["source_root"]), date_utc, self.adapter, self.settings.segment_size
+            Path(authorized["source_root"]), date_utc, self.adapter, self.settings.segment_size,
+            completion_sha256=authorized["fetch_completion_sha256"],
         )
         if saved.entry != authorized:
             raise BackfillRefused(f"Saved acquisition for {date_utc} differs from its authorized adoption.")
         return saved
+
+    def _adoption_proven_locally(self, date_utc: str, authorized: Mapping[str, Any]) -> bool:
+        """A validated candidate whose record binds exactly the consumed authorized evidence."""
+        workspace = self.workspace(date_utc)
+        try:
+            if _read_json(workspace.adoption) != authorized:
+                return False
+            provenance = load_backfill_candidate(workspace.root).provenance
+        except (OSError, ValueError, PublicationRefused):
+            return False
+        return (
+            provenance.get("acquisition_source") == authorized
+            and provenance.get("range_authorization_sha256") == self.range_authorization.digest
+            and provenance.get("query_identity") == authorized["query_integrity_sha256"]
+            and provenance.get("fetch_identity") == authorized["fetch_identity_sha256"]
+            and provenance.get("fetch_completion_sha256") == authorized["fetch_completion_sha256"]
+        )
 
     def _adoption_binding(self, start: str, end: str) -> Dict[str, Any]:
         if self.range_authorization is None or not self.range_authorization.adopted_acquisitions:
@@ -1114,6 +1250,11 @@ class BackfillController:
         for day, authorized in self.range_authorization.adopted_acquisitions.items():
             if day not in days:
                 raise BackfillRefused("Adopted acquisition is outside the requested range.")
+            if self._adoption_proven_locally(day, authorized):
+                # Already consumed and bound by the night's own candidate record;
+                # recovery never depends on the historical source again.
+                observed[day] = authorized
+                continue
             # Evidence re-proved once per controller run; construction re-proves again.
             if self._adoption_proofs.get(day) != authorized:
                 self._adoption_proofs[day] = describe_saved_acquisition(
@@ -1378,6 +1519,21 @@ class BackfillController:
                       self.adapter.construct(construction_request, query_result,
                                              checkpoint.reconstruct_alerts(ids), completion))
             result.require_publishable()
+            consumed_source = None
+            if adopted is not None:
+                # Provenance comes from what was consumed, never from the earlier proof.
+                consumed = result.fetch_evidence.details["checkpoint"]
+                consumed_source = dict(
+                    adopted,
+                    query_integrity_sha256=loaded.integrity_sha256,
+                    loci=len(ids),
+                    fetch_identity_sha256=consumed["identity_sha256"],
+                    fetch_completion_sha256=consumed["completion_sha256"],
+                    fetch_segments=consumed["segment_count"],
+                    alert_rows=result.fetch_evidence.details["alert_rows"],
+                )
+                if consumed_source != adopted:
+                    raise BackfillRefused("Construction consumed evidence other than its authorized adoption.")
             artifacts = build_night_artifacts(result)
             reopen_and_validate_artifacts(artifacts, expected=result)
             temporary = workspace.root / f"candidate.tmp-{uuid.uuid4().hex[:8]}"
@@ -1414,14 +1570,15 @@ class BackfillController:
                     "scenario": self.adapter.scenario,
                     "query_identity": loaded.integrity_sha256,
                     "fetch_identity": binding.identity_sha256,
-                    "fetch_completion_sha256": completion.completion_sha256,
+                    "fetch_completion_sha256": (consumed_source["fetch_completion_sha256"]
+                                                if consumed_source is not None else completion.completion_sha256),
                     "segments": completion.segment_count,
                     "prior_locus_count": len(prior),
                     "prior_locus_identity_sha256": _identifier_hash(prior),
                 },
             }
-            if adopted is not None:
-                record["provenance"]["acquisition_source"] = dict(adopted)
+            if consumed_source is not None:
+                record["provenance"]["acquisition_source"] = consumed_source
             _write_json_new(temporary / "candidate-record.json", record)
             os.rename(temporary, workspace.candidate)  # candidate appears atomically
             workspace.append_event(
