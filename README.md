@@ -6,6 +6,31 @@ This project still uses ANTARES as the broker/source. The workflows can run on
 Middle Earth or Rubin Science Platform (RSP); neither environment is a direct
 Rubin Butler/TAP replacement.
 
+## Release 0.4.7
+
+This patch release freezes the accepted V3-G6.4B saved-acquisition adoption
+(source `a093bd1b61019136b507080c4050f7deb46cc012`) on top of 0.4.6.
+
+- **Adoption.** A Control-authorized range may adopt a complete saved
+  acquisition (a canary child or another range's night root) instead of
+  querying ANTARES. `plan --adopt DATE=SOURCE_ROOT` re-proves the source
+  read-only and binds its exact identities into the authorization. Execution
+  re-proves it again, rebuilds the candidate against the current predecessor
+  state, and publishes through the normal gated path.
+- **Evidence pinning.** The read-only fetch reader is pinned to the authorized
+  completion, so only the authorized receipts and blobs can be consumed.
+  Provenance is derived from what was consumed and must equal the
+  authorization. The saved query journal is fully hash-chain verified,
+  replayed to the sealed result, and its 3-D partition re-proven.
+- **Recovery.** After a publication has begun, recovery relies on the night's
+  own candidate record and does not need the historical source.
+- **Attestation.** `live_antares.py` is unchanged (`afe11a1b…`);
+  `production_range.py` is `54c0fe23…`.
+
+Relative to the accepted source, only release metadata changed: the package
+version, `cli.SOURCE_VERSION`, the installed-version pin in
+`production_canary._verify_release`, and this note.
+
 ## Release 0.4.6
 
 This patch release freezes the accepted V3-G6.2 remediation (source
