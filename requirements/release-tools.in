@@ -1,0 +1,7 @@
+# Bootstrap input for the Linux CPython 3.11 release toolchain.
+# The generated, hash-checked release-tools lock is the installation authority.
+pip==26.1.2
+build==1.4.4
+pip-tools==7.6.0
+setuptools==83.0.0
+wheel==0.45.1

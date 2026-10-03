@@ -1,0 +1,1128 @@
+{
+  "export_mode": "demo",
+  "generated_at_utc": "2026-08-22T18:04:07+00:00",
+  "lightcurves": {
+    "ANT2020aetkeji": [
+      {
+        "filter": "g",
+        "magnitude": 15.878,
+        "mjd": 61085.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 15.957,
+        "mjd": 61086.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 16.05,
+        "mjd": 61087.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 16.208,
+        "mjd": 61088.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 16.191,
+        "mjd": 61089.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 16.186,
+        "mjd": 61090.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 16.066,
+        "mjd": 61091.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 16.0,
+        "mjd": 61092.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 15.884,
+        "mjd": 61093.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 15.851,
+        "mjd": 61094.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 15.687,
+        "mjd": 61095.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 15.634,
+        "mjd": 61096.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 15.685,
+        "mjd": 61097.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 15.675,
+        "mjd": 61098.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 15.759,
+        "mjd": 61099.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 15.958,
+        "mjd": 61100.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 16.11,
+        "mjd": 61101.15999,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 16.291,
+        "mjd": 61102.15999,
+        "source": "synthetic_demo"
+      }
+    ],
+    "ANT2020ao3zo": [
+      {
+        "filter": "g",
+        "magnitude": 14.731,
+        "mjd": 61085.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.869,
+        "mjd": 61086.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 15.043,
+        "mjd": 61087.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 15.088,
+        "mjd": 61088.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 15.045,
+        "mjd": 61089.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 15.053,
+        "mjd": 61090.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 15.062,
+        "mjd": 61091.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.947,
+        "mjd": 61092.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.75,
+        "mjd": 61093.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.704,
+        "mjd": 61094.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.624,
+        "mjd": 61095.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.59,
+        "mjd": 61096.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.516,
+        "mjd": 61097.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.65,
+        "mjd": 61098.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.69,
+        "mjd": 61099.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.922,
+        "mjd": 61100.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 15.054,
+        "mjd": 61101.521673,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 15.062,
+        "mjd": 61102.521673,
+        "source": "synthetic_demo"
+      }
+    ],
+    "ANT2020axfxq": [
+      {
+        "filter": "g",
+        "magnitude": 13.893,
+        "mjd": 61085.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.993,
+        "mjd": 61086.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.04,
+        "mjd": 61087.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.254,
+        "mjd": 61088.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.245,
+        "mjd": 61089.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.107,
+        "mjd": 61090.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.165,
+        "mjd": 61091.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.985,
+        "mjd": 61092.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.881,
+        "mjd": 61093.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.82,
+        "mjd": 61094.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.732,
+        "mjd": 61095.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.708,
+        "mjd": 61096.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.659,
+        "mjd": 61097.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.663,
+        "mjd": 61098.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.812,
+        "mjd": 61099.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.023,
+        "mjd": 61100.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.046,
+        "mjd": 61101.94772,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.207,
+        "mjd": 61102.94772,
+        "source": "synthetic_demo"
+      }
+    ],
+    "ANT2020bt5ji": [
+      {
+        "filter": "g",
+        "magnitude": 13.43,
+        "mjd": 61085.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.584,
+        "mjd": 61086.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.704,
+        "mjd": 61087.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.827,
+        "mjd": 61088.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.781,
+        "mjd": 61089.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.67,
+        "mjd": 61090.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.727,
+        "mjd": 61091.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.601,
+        "mjd": 61092.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.535,
+        "mjd": 61093.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.332,
+        "mjd": 61094.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.238,
+        "mjd": 61095.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.272,
+        "mjd": 61096.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.239,
+        "mjd": 61097.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.335,
+        "mjd": 61098.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.404,
+        "mjd": 61099.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.442,
+        "mjd": 61100.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.742,
+        "mjd": 61101.218661,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.846,
+        "mjd": 61102.218661,
+        "source": "synthetic_demo"
+      }
+    ],
+    "ANT2020ea35w": [
+      {
+        "filter": "g",
+        "magnitude": 13.465,
+        "mjd": 61085.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.512,
+        "mjd": 61086.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.634,
+        "mjd": 61087.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.768,
+        "mjd": 61088.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.752,
+        "mjd": 61089.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.798,
+        "mjd": 61090.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.702,
+        "mjd": 61091.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.565,
+        "mjd": 61092.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.518,
+        "mjd": 61093.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.407,
+        "mjd": 61094.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.246,
+        "mjd": 61095.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.263,
+        "mjd": 61096.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.211,
+        "mjd": 61097.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.353,
+        "mjd": 61098.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.317,
+        "mjd": 61099.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.51,
+        "mjd": 61100.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.758,
+        "mjd": 61101.278002,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.881,
+        "mjd": 61102.278002,
+        "source": "synthetic_demo"
+      }
+    ],
+    "ANT2020j7s34": [
+      {
+        "filter": "g",
+        "magnitude": 15.2,
+        "mjd": 61085.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 15.232,
+        "mjd": 61086.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 15.341,
+        "mjd": 61087.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 15.537,
+        "mjd": 61088.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 15.568,
+        "mjd": 61089.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 15.533,
+        "mjd": 61090.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 15.493,
+        "mjd": 61091.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 15.265,
+        "mjd": 61092.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 15.167,
+        "mjd": 61093.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 15.15,
+        "mjd": 61094.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.931,
+        "mjd": 61095.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.974,
+        "mjd": 61096.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.995,
+        "mjd": 61097.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.968,
+        "mjd": 61098.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 15.177,
+        "mjd": 61099.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 15.188,
+        "mjd": 61100.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 15.341,
+        "mjd": 61101.110075,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 15.467,
+        "mjd": 61102.110075,
+        "source": "synthetic_demo"
+      }
+    ],
+    "ANT2020kask2": [
+      {
+        "filter": "g",
+        "magnitude": 13.607,
+        "mjd": 61085.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.732,
+        "mjd": 61086.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.976,
+        "mjd": 61087.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.999,
+        "mjd": 61088.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.979,
+        "mjd": 61089.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.001,
+        "mjd": 61090.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.956,
+        "mjd": 61091.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.829,
+        "mjd": 61092.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.632,
+        "mjd": 61093.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.633,
+        "mjd": 61094.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.422,
+        "mjd": 61095.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.506,
+        "mjd": 61096.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.491,
+        "mjd": 61097.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.509,
+        "mjd": 61098.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.576,
+        "mjd": 61099.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.772,
+        "mjd": 61100.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.905,
+        "mjd": 61101.931112,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.023,
+        "mjd": 61102.931112,
+        "source": "synthetic_demo"
+      }
+    ],
+    "ANT2020kzzyq": [
+      {
+        "filter": "g",
+        "magnitude": 13.413,
+        "mjd": 61085.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.515,
+        "mjd": 61086.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.64,
+        "mjd": 61087.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.789,
+        "mjd": 61088.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.723,
+        "mjd": 61089.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.682,
+        "mjd": 61090.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.666,
+        "mjd": 61091.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.558,
+        "mjd": 61092.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.416,
+        "mjd": 61093.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.412,
+        "mjd": 61094.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.319,
+        "mjd": 61095.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.224,
+        "mjd": 61096.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.202,
+        "mjd": 61097.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.223,
+        "mjd": 61098.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.337,
+        "mjd": 61099.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.51,
+        "mjd": 61100.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.671,
+        "mjd": 61101.756417,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.828,
+        "mjd": 61102.756417,
+        "source": "synthetic_demo"
+      }
+    ],
+    "ANT2020qkfoq": [
+      {
+        "filter": "g",
+        "magnitude": 14.481,
+        "mjd": 61085.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.661,
+        "mjd": 61086.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.793,
+        "mjd": 61087.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.896,
+        "mjd": 61088.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.854,
+        "mjd": 61089.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.913,
+        "mjd": 61090.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.863,
+        "mjd": 61091.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.67,
+        "mjd": 61092.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.511,
+        "mjd": 61093.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.534,
+        "mjd": 61094.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.403,
+        "mjd": 61095.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.3,
+        "mjd": 61096.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.396,
+        "mjd": 61097.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.411,
+        "mjd": 61098.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.592,
+        "mjd": 61099.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.686,
+        "mjd": 61100.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.774,
+        "mjd": 61101.801481,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.986,
+        "mjd": 61102.801481,
+        "source": "synthetic_demo"
+      }
+    ],
+    "ANT2020t2oa": [
+      {
+        "filter": "g",
+        "magnitude": 14.177,
+        "mjd": 61085.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.289,
+        "mjd": 61086.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.432,
+        "mjd": 61087.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.496,
+        "mjd": 61088.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.58,
+        "mjd": 61089.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.401,
+        "mjd": 61090.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.487,
+        "mjd": 61091.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.291,
+        "mjd": 61092.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.169,
+        "mjd": 61093.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.989,
+        "mjd": 61094.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.934,
+        "mjd": 61095.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 13.825,
+        "mjd": 61096.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 13.833,
+        "mjd": 61097.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 13.904,
+        "mjd": 61098.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.066,
+        "mjd": 61099.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "g",
+        "magnitude": 14.304,
+        "mjd": 61100.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "r",
+        "magnitude": 14.335,
+        "mjd": 61101.931023,
+        "source": "synthetic_demo"
+      },
+      {
+        "filter": "i",
+        "magnitude": 14.477,
+        "mjd": 61102.931023,
+        "source": "synthetic_demo"
+      }
+    ]
+  },
+  "public_label": "Demo brightness story",
+  "sample_source": "synthetic_demo",
+  "schema_version": 2,
+  "scientific_caveats": [
+    "SkyPulse shows LSST-associated ANTARES loci and public export samples; it is not a direct Rubin Butler, TAP, or official Rubin production-system query.",
+    "ANTARES is the broker/source for these alert-analysis records; Rubin Science Platform was used for compute and storage.",
+    "ANTARES can merge multi-survey histories into one locus, so some LSST-associated loci may also carry older survey identifiers.",
+    "Brightness history comes from ANTARES alert records, with photometry columns such as ant_mag, ant_magerr, and ant_passband when available.",
+    "Highlighted objects use a transparent exploration ranking, not a classification and not a claim of scientific importance.",
+    "This is a static export of saved parquet outputs, not live data and not direct Rubin Butler/TAP access.",
+    "Demo mode uses repository sample rows and synthetic brightness stories; use --data-root on RSP or copied parquet files for real alert-record lightcurves.",
+    "Demo lightcurve samples are synthetic and must not be presented as ANTARES alert-record photometry."
+  ],
+  "selected_night_date": "2026-03-03",
+  "source_data_range": {
+    "historical_mjd_max": 61102.0,
+    "historical_mjd_min": 61095.0,
+    "latest_mjd_max": 61103.0,
+    "latest_mjd_min": 61102.0,
+    "latest_night_utc": "2026-03-03"
+  },
+  "unavailable": {}
+}

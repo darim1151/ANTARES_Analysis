@@ -1,0 +1,447 @@
+name: Generate Linux release locks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/linux-lock.yml"
+      - "README.md"
+      - "environment.yml"
+      - "notebooks/**"
+      - "pyproject.toml"
+      - "requirements/**"
+      - "scripts/**"
+      - "src/**"
+      - "tests/**"
+  push:
+    branches:
+      - main
+      - "codex/**"
+    paths:
+      - ".github/workflows/linux-lock.yml"
+      - "README.md"
+      - "environment.yml"
+      - "notebooks/**"
+      - "pyproject.toml"
+      - "requirements/**"
+      - "scripts/**"
+      - "src/**"
+      - "tests/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-lock-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lock-and-verify:
+    name: Lock and verify CPython 3.11.16 / Linux x86_64
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      ANTARES_ANALYSIS_DATA_ROOT: ${{ runner.temp }}/antares-analysis-data
+      ANTARES_ANALYSIS_CACHE_ROOT: ${{ runner.temp }}/antares-analysis-cache
+      ANTARES_STORAGE_POLICY: private
+      LOCK_CUTOFF: "2026-08-20T00:00:00Z"
+      MPLBACKEND: Agg
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_INDEX_URL: https://pypi.org/simple
+      PYTHONHASHSEED: "0"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.16"
+
+      - name: Resolve and install the hashed release toolchain
+        shell: bash
+        run: |
+          mkdir -p "${{ runner.temp }}/lock-candidates" "${{ runner.temp }}/release-logs"
+          python -m venv "${{ runner.temp }}/release-tools"
+
+          release_lock=requirements/release-tools-py311-linux-x86_64.lock
+          compiler_python=python
+          if [[ -f "$release_lock" ]]; then
+            "${{ runner.temp }}/release-tools/bin/python" -m pip install \
+              --index-url "$PIP_INDEX_URL" \
+              --only-binary=:all: \
+              --require-hashes \
+              -r "$release_lock" \
+              2>&1 | tee "${{ runner.temp }}/release-logs/install-release-tools.log"
+            compiler_python="${{ runner.temp }}/release-tools/bin/python"
+            echo "release_tool_bootstrap=hash-locked" \
+              > "${{ runner.temp }}/release-tool-bootstrap.txt"
+          else
+            # One-time bootstrap only. The generated lock is an artifact for
+            # review; no release is accepted until a second commit reruns this
+            # job through the hash-locked branch above.
+            python -m pip install \
+              --index-url "$PIP_INDEX_URL" \
+              pip==26.1.2 \
+              pip-tools==7.6.0 \
+              2>&1 | tee "${{ runner.temp }}/release-logs/bootstrap-tools.log"
+            echo "release_tool_bootstrap=first-generation-unlocked" \
+              > "${{ runner.temp }}/release-tool-bootstrap.txt"
+          fi
+
+          compile_tools() {
+            local output="$1"
+            if [[ -f "$release_lock" ]]; then
+              cp "$release_lock" "$output"
+            fi
+            CUSTOM_COMPILE_COMMAND="phase1-linux-lock release-tools (cutoff $LOCK_CUTOFF)" \
+              "$compiler_python" -m piptools compile \
+                --allow-unsafe \
+                --generate-hashes \
+                --index-url "$PIP_INDEX_URL" \
+                --pip-args="--only-binary=:all:" \
+                --resolver=backtracking \
+                --strip-extras \
+                --uploaded-prior-to "$LOCK_CUTOFF" \
+                --output-file="$output" \
+                requirements/release-tools.in
+          }
+
+          compile_tools "${{ runner.temp }}/lock-candidates/release-tools-a.lock" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/compile-release-tools-a.log"
+          compile_tools "${{ runner.temp }}/lock-candidates/release-tools-b.lock" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/compile-release-tools-b.log"
+          cmp \
+            "${{ runner.temp }}/lock-candidates/release-tools-a.lock" \
+            "${{ runner.temp }}/lock-candidates/release-tools-b.lock"
+
+          if [[ -f "$release_lock" ]]; then
+            cmp \
+              "$release_lock" \
+              "${{ runner.temp }}/lock-candidates/release-tools-a.lock"
+          else
+            cp \
+              "${{ runner.temp }}/lock-candidates/release-tools-a.lock" \
+              "$release_lock"
+            "${{ runner.temp }}/release-tools/bin/python" -m pip install \
+              --index-url "$PIP_INDEX_URL" \
+              --only-binary=:all: \
+              --require-hashes \
+              -r "$release_lock" \
+              2>&1 | tee "${{ runner.temp }}/release-logs/install-release-tools.log"
+            compiler_python="${{ runner.temp }}/release-tools/bin/python"
+            compile_tools "${{ runner.temp }}/lock-candidates/release-tools-locked-a.lock"
+            compile_tools "${{ runner.temp }}/lock-candidates/release-tools-locked-b.lock"
+            cmp \
+              "${{ runner.temp }}/lock-candidates/release-tools-locked-a.lock" \
+              "${{ runner.temp }}/lock-candidates/release-tools-locked-b.lock"
+            cmp \
+              "$release_lock" \
+              "${{ runner.temp }}/lock-candidates/release-tools-locked-a.lock"
+          fi
+          echo "${{ runner.temp }}/release-tools/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve layered application locks twice
+        shell: bash
+        run: |
+          python -c 'import sys; assert sys.version_info[:3] == (3, 11, 16), sys.version'
+
+          compile_production() {
+            local output="$1"
+            if [[ -f requirements/production-py311-linux-x86_64.lock ]]; then
+              cp requirements/production-py311-linux-x86_64.lock "$output"
+            fi
+            CUSTOM_COMPILE_COMMAND="phase1-linux-lock production (cutoff $LOCK_CUTOFF)" \
+              python -m piptools compile \
+                --generate-hashes \
+                --index-url "$PIP_INDEX_URL" \
+                --pip-args="--only-binary=:all: --no-binary=bson" \
+                --resolver=backtracking \
+                --strip-extras \
+                --uploaded-prior-to "$LOCK_CUTOFF" \
+                --output-file="$output" \
+                pyproject.toml
+          }
+
+          compile_production "${{ runner.temp }}/lock-candidates/production-a.lock" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/compile-production-a.log"
+          compile_production "${{ runner.temp }}/lock-candidates/production-b.lock" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/compile-production-b.log"
+          cmp \
+            "${{ runner.temp }}/lock-candidates/production-a.lock" \
+            "${{ runner.temp }}/lock-candidates/production-b.lock"
+          if [[ -f requirements/production-py311-linux-x86_64.lock ]]; then
+            cmp \
+              requirements/production-py311-linux-x86_64.lock \
+              "${{ runner.temp }}/lock-candidates/production-a.lock"
+          else
+            cp \
+              "${{ runner.temp }}/lock-candidates/production-a.lock" \
+              requirements/production-py311-linux-x86_64.lock
+          fi
+
+          compile_test() {
+            local output="$1"
+            if [[ -f requirements/test-py311-linux-x86_64.lock ]]; then
+              cp requirements/test-py311-linux-x86_64.lock "$output"
+            fi
+            CUSTOM_COMPILE_COMMAND="phase1-linux-lock test (cutoff $LOCK_CUTOFF)" \
+              python -m piptools compile \
+                --constraint=requirements/production-py311-linux-x86_64.lock \
+                --extra=notebooks \
+                --extra=test \
+                --generate-hashes \
+                --index-url "$PIP_INDEX_URL" \
+                --pip-args="--only-binary=:all: --no-binary=bson" \
+                --resolver=backtracking \
+                --strip-extras \
+                --uploaded-prior-to "$LOCK_CUTOFF" \
+                --output-file="$output" \
+                pyproject.toml
+          }
+
+          compile_test "${{ runner.temp }}/lock-candidates/test-a.lock" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/compile-test-a.log"
+          compile_test "${{ runner.temp }}/lock-candidates/test-b.lock" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/compile-test-b.log"
+          cmp \
+            "${{ runner.temp }}/lock-candidates/test-a.lock" \
+            "${{ runner.temp }}/lock-candidates/test-b.lock"
+          if [[ -f requirements/test-py311-linux-x86_64.lock ]]; then
+            cmp \
+              requirements/test-py311-linux-x86_64.lock \
+              "${{ runner.temp }}/lock-candidates/test-a.lock"
+          else
+            cp \
+              "${{ runner.temp }}/lock-candidates/test-a.lock" \
+              requirements/test-py311-linux-x86_64.lock
+          fi
+
+          python scripts/verify_release_artifacts.py --help >/dev/null
+
+      - name: Set deterministic build timestamp
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+
+      - name: Build hash-verified production and test wheelhouses
+        shell: bash
+        run: |
+          mkdir -p \
+            "${{ runner.temp }}/production-wheelhouse" \
+            "${{ runner.temp }}/test-wheelhouse"
+          python -m pip wheel \
+            --index-url "$PIP_INDEX_URL" \
+            --no-build-isolation \
+            --no-cache-dir \
+            --only-binary=:all: \
+            --no-binary=bson \
+            --require-hashes \
+            --wheel-dir "${{ runner.temp }}/production-wheelhouse" \
+            -r requirements/production-py311-linux-x86_64.lock \
+            2>&1 | tee "${{ runner.temp }}/release-logs/build-production-wheelhouse.log"
+          python -m pip wheel \
+            --index-url "$PIP_INDEX_URL" \
+            --no-build-isolation \
+            --no-cache-dir \
+            --only-binary=:all: \
+            --no-binary=bson \
+            --require-hashes \
+            --wheel-dir "${{ runner.temp }}/test-wheelhouse" \
+            -r requirements/test-py311-linux-x86_64.lock \
+            2>&1 | tee "${{ runner.temp }}/release-logs/build-test-wheelhouse.log"
+
+          python scripts/verify_release_artifacts.py \
+            requirements/production-py311-linux-x86_64.lock \
+            requirements/test-py311-linux-x86_64.lock \
+            "${{ runner.temp }}/production-wheelhouse" \
+            "${{ runner.temp }}/test-wheelhouse" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/verify-release-closure.log"
+
+          (
+            cd "${{ runner.temp }}/production-wheelhouse"
+            sha256sum *.whl | sort -k2
+          ) > "${{ runner.temp }}/production-wheelhouse.sha256"
+          (
+            cd "${{ runner.temp }}/test-wheelhouse"
+            sha256sum *.whl | sort -k2
+          ) > "${{ runner.temp }}/test-wheelhouse.sha256"
+
+      - name: Build distributions twice from clean source trees
+        shell: bash
+        run: |
+          mkdir -p \
+            "${{ runner.temp }}/source-a" \
+            "${{ runner.temp }}/source-b" \
+            "${{ runner.temp }}/dist-a" \
+            "${{ runner.temp }}/dist-b" \
+            "${{ runner.temp }}/sdist-wheel"
+          git archive --format=tar --output="${{ runner.temp }}/source.tar" HEAD
+          tar -xf "${{ runner.temp }}/source.tar" -C "${{ runner.temp }}/source-a"
+          tar -xf "${{ runner.temp }}/source.tar" -C "${{ runner.temp }}/source-b"
+          python -m build \
+            --no-isolation \
+            --outdir "${{ runner.temp }}/dist-a" \
+            "${{ runner.temp }}/source-a" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/build-project-a.log"
+          python -m build \
+            --no-isolation \
+            --outdir "${{ runner.temp }}/dist-b" \
+            "${{ runner.temp }}/source-b" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/build-project-b.log"
+          python scripts/verify_python_distributions.py \
+            --wheel-a "${{ runner.temp }}"/dist-a/*.whl \
+            --wheel-b "${{ runner.temp }}"/dist-b/*.whl \
+            --sdist-a "${{ runner.temp }}"/dist-a/*.tar.gz \
+            --sdist-b "${{ runner.temp }}"/dist-b/*.tar.gz \
+            --source-root "$GITHUB_WORKSPACE" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/verify-project-distributions.log"
+          python -m pip wheel \
+            --no-build-isolation \
+            --no-deps \
+            --no-index \
+            --wheel-dir "${{ runner.temp }}/sdist-wheel" \
+            "${{ runner.temp }}"/dist-a/*.tar.gz \
+            2>&1 | tee "${{ runner.temp }}/release-logs/build-wheel-from-sdist.log"
+          cmp \
+            "${{ runner.temp }}"/dist-a/*.whl \
+            "${{ runner.temp }}"/sdist-wheel/*.whl
+
+      - name: Verify production closure and installed wheel
+        shell: bash
+        run: |
+          (
+            cd "${{ runner.temp }}/production-wheelhouse"
+            sha256sum --check "${{ runner.temp }}/production-wheelhouse.sha256"
+          )
+          python -m venv "${{ runner.temp }}/production-smoke"
+          "${{ runner.temp }}/production-smoke/bin/python" -m pip install \
+            --no-deps \
+            --no-index \
+            "${{ runner.temp }}"/production-wheelhouse/*.whl \
+            2>&1 | tee "${{ runner.temp }}/release-logs/install-production-wheelhouse.log"
+          "${{ runner.temp }}/production-smoke/bin/python" -m pip install \
+            --no-deps \
+            --no-index \
+            "${{ runner.temp }}"/sdist-wheel/*.whl \
+            2>&1 | tee "${{ runner.temp }}/release-logs/install-production-project.log"
+          "${{ runner.temp }}/production-smoke/bin/python" -m pip check \
+            2>&1 | tee "${{ runner.temp }}/release-logs/pip-check-production.log"
+          cd "${{ runner.temp }}"
+          "${{ runner.temp }}/production-smoke/bin/antares-analysis" --version \
+            2>&1 | tee "${{ runner.temp }}/release-logs/cli-version-production.log"
+          ANTARES_STORAGE_POLICY=intentionally-invalid \
+            "${{ runner.temp }}/production-smoke/bin/antares-analysis" --version \
+            2>&1 | tee "${{ runner.temp }}/release-logs/cli-invalid-policy-production.log"
+          "${{ runner.temp }}/production-smoke/bin/python" -I \
+            "$GITHUB_WORKSPACE/scripts/verify_installed_package.py" \
+            --forbid-root "$GITHUB_WORKSPACE" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/verify-installed-production.log"
+
+      - name: Verify test closure and repository integration suite
+        shell: bash
+        run: |
+          (
+            cd "${{ runner.temp }}/test-wheelhouse"
+            sha256sum --check "${{ runner.temp }}/test-wheelhouse.sha256"
+          )
+          python -m venv "${{ runner.temp }}/test-smoke"
+          "${{ runner.temp }}/test-smoke/bin/python" -m pip install \
+            --no-deps \
+            --no-index \
+            "${{ runner.temp }}"/test-wheelhouse/*.whl \
+            2>&1 | tee "${{ runner.temp }}/release-logs/install-test-wheelhouse.log"
+          "${{ runner.temp }}/test-smoke/bin/python" -m pip install \
+            --no-deps \
+            --no-index \
+            "${{ runner.temp }}"/sdist-wheel/*.whl \
+            2>&1 | tee "${{ runner.temp }}/release-logs/install-test-project.log"
+          "${{ runner.temp }}/test-smoke/bin/python" -m pip check \
+            2>&1 | tee "${{ runner.temp }}/release-logs/pip-check-test.log"
+          cd "${{ runner.temp }}"
+          "${{ runner.temp }}/test-smoke/bin/python" -I \
+            "$GITHUB_WORKSPACE/scripts/verify_installed_package.py" \
+            --forbid-root "$GITHUB_WORKSPACE" \
+            2>&1 | tee "${{ runner.temp }}/release-logs/verify-installed-test.log"
+          "${{ runner.temp }}/test-smoke/bin/python" -m unittest discover \
+            -s "$GITHUB_WORKSPACE/tests" \
+            -v \
+            2>&1 | tee "${{ runner.temp }}/release-logs/unittest.log"
+          test ! -e "$ANTARES_ANALYSIS_DATA_ROOT"
+          test ! -e "$ANTARES_ANALYSIS_CACHE_ROOT"
+
+      - name: Record release evidence
+        shell: bash
+        run: |
+          "${{ runner.temp }}/release-tools/bin/python" -m pip freeze \
+            > "${{ runner.temp }}/release-tools-inventory.txt"
+          "${{ runner.temp }}/production-smoke/bin/python" -m pip freeze \
+            > "${{ runner.temp }}/production-inventory.txt"
+          "${{ runner.temp }}/test-smoke/bin/python" -m pip freeze \
+            > "${{ runner.temp }}/test-inventory.txt"
+          {
+            echo "git_commit=$(git rev-parse HEAD)"
+            echo "source_date_epoch=$SOURCE_DATE_EPOCH"
+            echo "lock_cutoff=$LOCK_CUTOFF"
+            echo "runner_image_os=${ImageOS:-unknown}"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            cat "${{ runner.temp }}/release-tool-bootstrap.txt"
+            uname -a
+            ldd --version | head -1
+            python --version
+            python -m pip --version
+            python -c 'import importlib.metadata as m; names = ("build", "pip-tools", "setuptools", "wheel"); [print(name, m.version(name)) for name in names]'
+            echo "source_distribution_input=bson==0.5.10 (hash-verified; upstream publishes no wheel)"
+            echo "release_tools_lock=PASS"
+            echo "production_lock=PASS"
+            echo "test_lock_layer=PASS"
+            echo "wheelhouse_reproducibility=PASS"
+            echo "project_sdist_content_equivalence=PASS"
+            echo "project_sdist_rebuilt_wheel=PASS"
+            echo "project_wheel_reproducibility=PASS"
+            echo "production_pip_check=PASS"
+            echo "installed_package_origin_check=PASS"
+            echo "repository_integration_suite=PASS"
+            sha256sum \
+              pyproject.toml \
+              environment.yml \
+              requirements/*.lock \
+              "${{ runner.temp }}"/dist-a/* \
+              "${{ runner.temp }}"/dist-b/* \
+              "${{ runner.temp }}"/sdist-wheel/*
+          } > "${{ runner.temp }}/release-evidence.txt"
+          cat "${{ runner.temp }}/release-evidence.txt"
+
+      - name: Assemble release artifact
+        shell: bash
+        run: |
+          artifact_root="$GITHUB_WORKSPACE/release-artifact"
+          mkdir -p \
+            "$artifact_root/dist" \
+            "$artifact_root/inventory" \
+            "$artifact_root/logs" \
+            "$artifact_root/requirements" \
+            "$artifact_root/wheelhouses/production" \
+            "$artifact_root/wheelhouses/test"
+          cp requirements/*.lock "$artifact_root/requirements/"
+          cp "${{ runner.temp }}"/dist-a/* "$artifact_root/dist/"
+          cp "${{ runner.temp }}"/production-wheelhouse/*.whl \
+            "$artifact_root/wheelhouses/production/"
+          cp "${{ runner.temp }}"/test-wheelhouse/*.whl \
+            "$artifact_root/wheelhouses/test/"
+          cp "${{ runner.temp }}"/*wheelhouse.sha256 "$artifact_root/wheelhouses/"
+          cp "${{ runner.temp }}"/*inventory.txt "$artifact_root/inventory/"
+          cp "${{ runner.temp }}"/release-logs/* "$artifact_root/logs/"
+          cp "${{ runner.temp }}"/release-tool-bootstrap.txt "$artifact_root/"
+          cp "${{ runner.temp }}"/release-evidence.txt "$artifact_root/"
+
+      - name: Upload locks, wheelhouses, distributions, and evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: antares-analysis-linux-py311-release-candidate
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          path: release-artifact/

@@ -2,8 +2,8 @@
   "actual_loci": 100000,
   "alert_rows": 2500000,
   "chunk_count": 18,
-  "date_utc": "2026-04-28",
-  "finished_at_utc": "2026-04-29T08:42:00+00:00",
+  "date_utc": "2026-03-03",
+  "finished_at_utc": "2026-03-04T08:42:00+00:00",
   "lsst_dia_count": 87210,
   "lsst_filter": {
     "bool": {
@@ -28,15 +28,15 @@
   "mjd_min": 61102.0,
   "parallel_shards": 3,
   "paths": {
-    "alerts": "/project/darim_shamsi/ANTARES_Analysis/data/lsst_only/nightly/2026/04/28/alerts.parquet",
-    "loci": "/project/darim_shamsi/ANTARES_Analysis/data/lsst_only/nightly/2026/04/28/loci.parquet",
-    "manifest": "/project/darim_shamsi/ANTARES_Analysis/data/lsst_only/nightly/2026/04/28/manifest.json"
+    "alerts": "/project/darim_shamsi/ANTARES_Analysis/data/lsst_only/nightly/2026/03/03/alerts.parquet",
+    "loci": "/project/darim_shamsi/ANTARES_Analysis/data/lsst_only/nightly/2026/03/03/loci.parquet",
+    "manifest": "/project/darim_shamsi/ANTARES_Analysis/data/lsst_only/nightly/2026/03/03/manifest.json"
   },
   "query_tag": null,
   "runtime_seconds": 3600.0,
   "saturated_chunk_count": 0,
   "split_count": 7,
-  "started_at_utc": "2026-04-29T07:42:00+00:00",
+  "started_at_utc": "2026-03-04T07:42:00+00:00",
   "status": "complete",
   "survey_mode": "lsst",
   "target_loci": 100000,

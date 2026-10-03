@@ -1,0 +1,52 @@
+{
+  "comparison": {
+    "alert_rows": 0,
+    "density_tiles": 217,
+    "highlighted_objects": 10,
+    "historical_loci": 1312,
+    "new_loci": 190,
+    "night_loci": 488,
+    "overlap_fraction_of_night": 0.610655737704918,
+    "overlap_loci": 298
+  },
+  "export_mode": "demo",
+  "generated_at_utc": "2026-08-22T18:04:07+00:00",
+  "metrics": [
+    {
+      "detail": "sampled loci",
+      "label": "public sky points",
+      "value": "1,800"
+    },
+    {
+      "detail": "latest processed points",
+      "label": "latest night",
+      "value": "488"
+    },
+    {
+      "detail": "not seen in prior sample",
+      "label": "new to memory",
+      "value": "190"
+    }
+  ],
+  "promise": "Every night, the sky changes. SkyPulse shows where, how, and why.",
+  "public_data_note": "Demo export from repository sample rows; run RSP mode for real parquet-backed data.",
+  "schema_version": 2,
+  "scientific_caveats": [
+    "SkyPulse shows LSST-associated ANTARES loci and public export samples; it is not a direct Rubin Butler, TAP, or official Rubin production-system query.",
+    "ANTARES is the broker/source for these alert-analysis records; Rubin Science Platform was used for compute and storage.",
+    "ANTARES can merge multi-survey histories into one locus, so some LSST-associated loci may also carry older survey identifiers.",
+    "Brightness history comes from ANTARES alert records, with photometry columns such as ant_mag, ant_magerr, and ant_passband when available.",
+    "Highlighted objects use a transparent exploration ranking, not a classification and not a claim of scientific importance.",
+    "This is a static export of saved parquet outputs, not live data and not direct Rubin Butler/TAP access.",
+    "Demo mode uses repository sample rows and synthetic brightness stories; use --data-root on RSP or copied parquet files for real alert-record lightcurves.",
+    "Demo lightcurve samples are synthetic and must not be presented as ANTARES alert-record photometry."
+  ],
+  "selected_night_date": "2026-03-03",
+  "source_data_range": {
+    "historical_mjd_max": 61102.0,
+    "historical_mjd_min": 61095.0,
+    "latest_mjd_max": 61103.0,
+    "latest_mjd_min": 61102.0,
+    "latest_night_utc": "2026-03-03"
+  }
+}
