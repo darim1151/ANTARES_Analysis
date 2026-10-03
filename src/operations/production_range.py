@@ -19,7 +19,7 @@ from typing import Any, Mapping
 
 from .backfill import (
     BackfillController, BackfillRefused, BackfillSettings, RangePublicationAuthorization,
-    _canonical, _dates, _previous, _utc_now, acquisition_identity,
+    _canonical, _dates, _previous, _utc_now, acquisition_identity, describe_saved_acquisition,
     require_prior_free_acquisition, inspect_backfill,
     RANGE_PRIOR_FREE_ACQUISITION_ATTESTATIONS,
 )
@@ -83,6 +83,10 @@ class ProductionRangeAuthorization:
                 or self.scope.initial_sentinel["canonical_root"] != str(PRODUCTION_DATA_ROOT)
                 or dict(self.implementation_sha256) != implementation_identity()):
             raise BackfillRefused("Production range authorization has unsafe roots, identity or semantics.")
+        for entry in self.scope.adopted_acquisitions.values():
+            source = Path(entry["source_root"])
+            if source == root or root in source.parents or source in root.parents:
+                raise BackfillRefused("An adopted saved acquisition must lie outside this range's work root.")
         BackfillSettings(segment_size=self.segment_size)
         adapter = LiveRangeAdapter(self.work_root, self.scope.candidate_release_sha, None)
         identity = acquisition_identity(adapter)
@@ -319,6 +323,10 @@ def qualify_range_night(authority, binding, authorization, candidate, *, resume=
             or candidate.provenance.get("configuration_sha256") != scope.configuration_sha256
             or candidate.provenance.get("night_query_contract_sha256") != hashlib.sha256(_canonical(expected_contract)).hexdigest()):
         raise BackfillRefused("Candidate acquisition evidence belongs to another range/scientific request.")
+    # An adopted night publishes only the exact authorized saved acquisition; others none.
+    adopted = scope.adopted_acquisitions.get(binding.night_utc)
+    if candidate.provenance.get("acquisition_source") != (dict(adopted) if adopted is not None else None):
+        raise BackfillRefused("Candidate acquisition source differs from the authorized adoption.")
     authority.__post_init__()
     # Even a later completed acquisition cannot bypass a blocked predecessor.
     predecessor = classify_night_authority(PRODUCTION_DATA_ROOT,
@@ -433,6 +441,8 @@ def main(argv=None):
     parser.add_argument("--execute-authorized-range", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--acquisition-concurrency", type=int, default=2)
+    parser.add_argument("--adopt", action="append", default=[], metavar="DATE=SOURCE_ROOT",
+                        help="plan only: adopt this night's saved acquisition instead of querying")
     args = parser.parse_args(argv)
     settings = BackfillSettings(acquisition_concurrency=args.acquisition_concurrency)
     dates = _dates(args.start, args.end)
@@ -447,18 +457,27 @@ def main(argv=None):
         identity = acquisition_identity(adapter)
         attestation = require_prior_free_acquisition(identity, RANGE_PRIOR_FREE_ACQUISITION_ATTESTATIONS,
                         science_contract_sha256=science, configuration_sha256=configuration)
+        adopted = {}
+        for item in args.adopt:
+            day, separator, source = item.partition("=")
+            if not separator or day not in dates or day in adopted:
+                raise BackfillRefused("--adopt takes one DATE=SOURCE_ROOT per night of this range.")
+            adopted[day] = describe_saved_acquisition(Path(source), day, adapter, settings.segment_size).entry
         document = {"execution": "NOT EXECUTED", "nights": [dataclasses.asdict(adapter.acquisition_request(day)) for day in dates],
                     "work_root": args.work_root, "publication_concurrency": 1,
                     "implementation_sha256": implementation_identity(), "acquisition_identity": identity,
                     "range_binding": {"science_contract_sha256": science, "configuration_sha256": configuration,
                         "acquisition_identity": identity, "prior_free_attestation_sha256": hashlib.sha256(_canonical(dict(attestation))).hexdigest(),
-                        "cache_root": None, "publication_concurrency": 1},
+                        "cache_root": None, "publication_concurrency": 1,
+                        **({"adopted_acquisitions": dict(sorted(adopted.items()))} if adopted else {})},
                     "requires": "Control authorization with initial COMPLETE predecessor/Sentinel, exact range binding and token"}
     elif args.operation == "inspect":
         document = inspect_backfill(Path(args.work_root), PRODUCTION_DATA_ROOT, args.start, args.end,
                     work_root=Path(args.work_root), journal_root=PRODUCTION_CONTROL_ROOT / "journals",
                     evidence_root=PRODUCTION_EVIDENCE_ROOT)
     else:
+        if args.adopt:
+            raise BackfillRefused("Adoption is bound by the authorization; --adopt is for plan only.")
         recovery_only = args.operation == "recover"
         if (not args.execute_authorized_range or not args.authorization or not args.publisher_wheel_sha256
                 or (not recovery_only and (not args.control_token_file or not args.control_approval))

@@ -28,6 +28,13 @@ Construction is chained in date order because overlap validation depends on
 every earlier night's loci.  Publication is performed by exactly one writer,
 strictly chronologically, and never crosses an unresolved or missing
 predecessor.
+
+A Control-authorized range may instead *adopt* a night's saved acquisition:
+the sealed query and fetch evidence of an earlier run, re-proved read-only by
+:func:`describe_saved_acquisition` and bound into the range authorization.
+Adoption never contacts ANTARES and never writes the source; construction
+reads the source and rebuilds the candidate against the current prior, and
+publication is unchanged.
 """
 
 from __future__ import annotations
@@ -43,7 +50,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -75,6 +82,7 @@ from .publication import (
     _is_sha40,
     _parse_utc,
     _read_json,
+    _read_regular,
     _write_json_new,
 )
 from .query_checkpoint import (
@@ -83,6 +91,7 @@ from .query_checkpoint import (
     load_query_result_checkpoint,
     seal_query_result_checkpoint,
 )
+from . import storage
 from .storage import SyntheticWriteCapability, RangeWorkCapability, PublicationRoots
 
 
@@ -120,10 +129,28 @@ RANGE_PRIOR_FREE_ACQUISITION_ATTESTATIONS: Tuple[Mapping[str, str], ...] = (
         "provider_module": "src.operations.live_antares",
         "provider_implementation_sha256": "afe11a1b0846ed20293d503b393d477f3b4309fcfa195b13320170ed4e18d14c",
         "adapter": "src.operations.production_range.LiveRangeAdapter",
-        "adapter_implementation_sha256": "81ce9209f182d61ca5f9c6bdb5c7722c90c09421b78156d1ac36be0a0da78f1c",
-        "evidence": "V3-G6.2: V3-G5 per-night prior-free live range adapter; provider re-pinned for response-body retry",
+        "adapter_implementation_sha256": "21eeb5119af42bf79def9f3c7a7fc29ed2267b69f6adc71d6bbda3b9d0961648",
+        "evidence": "V3-G6.4B: V3-G6.2 range adapter plus Control-bound saved-acquisition adoption",
     },
 )
+
+
+# Saved acquisitions produced by these reviewed prior-free provider
+# implementations may be adopted into a Control-authorized range: 0.4.5
+# (7211b5c, f22578a5) and 0.4.6 (b808f28, afe11a1b).  Adoption re-proves the
+# sealed evidence itself; this set only bounds which acquisition code made it.
+ADOPTABLE_SOURCE_PROVIDERS = frozenset({
+    "f22578a51ca65a3cf41d7fc8690fc026ccc0a16aefb300fc9c488cfb99c04199",
+    "afe11a1b0846ed20293d503b393d477f3b4309fcfa195b13320170ed4e18d14c",
+})
+ADOPTION_SCHEMA = "v3.saved-acquisition-adoption.v1"
+_ADOPTION_FIELDS = frozenset({
+    "schema_version", "date_utc", "source_root", "source_run_id", "source_release_sha",
+    "source_configuration_sha256", "source_provider_implementation_sha256",
+    "source_request_sha256", "source_journal_head", "query_integrity_sha256",
+    "query_contract_sha256", "query_tile_trace_sha256", "query_locus_order_sha256",
+    "loci", "fetch_identity_sha256", "fetch_completion_sha256", "fetch_segments", "alert_rows",
+})
 
 
 class BackfillError(RuntimeError):
@@ -333,6 +360,214 @@ def require_prior_free_acquisition(
     )
 
 
+def configuration_sha256(release_sha: str, adapter: Any, segment_size: int) -> str:
+    """Acquisition configuration identity of one release (bound by every checkpoint)."""
+    return _sha256(_canonical({
+        "release_sha": release_sha,
+        "provider": adapter.provider_name,
+        "scenario": adapter.scenario,
+        "execution_policy": dict(adapter.execution_policy()),
+        "segment_size": segment_size,
+    }))
+
+
+def query_checkpoint_bindings(
+    run_id: str, release_sha: str, configuration: str, adapter: Any, request: Any,
+) -> QueryResultCheckpointBindings:
+    return QueryResultCheckpointBindings(
+        run_id=run_id,
+        release_sha=release_sha,
+        configuration_hash=configuration,
+        target_date_utc=request.date_utc,
+        provider_name=adapter.provider_name,
+        provider_scenario=adapter.scenario,
+        query_policy={
+            "scientific_contract": dict(adapter.scientific_contract(request)),
+            "execution_policy": dict(adapter.execution_policy()),
+        },
+    )
+
+
+def fetch_checkpoint_binding(
+    run_id: str, release_sha: str, configuration: str, adapter: Any, request: Any,
+    loaded: Any, segment_size: int,
+) -> FetchCheckpointBinding:
+    details = loaded.query_result.evidence.details
+    return FetchCheckpointBinding(
+        run_id=run_id,
+        release_sha=release_sha,
+        configuration_sha256=configuration,
+        target_date_utc=request.date_utc,
+        mjd_min=request.mjd_min,
+        mjd_max=request.mjd_max,
+        provider_name=adapter.provider_name,
+        provider_scenario=adapter.scenario,
+        provider_policy_sha256=_sha256(_canonical(dict(adapter.execution_policy()))),
+        query_contract_sha256=str(details.get("query_contract_sha256", "")),
+        query_identity_sha256=loaded.integrity_sha256,
+        query_locus_order_sha256=str(details.get("locus_order_sha256", "")),
+        expected_objects=len(BackfillController._ordered_ids(loaded)),
+        segment_size=segment_size,
+    )
+
+
+def _request_document(request: Any) -> Dict[str, Any]:
+    return {
+        "date_utc": request.date_utc,
+        "mjd_min": request.mjd_min,
+        "mjd_max": request.mjd_max,
+        "ingested_at_utc": request.ingested_at_utc,
+        "query_tag": request.query_tag,
+        "target_loci": request.target_loci,
+        "range_label": request.range_label,
+    }
+
+
+@dataclass(frozen=True)
+class SavedAcquisition:
+    """Re-proved, read-only materials of one adopted acquisition."""
+
+    entry: Mapping[str, Any]
+    request: Any
+    loaded: Any
+    binding: FetchCheckpointBinding
+    checkpoint: SegmentedFetchCheckpoint
+    completion: FetchCheckpointCompletion
+
+
+def _adoptable_source_root(root: Path, date_utc: str) -> bool:
+    """Only a canary run root or another range's night root may be adopted."""
+    work_parent = Path(storage.RANGE_WORK_PARENT)
+    return root.parent == Path(storage.ARNOR_CANARY_ROOT) or (
+        root.name == f"night-{date_utc}"
+        and root.parent.name == "nights"
+        and root.parent.parent.parent == work_parent
+    )
+
+
+def validate_adoption_entry(date_utc: str, entry: Any) -> Dict[str, Any]:
+    """Shape-check one authorized adoption; evidence is re-proved at use."""
+    def hex64(*names: str) -> bool:
+        return all(_is_hex64(entry.get(name)) for name in names)
+
+    def count(*names: str) -> bool:
+        return all(type(entry.get(name)) is int and entry[name] >= 0 for name in names)
+
+    head = entry.get("source_journal_head") if isinstance(entry, Mapping) else None
+    root = entry.get("source_root") if isinstance(entry, Mapping) else None
+    if (
+        not isinstance(entry, Mapping)
+        or set(entry) != _ADOPTION_FIELDS
+        or entry["schema_version"] != ADOPTION_SCHEMA
+        or entry["date_utc"] != date_utc
+        or not isinstance(root, str)
+        or not Path(root).is_absolute()
+        or ".." in Path(root).parts
+        or entry["source_run_id"] != Path(root).name
+        or not _is_sha40(entry["source_release_sha"])
+        or entry["source_provider_implementation_sha256"] not in ADOPTABLE_SOURCE_PROVIDERS
+        or not hex64("source_configuration_sha256", "source_request_sha256", "query_integrity_sha256",
+                     "query_contract_sha256", "query_tile_trace_sha256", "query_locus_order_sha256",
+                     "fetch_identity_sha256", "fetch_completion_sha256")
+        or not count("loci", "fetch_segments", "alert_rows")
+        or not isinstance(head, Mapping)
+        or set(head) != {"count", "last_sha256", "identity_sha256"}
+        or type(head["count"]) is not int
+        or not _is_hex64(head["last_sha256"])
+        or not _is_hex64(head["identity_sha256"])
+    ):
+        raise BackfillRefused(f"Saved-acquisition adoption for {date_utc} is malformed.")
+    return json.loads(_canonical(dict(entry)))
+
+
+def describe_saved_acquisition(
+    source_root: Path, date_utc: str, adapter: Any, segment_size: int,
+) -> SavedAcquisition:
+    """Re-prove one saved acquisition from its own sealed evidence, read-only.
+
+    The source keeps its originating run id, release and configuration; the
+    exact query policy, scientific request and segment size must equal this
+    range's. The sealed query checkpoint and every fetch segment blob are
+    re-verified by their own loaders. Nothing is created, repaired or
+    contacted; any difference raises.
+    """
+    root = Path(os.path.abspath(os.fspath(source_root)))
+    try:
+        if (
+            not _adoptable_source_root(root, date_utc)
+            or root.is_symlink()
+            or not root.is_dir()
+            or root.resolve(strict=True) != root
+        ):
+            raise BackfillRefused("Saved acquisition root is not an adoptable source location.")
+        request = adapter.acquisition_request(date_utc)
+        if request.prior_locus_ids:
+            raise BackfillRefused("Adopted acquisitions are prior-free.")
+        raw_request = _read_regular(root / "request.json")
+        if json.loads(raw_request) != _request_document(request):
+            raise BackfillRefused("Saved acquisition request differs from this night's contract.")
+        manifest = _read_json(root / "checkpoints" / DEFAULT_CHECKPOINT_NAME / "manifest.json")
+        claimed = manifest.get("bindings") if isinstance(manifest.get("bindings"), Mapping) else {}
+        release, configuration = claimed.get("release_sha"), claimed.get("configuration_hash")
+        if not _is_sha40(release) or configuration != configuration_sha256(release, adapter, segment_size):
+            raise BackfillRefused("Saved acquisition configuration differs from this range's policy.")
+        journal = root / "checkpoints" / "query-progress-v2"
+        journal_identity = _read_json(journal / "identity.json").get("identity", {})
+        head = _read_json(journal / "HEAD.json")
+        journal_bindings = journal_identity.get("bindings", {})
+        provider_sha = journal_identity.get("provider_implementation_sha256")
+        if (
+            provider_sha not in ADOPTABLE_SOURCE_PROVIDERS
+            or journal_bindings.get("run_id") != root.name
+            or journal_bindings.get("release_sha") != release
+            or journal_bindings.get("configuration_hash") != configuration
+        ):
+            raise BackfillRefused("Saved acquisition journal identity is not adoptable.")
+        bindings = query_checkpoint_bindings(root.name, release, configuration, adapter, request)
+        loaded = load_query_result_checkpoint(root, request, bindings)
+        details = loaded.query_result.evidence.details
+        if not (
+            loaded.query_result.clean
+            and details.get("coverage_complete") is True
+            and details.get("terminal_pending_tile_count") == 0
+            and details.get("query_contract_sha256")
+            == _sha256(_canonical(dict(adapter.scientific_contract(request))))
+        ):
+            raise BackfillRefused("Saved acquisition query did not prove complete coverage.")
+        ids = BackfillController._ordered_ids(loaded)
+        binding = fetch_checkpoint_binding(root.name, release, configuration, adapter, request,
+                                           loaded, segment_size)
+        checkpoint = SegmentedFetchCheckpoint.open_read_only(root, binding)
+        completion = checkpoint.inspect_complete(ids)
+    except BackfillRefused:
+        raise
+    except Exception as error:
+        raise BackfillRefused(
+            f"Saved acquisition for {date_utc} failed verification ({type(error).__name__})."
+        ) from error
+    entry = validate_adoption_entry(date_utc, {
+        "schema_version": ADOPTION_SCHEMA,
+        "date_utc": date_utc,
+        "source_root": str(root),
+        "source_run_id": root.name,
+        "source_release_sha": release,
+        "source_configuration_sha256": configuration,
+        "source_provider_implementation_sha256": provider_sha,
+        "source_request_sha256": _sha256(raw_request),
+        "source_journal_head": head,
+        "query_integrity_sha256": loaded.integrity_sha256,
+        "query_contract_sha256": details["query_contract_sha256"],
+        "query_tile_trace_sha256": details["tile_trace_sha256"],
+        "query_locus_order_sha256": details["locus_order_sha256"],
+        "loci": len(ids),
+        "fetch_identity_sha256": binding.identity_sha256,
+        "fetch_completion_sha256": completion.completion_sha256,
+        "fetch_segments": completion.segment_count,
+        "alert_rows": completion.alert_rows,
+    })
+    return SavedAcquisition(entry, request, loaded, binding, checkpoint, completion)
+
+
 # ---------------------------------------------------------------------------
 # Range-level publication authority (chained into per-night authorizations)
 # ---------------------------------------------------------------------------
@@ -394,9 +629,19 @@ class RangePublicationAuthorization:
     expires_at_utc: str
     publication_concurrency: int = 1
     schema_version: str = RANGE_AUTHORIZATION_SCHEMA
+    # Night -> exact saved acquisition adopted instead of a live query.
+    adopted_acquisitions: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        _dates(self.start_date_utc, self.end_date_utc)
+        dates = _dates(self.start_date_utc, self.end_date_utc)
+        adopted = self.adopted_acquisitions
+        if not isinstance(adopted, Mapping) or not set(adopted) <= set(dates):
+            raise BackfillRefused("Adopted acquisitions must be nights of this range.")
+        normalized = {day: validate_adoption_entry(day, adopted[day]) for day in sorted(adopted)}
+        roots = [entry["source_root"] for entry in normalized.values()]
+        if len(set(roots)) != len(roots):
+            raise BackfillRefused("Each adopted night needs its own saved acquisition.")
+        object.__setattr__(self, "adopted_acquisitions", normalized)
         sentinel = self.initial_sentinel
         if (
             self.schema_version != RANGE_AUTHORIZATION_SCHEMA
@@ -423,7 +668,11 @@ class RangePublicationAuthorization:
             raise BackfillRefused("Range publication authorization has no validity.")
 
     def as_dict(self) -> Dict[str, Any]:
-        return json.loads(_canonical({name: getattr(self, name) for name in _RANGE_FIELDS}))
+        payload = {name: getattr(self, name) for name in _RANGE_FIELDS}
+        # Ranges without adoption keep their accepted digest.
+        if self.adopted_acquisitions:
+            payload["adopted_acquisitions"] = self.adopted_acquisitions
+        return json.loads(_canonical(payload))
 
     @property
     def digest(self) -> str:
@@ -445,6 +694,7 @@ class NightWorkspace:
         self.fetch_root = self.root / "checkpoints" / "live-fetch-v1"
         self.candidate = self.root / "candidate"
         self.events = self.root / "events.jsonl"
+        self.adoption = self.root / "adoption.json"
 
     def ensure(self) -> None:
         proposed = self.root.absolute()
@@ -482,6 +732,10 @@ class NightWorkspace:
     def committed_segments(self) -> int:
         segments = self.fetch_root / "segments"
         return len(list(segments.glob("*.commit.json"))) if segments.is_dir() else 0
+
+    def adopted(self) -> bool:
+        """Acquisition was adopted from authorized saved evidence (see ``adoption.json``)."""
+        return self.adoption.is_file()
 
     def candidate_valid(self) -> bool:
         try:
@@ -521,6 +775,8 @@ def derive_night_state(
         "query_committed": workspace.query_committed(),
         "committed_segments": workspace.committed_segments(),
     }
+    if workspace.adopted():
+        evidence["adopted"] = True
     blocked = None
     if state_name == AuthorityState.RECONCILIATION_REQUIRED.value or (
         state_name == AuthorityState.COMPLETE.value and not authority.get("finalized")
@@ -543,7 +799,7 @@ def derive_night_state(
         stage = NightStage.BLOCKED
     elif evidence["candidate_valid"]:
         stage = NightStage.WAITING_FOR_PUBLICATION
-    elif evidence["fetch_complete"]:
+    elif evidence["fetch_complete"] or evidence.get("adopted"):
         stage = NightStage.FETCH_COMPLETE
     elif evidence["query_committed"]:
         stage = NightStage.FETCHING if evidence["committed_segments"] else NightStage.QUERY_COMPLETE
@@ -780,6 +1036,7 @@ class BackfillController:
         self.work_root = work_root
         self.nights_root = self.work_root / "nights"
         self._range_lock = threading.Lock()
+        self._adoption_proofs: Dict[str, Mapping[str, Any]] = {}
 
     # -- helpers -----------------------------------------------------------
 
@@ -799,17 +1056,7 @@ class BackfillController:
             self.event_hook(point, details)
 
     def _configuration_hash(self) -> str:
-        return _sha256(
-            _canonical(
-                {
-                    "release_sha": self.release_sha,
-                    "provider": self.adapter.provider_name,
-                    "scenario": self.adapter.scenario,
-                    "execution_policy": dict(self.adapter.execution_policy()),
-                    "segment_size": self.settings.segment_size,
-                }
-            )
-        )
+        return configuration_sha256(self.release_sha, self.adapter, self.settings.segment_size)
 
     def science_contract_sha256(self, start: str, end: str) -> str:
         """Identity of the exact per-night scientific requests over the range."""
@@ -840,7 +1087,40 @@ class BackfillController:
             "prior_free_attestation_sha256": _sha256(_canonical(dict(attestation))),
             "cache_root": str(self.cache.root) if self.cache is not None else None,
             "publication_concurrency": self.settings.publication_concurrency,
+            **self._adoption_binding(start, end),
         }
+
+    def _adoption(self, date_utc: str) -> Optional[Mapping[str, Any]]:
+        """The Control-authorized saved acquisition for this night, if any."""
+        if self.range_authorization is None:
+            return None
+        return self.range_authorization.adopted_acquisitions.get(date_utc)
+
+    def _saved_acquisition(self, date_utc: str) -> SavedAcquisition:
+        """Re-prove the authorized source now; it must equal the authorization exactly."""
+        authorized = self._adoption(date_utc)
+        saved = describe_saved_acquisition(
+            Path(authorized["source_root"]), date_utc, self.adapter, self.settings.segment_size
+        )
+        if saved.entry != authorized:
+            raise BackfillRefused(f"Saved acquisition for {date_utc} differs from its authorized adoption.")
+        return saved
+
+    def _adoption_binding(self, start: str, end: str) -> Dict[str, Any]:
+        if self.range_authorization is None or not self.range_authorization.adopted_acquisitions:
+            return {}
+        days = set(_dates(start, end))
+        observed = {}
+        for day, authorized in self.range_authorization.adopted_acquisitions.items():
+            if day not in days:
+                raise BackfillRefused("Adopted acquisition is outside the requested range.")
+            # Evidence re-proved once per controller run; construction re-proves again.
+            if self._adoption_proofs.get(day) != authorized:
+                self._adoption_proofs[day] = describe_saved_acquisition(
+                    Path(authorized["source_root"]), day, self.adapter, self.settings.segment_size
+                ).entry
+            observed[day] = self._adoption_proofs[day]
+        return {"adopted_acquisitions": observed}
 
     def _verify_range_authorization(self, start: str, end: str, *, recovery_only: bool = False) -> None:
         authority = self.range_authorization
@@ -881,36 +1161,14 @@ class BackfillController:
         return NightScienceRequest(**document)
 
     def _query_bindings(self, workspace: NightWorkspace, request) -> QueryResultCheckpointBindings:
-        return QueryResultCheckpointBindings(
-            run_id=workspace.run_id,
-            release_sha=self.release_sha,
-            configuration_hash=self._configuration_hash(),
-            target_date_utc=workspace.date_utc,
-            provider_name=self.adapter.provider_name,
-            provider_scenario=self.adapter.scenario,
-            query_policy={
-                "scientific_contract": dict(self.adapter.scientific_contract(request)),
-                "execution_policy": dict(self.adapter.execution_policy()),
-            },
+        return query_checkpoint_bindings(
+            workspace.run_id, self.release_sha, self._configuration_hash(), self.adapter, request
         )
 
     def _fetch_binding(self, workspace: NightWorkspace, request, loaded) -> FetchCheckpointBinding:
-        details = loaded.query_result.evidence.details
-        return FetchCheckpointBinding(
-            run_id=workspace.run_id,
-            release_sha=self.release_sha,
-            configuration_sha256=self._configuration_hash(),
-            target_date_utc=workspace.date_utc,
-            mjd_min=request.mjd_min,
-            mjd_max=request.mjd_max,
-            provider_name=self.adapter.provider_name,
-            provider_scenario=self.adapter.scenario,
-            provider_policy_sha256=_sha256(_canonical(dict(self.adapter.execution_policy()))),
-            query_contract_sha256=str(details.get("query_contract_sha256", "")),
-            query_identity_sha256=loaded.integrity_sha256,
-            query_locus_order_sha256=str(details.get("locus_order_sha256", "")),
-            expected_objects=len(self._ordered_ids(loaded)),
-            segment_size=self.settings.segment_size,
+        return fetch_checkpoint_binding(
+            workspace.run_id, self.release_sha, self._configuration_hash(), self.adapter, request,
+            loaded, self.settings.segment_size,
         )
 
     @staticmethod
@@ -940,6 +1198,8 @@ class BackfillController:
     def acquire(self, date_utc: str) -> Dict[str, Any]:
         """Query (or reuse the sealed query) and fetch only missing segments."""
         workspace = self.workspace(date_utc)
+        if self._adoption(date_utc) is not None:
+            return self._adopt(workspace)
         stage = NightStage.QUERYING.value
         try:
             request = self._request(workspace)
@@ -1017,6 +1277,30 @@ class BackfillController:
                 raise
             return {"ok": False, "failure": self._fail(workspace, stage, error)}
 
+    def _adopt(self, workspace: NightWorkspace) -> Dict[str, Any]:
+        """Record an authorized saved acquisition; no live read, no source write."""
+        try:
+            self._request(workspace)
+            authorized = self._adoption(workspace.date_utc)
+            entry = (self._adoption_proofs.get(workspace.date_utc)
+                     if self._adoption_proofs.get(workspace.date_utc) == authorized
+                     else self._saved_acquisition(workspace.date_utc).entry)
+            if workspace.adoption.exists():
+                if _read_json(workspace.adoption) != entry:
+                    raise BackfillRefused("Recorded adoption differs from the authorized saved acquisition.")
+            else:
+                _write_json_new(workspace.adoption, entry)
+                workspace.append_event(
+                    "acquisition_adopted", stage=NightStage.FETCH_COMPLETE.value,
+                    source_run_id=entry["source_run_id"], source_release_sha=entry["source_release_sha"],
+                    loci=entry["loci"], alert_rows=entry["alert_rows"], segments_total=entry["fetch_segments"],
+                )
+            return {"ok": True, "adopted": True}
+        except BaseException as error:
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise
+            return {"ok": False, "failure": self._fail(workspace, "ADOPTING", error)}
+
     # -- stage 2: construction (chained) ------------------------------------
 
     def _read_prior_index(self, date_utc: str, mjd_min: float) -> pd.DataFrame:
@@ -1068,13 +1352,22 @@ class BackfillController:
             started = time.monotonic()
             workspace.append_event("stage", stage=stage)
             request = self._request(workspace)
-            bindings = self._query_bindings(workspace, request)
-            loaded = load_query_result_checkpoint(workspace.root, request, bindings)
-            ids = self._ordered_ids(loaded)
-            binding = self._fetch_binding(workspace, request, loaded)
-            checkpoint = SegmentedFetchCheckpoint.open_read_only(workspace.root, binding)
-            completion = checkpoint.inspect_complete(ids)
-            alerts = checkpoint.reconstruct_alerts(ids)
+            adopted = self._adoption(date_utc)
+            if adopted is None:
+                bindings = self._query_bindings(workspace, request)
+                loaded = load_query_result_checkpoint(workspace.root, request, bindings)
+                ids = self._ordered_ids(loaded)
+                binding = self._fetch_binding(workspace, request, loaded)
+                checkpoint = SegmentedFetchCheckpoint.open_read_only(workspace.root, binding)
+                completion = checkpoint.inspect_complete(ids)
+            else:
+                # Read the immutable source in place; never copy or adopt checkpoints.
+                if not workspace.adopted() or _read_json(workspace.adoption) != adopted:
+                    raise BackfillRefused("Adopted night lacks its exact recorded adoption.")
+                saved = self._saved_acquisition(date_utc)
+                loaded, binding = saved.loaded, saved.binding
+                checkpoint, completion = saved.checkpoint, saved.completion
+                ids = self._ordered_ids(loaded)
             prior = self.prior_locus_ids(date_utc, predecessors)
             construction_request = dataclasses.replace(request, prior_locus_ids=prior)
             query_result = dataclasses.replace(loaded.query_result, request=construction_request)
@@ -1082,7 +1375,8 @@ class BackfillController:
             checkpoint_constructor = getattr(self.adapter, "construct_checkpoint", None)
             result = (checkpoint_constructor(construction_request, query_result, checkpoint)
                       if checkpoint_constructor is not None else
-                      self.adapter.construct(construction_request, query_result, alerts, completion))
+                      self.adapter.construct(construction_request, query_result,
+                                             checkpoint.reconstruct_alerts(ids), completion))
             result.require_publishable()
             artifacts = build_night_artifacts(result)
             reopen_and_validate_artifacts(artifacts, expected=result)
@@ -1126,6 +1420,8 @@ class BackfillController:
                     "prior_locus_identity_sha256": _identifier_hash(prior),
                 },
             }
+            if adopted is not None:
+                record["provenance"]["acquisition_source"] = dict(adopted)
             _write_json_new(temporary / "candidate-record.json", record)
             os.rename(temporary, workspace.candidate)  # candidate appears atomically
             workspace.append_event(
@@ -1344,6 +1640,7 @@ class BackfillController:
                     NightStage.FETCHING.value, NightStage.FETCH_COMPLETE.value,
                 }
                 and not states[day]["evidence"]["fetch_complete"]
+                and not states[day]["evidence"].get("adopted")
             ]
             acquisitions: Dict[str, Future] = {}
             acquisition_pool = ThreadPoolExecutor(

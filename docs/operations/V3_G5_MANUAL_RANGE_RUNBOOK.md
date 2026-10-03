@@ -104,6 +104,45 @@ Neither command creates `WORK_ROOT`.
   For other ranges, the science and attestation values differ. Section 6
   re-derives and checks them.
 
+## 4a. Optional: adopt saved acquisitions instead of querying
+
+A night that already has complete, sealed query and fetch evidence from an
+earlier run can be adopted instead of queried again. Adoption never contacts
+ANTARES and never writes the source. The adoptable sources are:
+
+- a direct child of `/astro/store/shire/ANTARES/work/canary/`;
+- a `nights/night-YYYY-MM-DD` root of another range under
+  `/astro/store/shire/ANTARES/work/backfill/`.
+
+Name each adopted night on `plan` with `--adopt DATE=SOURCE_ROOT`:
+
+```bash
+"$PY" -I -B -c "$ENTRY" plan --start $START_DATE --end $END_DATE \
+  --work-root $WORK_ROOT --candidate-release $RELEASE_SHA \
+  --adopt 2026-06-30=/astro/store/shire/ANTARES/work/canary/<run-id> > "$CONTROL_DIR/plan.json"
+```
+
+For each adopted night, `plan` re-proves the source read-only and fails on
+any difference:
+
+- the sealed query checkpoint and every fetch blob;
+- the request and the scientific contract;
+- the configuration, including segment size;
+- the journal identity;
+- a reviewed prior-free provider.
+
+It then writes the exact evidence identities into
+`range_binding.adopted_acquisitions`. Section 6 binds them into the
+authorization unchanged, and the section 7 approval covers them.
+
+Execution re-proves each source at run start and again at construction. It
+records `adoption.json` in the night's own workspace. It rebuilds the
+candidate against the current prior, so later nights include earlier
+published nights. It publishes through the normal gated path. Publication
+refuses any candidate whose `acquisition_source` provenance differs from the
+authorization. `execute` refuses `--adopt`: adoption exists only through an
+approved authorization.
+
 ## 5. Control step: generate the Control token
 
 Control generates a fresh 256-bit token for this `RUN_ID` only, keeps it private,
