@@ -342,6 +342,8 @@ class ReadBoundary:
 
     def check_path(self, value, writing=False):
         if isinstance(value, int):  # fdopen of descriptors we opened ourselves.
+            if writing and self.worker:
+                raise Refuse("WRITE_DENIED")
             return
         path = Path(os.fsdecode(value))
         if not path.is_absolute():
@@ -553,7 +555,9 @@ def ap0(layout, *, sleep=time.sleep, clock=lambda: datetime.now(timezone.utc), c
         try:
             return controllers(), None
         except (OSError, Refuse) as error:
-            return {"active_controller_present": None, "controllers": []}, type(error).__name__
+            # Boolean reports only observed matches. The separate refusal and
+            # no_live_controller=false make unavailable discovery explicitly unsafe.
+            return {"active_controller_present": False, "controllers": []}, type(error).__name__
 
     first = generation(layout)
     clear = gate_clear(layout)
@@ -568,7 +572,9 @@ def ap0(layout, *, sleep=time.sleep, clock=lambda: datetime.now(timezone.utc), c
     live, process_error = processes()
     flags = {"gate_clear": clear,
              "generation_stable": first == second and all(item is not None for item in first),
-             "no_live_controller": early_live["active_controller_present"] is False and live["active_controller_present"] is False,
+             "no_live_controller": early_process_error is None and process_error is None
+                                   and early_live["active_controller_present"] is False
+                                   and live["active_controller_present"] is False,
              "no_recent_nonterminal_activity": not (early_busy or busy)}
     return {**flags, "tier_b_safe_to_attempt": all(flags.values()),
             "observation_seconds": elapsed, "first_generation": first, "second_generation": second,
@@ -949,7 +955,7 @@ def landlock_abi():
     return result if result >= 1 else "UNAVAILABLE"
 
 
-def kernel_read_boundary(read_paths, *, directory_only=()):
+def kernel_read_boundary(read_paths, *, directory_only=(), supervisor_pid=None):
     """Worker-only Linux/x86_64 Landlock read allow-list and socket syscall denial.
 
     No namespaces, filesystem changes, helper binary, or fallback. Unsupported
@@ -960,6 +966,10 @@ def kernel_read_boundary(read_paths, *, directory_only=()):
         raise Refuse("KERNEL_BOUNDARY_UNAVAILABLE")
     libc = ctypes.CDLL(None, use_errno=True)
     libc.syscall.restype = ctypes.c_long
+    expected_parent = os.getppid() if supervisor_pid is None else supervisor_pid
+    # Do not leave an orphaned lock holder if the outer supervisor dies.
+    if os.getppid() != expected_parent or libc.prctl(1, 9, 0, 0, 0) or os.getppid() != expected_parent:
+        raise Refuse("SUPERVISOR_GONE")  # PR_SET_PDEATHSIG = SIGKILL, with race check.
     abi = libc.syscall(444, 0, 0, 1)  # landlock_create_ruleset(VERSION)
     if abi < 3:  # Older ABIs cannot prohibit native truncate(2).
         raise Refuse("KERNEL_BOUNDARY_UNAVAILABLE")
@@ -1005,7 +1015,14 @@ def kernel_read_boundary(read_paths, *, directory_only=()):
     instructions = [(0x20, 0, 0, 4), (0x15, 1, 0, 0xC000003E), (0x06, 0, 0, deny),
                     (0x20, 0, 0, 0), (0x35, 0, 1, 0x40000000), (0x06, 0, 0, deny)]
     # socket through getsockopt, socketpair, plus sendmmsg/recvmmsg/io_uring.
-    for syscall in list(range(41, 56)) + [57, 58, 59, 288, 299, 307, 322, 425, 426, 427]:
+    # Landlock does not mediate chmod/chown/xattr/time metadata mutations.
+    # Deny those families, ioctl and process-memory/fd acquisition explicitly.
+    # IDs: Linux arch/x86/entry/syscalls/syscall_64.tbl (see runbook).
+    metadata_mutations = [16, 90, 91, 92, 93, 94, 132, 188, 189, 190, 197, 198, 199,
+                          235, 260, 261, 268, 280, 452, 463, 466, 469]
+    process_access = [101, 310, 311, 438]
+    for syscall in sorted(set(list(range(41, 56)) + metadata_mutations + process_access +
+                              [57, 58, 59, 288, 299, 307, 322, 425, 426, 427])):
         instructions.extend([(0x15, 0, 1, syscall), (0x06, 0, 0, deny)])
     # No subprocess can inherit flock. Native pthread creation remains allowed.
     instructions.extend([(0x15, 0, 1, 435), (0x06, 0, 0, 0x00050000 | 38),  # clone3 => ENOSYS
@@ -1018,7 +1035,8 @@ def kernel_read_boundary(read_paths, *, directory_only=()):
     if libc.prctl(22, 2, ctypes.byref(program), 0, 0):
         raise Refuse("KERNEL_BOUNDARY_UNAVAILABLE")
     return {"landlock_abi": abi, "native_socket_syscalls": "DENIED", "native_filesystem_writes": "DENIED",
-            "native_child_processes": "DENIED"}
+            "native_metadata_mutations": "DENIED", "native_process_memory_access": "DENIED",
+            "native_child_processes": "DENIED", "supervisor_death_signal": "SIGKILL"}
 
 
 def send_worker(value):
@@ -1064,7 +1082,8 @@ def worker_main():
             readable.append(manifest)
         # Journal.load opens its parent dir_fd. Listing/opening that directory
         # does not grant content access to newly appearing or unlisted files.
-        boundary = kernel_read_boundary(readable, directory_only=(layout.journals,))
+        boundary = kernel_read_boundary(readable, directory_only=(layout.journals,),
+                                        supervisor_pid=request["supervisor_pid"])
         from src import authority, history
         from src.operations.publication import classify_night_authority
         if (Path(history.__file__).parent != module_root or history.publication_gate_path(layout.data) != layout.gate
@@ -1210,7 +1229,7 @@ def run_tier_b(layout, discovery, safety, acknowledged, *, supervisor=supervise)
     if not newest or not legacy:
         return {"status": "REFUSE", "refusal": "MISSING_REPRESENTATIVE_NIGHT"}
     representatives = ["2026-06-27", newest, legacy]  # roles may share the first two paths.
-    request = {"layout": layout.plain(), "representatives": representatives,
+    request = {"layout": layout.plain(), "representatives": representatives, "supervisor_pid": os.getpid(),
                "physical_nights": inventory["physical_nights"],
                "legacy_candidates": [day for day in inventory["physical_nights"]
                                      if day < "2026-06-27" and day not in inventory["v3_candidates_from_journal_names"]]}

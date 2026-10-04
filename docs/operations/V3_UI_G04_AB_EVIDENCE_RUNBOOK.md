@@ -151,12 +151,18 @@ read rules only for runtime libraries and individually enumerated journals,
 three-role manifests, cumulative files and the already provisioned lock. It
 also grants directory-only access for the journal reader's parent `dir_fd`,
 without granting content reads of unlisted/new files. It permits no native
-filesystem writes. Seccomp denies native socket operations,
-io_uring and child processes; native pthreads remain possible. Unsupported
-boundaries cause refusal, with **no weaker fallback**. No namespace or timer
+filesystem writes. Seccomp denies native socket operations, permission/owner/
+timestamp/xattr changes, ioctl, process-memory/fd acquisition, io_uring and child
+processes; native pthreads remain possible. Landlock does not itself mediate
+metadata mutation, so those explicit denials are necessary. The worker sets
+SIGKILL on supervisor death and checks the parent identity around that setup.
+Unsupported boundaries cause refusal, with **no weaker fallback**. No namespace or timer
 is created. Native Linux boundary execution is a platform-dependent test;
 local macOS qualification checks the real rule builder and BPF decisions and
 skips the irreversible Linux syscall test. Arnor support remains unmeasured.
+
+Kernel references: [Landlock API and limitations](https://docs.kernel.org/userspace-api/landlock.html)
+and the [upstream x86_64 syscall table](https://github.com/torvalds/linux/blob/master/arch/x86/entry/syscalls/syscall_64.tbl).
 
 The child alone holds the release shared lock, using
 `history.authoritative_read(..., wait_seconds=5)`. The supervisor caps the

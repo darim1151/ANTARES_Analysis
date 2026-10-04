@@ -301,6 +301,7 @@ class ConfinementTests(HarnessFixture):
         for event, args in (("socket.__new__", ()), ("socket.getaddrinfo", ()),
                             ("import", ("antares_client.search",)),
                             ("open", (str(H.AUTHORITY / "data/file"), "w", os.O_WRONLY)),
+                            ("open", (999, "w", os.O_WRONLY)),
                             ("os.mkdir", (str(H.AUTHORITY / "new"),)),
                             ("subprocess.Popen", ("python", []))):
             with self.subTest(event=event), self.assertRaises(H.Refuse):
@@ -393,6 +394,8 @@ class SafetyGateTests(HarnessFixture):
         self.assertFalse(result["tier_b_safe_to_attempt"])
         self.assertFalse(result["no_live_controller"])
         self.assertFalse(result["no_recent_nonterminal_activity"])
+        self.assertIs(type(result["controller_detection"]["active_controller_present"]), bool)
+        self.assertIsNotNone(result["process_discovery_refusal"])
         self.assertIsNotNone(H.ap3(self.layout))
 
     def test_partial_and_overfull_recent_tail_fail_closed(self):
@@ -617,6 +620,8 @@ class SupervisorTests(HarnessFixture):
                     captured.setdefault("allowed", []).append(args[2]._obj.allowed_access)
                 return 0
         def prctl(option, *args):
+            if option == 1:
+                captured["parent_death_signal"] = args[0]
             if option == 22:
                 program = args[1]._obj
                 captured["bpf"] = [(row.code, row.jt, row.jf, row.k)
@@ -631,6 +636,7 @@ class SupervisorTests(HarnessFixture):
                     mock.patch.object(os, "open", side_effect=lambda *args: os.dup(base)):
                 result = H.kernel_read_boundary([allowed], directory_only=(directory,))
             self.assertEqual(result["native_child_processes"], "DENIED")
+            self.assertEqual(captured["parent_death_signal"], signal.SIGKILL)
             self.assertEqual(captured["handled"], (1 << 15) - 1)
             self.assertEqual(sorted(captured["allowed"]), [1 << 2, 1 << 3])
             def decision(number, flags=0, arch=0xC000003E):
@@ -647,7 +653,9 @@ class SupervisorTests(HarnessFixture):
                     else:
                         self.fail("unexpected BPF operation")
                     pc += 1
-            for syscall in (41, 42, 53, 57, 58, 59, 288, 299, 307, 322, 425, 426, 427, 0x40000000):
+            for syscall in (16, 41, 42, 53, 57, 58, 59, 90, 91, 92, 93, 94, 101, 132,
+                            188, 189, 190, 197, 198, 199, 235, 260, 261, 268, 280,
+                            288, 299, 307, 310, 311, 322, 425, 426, 427, 438, 452, 463, 466, 469, 0x40000000):
                 self.assertEqual(decision(syscall), 0x00050001)
             self.assertEqual(decision(56), 0x00050001)
             self.assertEqual(decision(56, 0x10000), 0x7FFF0000)
@@ -661,6 +669,17 @@ class SupervisorTests(HarnessFixture):
         with mock.patch.object(H.sys, "platform", "darwin"):
             with self.assertRaisesRegex(H.Refuse, "KERNEL_BOUNDARY_UNAVAILABLE"):
                 H.kernel_read_boundary([])
+
+    def test_supervisor_death_race_refuses_before_rules_or_lock(self):
+        library = SimpleNamespace(syscall=mock.Mock(), prctl=mock.Mock(return_value=0))
+        with mock.patch.object(H.sys, "platform", "linux"), \
+                mock.patch.object(H.platform, "machine", return_value="x86_64"), \
+                mock.patch("ctypes.CDLL", return_value=library), \
+                mock.patch.object(H.os, "getppid", side_effect=[123, 1]):
+            with self.assertRaisesRegex(H.Refuse, "SUPERVISOR_GONE"):
+                H.kernel_read_boundary([], supervisor_pid=123)
+        library.prctl.assert_called_once_with(1, 9, 0, 0, 0)
+        library.syscall.assert_not_called()
 
     def test_hard_timeout_kills_noncooperative_lock_holder_and_releases_lock(self):
         code = """
@@ -720,7 +739,8 @@ for name in ('/lib','/lib64'):
     if pathlib.Path(name).exists(): paths.append(pathlib.Path(name).resolve())
 h['kernel_read_boundary'](paths)
 assert allowed.read_text() == 'bounded'
-for action in (lambda:allowed.write_text('attempt'), lambda:excluded.read_text(), lambda:socket.socket()):
+for action in (lambda:allowed.write_text('attempt'), lambda:allowed.chmod(0o777),
+               lambda:__import__('os').utime(allowed,None), lambda:excluded.read_text(), lambda:socket.socket()):
     try: action()
     except PermissionError: pass
     else: raise AssertionError('kernel boundary permitted access')
