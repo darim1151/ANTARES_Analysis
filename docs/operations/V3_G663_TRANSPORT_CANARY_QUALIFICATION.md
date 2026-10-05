@@ -11,6 +11,16 @@ Jul08–12 re-query, production mutation or publication. The final
 qualification results, source hashes and Control verdict are recorded in
 [`G6.6.3A_TRANSPORT_CANARY_READY_PACKET.md`](G6.6.3A_TRANSPORT_CANARY_READY_PACKET.md).
 
+**G6.6.3D update (release blocker RB1).** A G6.6.3A page thread blocked in
+name resolution or in urllib3's chunked-trailer loop could not be stopped at
+the iterator deadline. G6.6.3D moves each P2 page's blocking HTTP exchange
+into one dedicated, OS-killable child process per night query
+(`src/operations/p2_transport.py`). Pagination, decoding, deadlines and
+every completeness decision stay in the scientific process. The transport
+and profile identities, the runbook and the risks below are updated to the
+G6.6.3D bytes. The remediation evidence is
+[`G6.6.3D_PROCESS_TRANSPORT_REMEDIATION.md`](G6.6.3D_PROCESS_TRANSPORT_REMEDIATION.md).
+
 ## 1. Transport root cause
 
 The pinned `antares-client==1.14.0` `search()` is `_list_all_resources`. One
@@ -59,8 +69,9 @@ single request. Fetch is unchanged and identical to P1.
     `max_iterator_bytes`), enforced on the streamed body, plus a refusal
     whenever a declared `Content-Length` exceeds the budget;
   * whole-iterator wall clock (`iterator_deadline_seconds`), enforced before
-    every page and during it: the page runs in a worker thread joined for the
-    remaining time;
+    every page and during it: the page runs in the transport child, and at
+    the deadline the parent kills that child (SIGTERM, 2 s grace, SIGKILL,
+    5 s join) and requires a reaped exit status (G6.6.3D);
   * the client's connect and read timeouts, exactly (60 s each);
   * redirects per page (`max_redirects`).
 * **Continuations.** A `links.next` must be one printable-ASCII string with
@@ -71,6 +82,16 @@ single request. Fetch is unchanged and identical to P1.
   the pinned client, which cannot request them either.
 * **Redirects.** Every `Location` is validated before any request: plain
   ASCII, same origin, `https`, no credentials or fragment, under `/v1/`.
+* **Process boundary (G6.6.3D).** One child per P2 night query, started on
+  the first page and reused for every page of every search, runs only
+  `p2_transport.py` (standard library and `requests`; never the `src`
+  package). It performs one page exchange per request (resolution, connect,
+  TLS, redirects, bounded body read) and returns the exact body bytes and the
+  charset `requests` derived, or a typed failure, over a versioned,
+  pickle-free, bounded pipe protocol. Any deadline, IPC violation, early end
+  of stream, crash or startup failure kills the child and fails the
+  iterator; the transport is never restarted. A child that cannot be proven
+  dead is fatal (`P2TransportUnkillableError`).
 * **Bodies.** Every HTTP exchange goes through the session's transport
   adapter with exactly the prepared request and environment settings that
   `Session.request` derives. Only `Session.send`'s redirect bookkeeping is
@@ -103,7 +124,7 @@ interprets:
 |---|---|---|
 | D1 | `science._validate_phase6_manifest_evidence` accepted only the unguarded client identity for `arnor-commissioning`. Every guarded-P2 Arnor night therefore failed artifact reopen (`phase6_client_identity_invalid`) at construction and publication, after passing the P2 proof. Reproduced end to end. | Only for a trusted P2 profile with transport limits on Arnor, the expected identity is the guarded pagination contract. `validate_p2_query_result` already proved the exact identity, including `transport_sha256`. P1 manifests take the unchanged path. |
 | D2 | `requests.Session.send` pre-computes `Response.next` even with `allow_redirects=False`, so it read every redirect body completely, outside any byte ceiling. The pinned client has the same exposure. A non-UTF-8 `Location` raised inside requests. | `_GuardedListing._send` calls the session's transport adapter directly with identical request and settings. |
-| H1 | `Location` lacked the control-character, backslash and fragment checks that continuations had. Backslash is a known `urlsplit`/urllib3 parsing difference. | Shared `_p2_plain_url` for continuations and `Location`. Fragments in redirects are refused. |
+| H1 | `Location` lacked the control-character, backslash and fragment checks that continuations had. Backslash is a known `urlsplit`/urllib3 parsing difference. | Shared `_p2_plain_url` (G6.6.3D: `p2_transport.plain_url`) for continuations and `Location`. Fragments in redirects are refused. |
 | H2 | The canary profile docstring referred to a hash constant that did not exist. | `G663_CANARY_P2_PROFILE_SHA256` and `G663_CANARY_TRANSPORT_SHA256` are defined. The profile refuses to exist unless its canonical bytes still hash to them. |
 
 ## 4. The frozen canary profile (one profile, both nights)
@@ -114,12 +135,21 @@ P2ProofProfile(max_depth=18, max_nodes_per_root=511, max_nodes_per_night=4095,
                transport=P2TransportLimits(max_pages=64, max_consecutive_empty_pages=2,
                    max_page_bytes=16777216, max_iterator_bytes=67108864,
                    iterator_deadline_seconds=600, connect_timeout_seconds=60,
-                   read_timeout_seconds=60, max_redirects=2))
-profile identity  G663_CANARY_P2_PROFILE_SHA256 = d1dfee3b066e2a5f90f1b4842d1184c9e6bd32d4a1b772d3819f082b4b189684
-transport identity G663_CANARY_TRANSPORT_SHA256 = 41ad48a1c82a585498ce7838672962dfc5583bc91b4e49c497d9a62240dd0650
-2026-07-07 scientific contract sha256 = e1e28e8657ad67a7f1e870949e9f6d93f84fa1375cb22818c7c04b4aa5c51fe5
-2026-07-13 scientific contract sha256 = 08ab9c771471f5bbbeb1cdf6996d48748e87e8ab3c7b56b662ff2f1b729ceb13
+                   read_timeout_seconds=60, max_redirects=2,
+                   ipc_max_header_bytes=65536, ipc_max_chunk_bytes=1048576,
+                   child_startup_seconds=30, child_shutdown_seconds=5,
+                   terminate_grace_seconds=2, kill_join_seconds=5))
+transport schema v3.p2-transport-limits.v2, IPC g663d.p2-transport-ipc.v1
+child implementation (p2_transport.py) sha256 2e661e528899c6a6ac02eb6af38efbcc23ad9e5cad2e083963c9f9a24cea5bee
+profile identity  G663_CANARY_P2_PROFILE_SHA256 = 6ce4b3a29d79154513bfe20213cd956475e20bc224795e54724c6af44c6a105c
+transport identity G663_CANARY_TRANSPORT_SHA256 = 6e0291f3dd203dbccc9a00239072f6501b06dbafc9f1d37c97498be1d7052ddd
+2026-07-07 scientific contract sha256 = f1df451787cc22728fb5bf66ebd124f818b303d27e74f74b01c05aa550fdf036
+2026-07-13 scientific contract sha256 = df812a2ec232e331f33e1f0020ffd46591cae1775335e067eb77f859e1a24b45
 ```
+
+G6.6.3A's identities (profile `d1dfee3b…9684`, transport `41ad48a1…0650`,
+contracts `e1e28e86…1fe5` and `08ab9c77…eb13`) are superseded: the transport
+contract now also binds the process boundary and the child's bytes.
 
 The profile digest is every P2 event's `profile_sha256`. The transport
 digest is the client identity's `transport_sha256`. Both are bound into the
@@ -248,6 +278,15 @@ name lookup in every test.
     sealing and fetch;
   * reproducible from its journal alone, with zero requests.
 * **Identity and firewall.** Section 6 and the frozen-profile goldens.
+* **Process boundary (G6.6.3D).** Every whole-night, socket and deadline test
+  above runs the real transport child over loopback.
+  `tests/test_g663d_process_transport.py` qualifies the boundary itself:
+  pre-socket (resolver) and chunked-trailer kills with the bytes stopping,
+  equivalence and 50-row ordering, crashes, malformed, foreign, out-of-order
+  and oversized frames, end of stream before COMPLETE, deadlines during the
+  IPC transfer, startup failures, clean shutdown, persistence, the
+  finalizer and orphan watchdog, the fail-closed night matrix, the P1
+  firewall and the child's import boundary.
 * **Runbook dry run.** The two scripts in section 7 are extracted verbatim
   from this document and executed offline, on success and failure nights.
 
@@ -255,13 +294,14 @@ name lookup in every test.
 
 `G663FirewallTests` proves this from Git (base `8f4ee9b`):
 
-* Only `live_antares.py` and `science.py` differ under `src/`. Every
-  forbidden runtime file, plus `backfill.py` and `production_range.py`, is
-  byte-identical.
+* Only `live_antares.py`, `science.py` and the new P2-only
+  `p2_transport.py` (G6.6.3D) differ under `src/`. Every forbidden runtime
+  file, plus `backfill.py` and `production_range.py`, is byte-identical.
 * `live_antares.py`:
   * Changed top-level definitions are only `LiveAntaresProvider`,
-    `P2ProofProfile` and `_P2State`; everything added is the named G6.6.3A
-    set.
+    `P2ProofProfile`, `_P2State` and (G6.6.3D) `_run_p2_query`, whose only
+    change is a `try`/`finally` that ends the night's transport child;
+    everything added is the named G6.6.3A and G6.6.3D set.
   * In the provider class, only `_load_client` differs, and only in its
     first statement, the P2-only `if proof_profile is not None` branch.
   * In `_P2State`, only `outcome()`'s terminal reason differs
@@ -290,12 +330,13 @@ Jul08–12 are unchanged.
 
 ## 7. Future Arnor canary runbook (prepared, NOT EXECUTED)
 
-Execute only after Control accepts G6.6.3A **and** approves an immutable
-release built from the accepted commit. That release must carry exactly
-these runtime bytes:
+Execute only after Control accepts G6.6.3A, closes RB1 (G6.6.3D) **and**
+approves an immutable release built from the accepted commit. That release
+must carry exactly these runtime bytes:
 
 ```text
-src/operations/live_antares.py  sha256 0762b944a9c960955f93d8019f8a53a5df1011ab1226334db7c78d1461e5cec8
+src/operations/live_antares.py  sha256 c8557ff6b6d80842b0c5f4be4a8be21d66f7f36852c0f57af60507e5827284ba
+src/operations/p2_transport.py  sha256 2e661e528899c6a6ac02eb6af38efbcc23ad9e5cad2e083963c9f9a24cea5bee
 src/operations/science.py       sha256 bb3e377bdee1132cc90cb2890b24d31b209a499cac5ee0e77c329705476be106
 ```
 
@@ -313,14 +354,15 @@ The canary roots are non-authoritative.
 tmux new -s g663-p2-canary          # re-attach: tmux attach -t g663-p2-canary
 umask 077
 unset ANTARES_API_BASE_URL API_TIMEOUT
-export RELEASE_SHA=<Control-approved G6.6.3A release SHA>
+export RELEASE_SHA=<Control-approved release SHA carrying the G6.6.3D bytes>
 export WHEEL_SHA256=<that release's wheel SHA-256>
 export RELEASE_ROOT=/astro/users/mdarim/opt/antares-analysis/releases/$RELEASE_SHA
 export PY=$RELEASE_ROOT/venv/bin/python
-export PROVIDER_SHA256=0762b944a9c960955f93d8019f8a53a5df1011ab1226334db7c78d1461e5cec8
+export PROVIDER_SHA256=c8557ff6b6d80842b0c5f4be4a8be21d66f7f36852c0f57af60507e5827284ba
+export P2_TRANSPORT_SHA256=2e661e528899c6a6ac02eb6af38efbcc23ad9e5cad2e083963c9f9a24cea5bee
 export SCIENCE_SHA256=bb3e377bdee1132cc90cb2890b24d31b209a499cac5ee0e77c329705476be106
-export PROFILE_SHA256=d1dfee3b066e2a5f90f1b4842d1184c9e6bd32d4a1b772d3819f082b4b189684
-export TRANSPORT_SHA256=41ad48a1c82a585498ce7838672962dfc5583bc91b4e49c497d9a62240dd0650
+export PROFILE_SHA256=6ce4b3a29d79154513bfe20213cd956475e20bc224795e54724c6af44c6a105c
+export TRANSPORT_SHA256=6e0291f3dd203dbccc9a00239072f6501b06dbafc9f1d37c97498be1d7052ddd
 export NIGHT=2026-07-07            # 2026-07-13 only for the second, separately authorized canary
 export RUN_ID=g663-p2-$NIGHT-v1
 export CANARY_ROOT=/astro/store/shire/ANTARES/work/canary/$RUN_ID
@@ -334,6 +376,7 @@ print(sys.version.split()[0], metadata.version("antares-analysis"), metadata.ver
 # Expect: 3.11.16, the release's package version, 1.14.0, a path under $RELEASE_ROOT/venv/
 SITE=$("$PY" -I -B -c 'import pathlib, src.operations as o; print(pathlib.Path(o.__file__).parent)')
 echo "$PROVIDER_SHA256  $SITE/live_antares.py" | sha256sum -c && echo "$SCIENCE_SHA256  $SITE/science.py" | sha256sum -c
+echo "$P2_TRANSPORT_SHA256  $SITE/p2_transport.py" | sha256sum -c
 "$PY" -I -B -c 'from src.operations import live_antares as L, science as S, backfill as B
 L.g663_canary_p2_profile()
 print(L.G663_CANARY_P2_PROFILE_SHA256, L.G663_CANARY_TRANSPORT_SHA256, S.QUALIFIED_P2_PROFILES, [p.name for p in B.QUALIFIED_SOURCE_PROFILES])'
@@ -345,10 +388,26 @@ from src.operations.storage import PRODUCTION_DATA_ROOT
 print(authoritative_nights(PRODUCTION_DATA_ROOT)[-1], read_publication_gate(PRODUCTION_DATA_ROOT))'
 # Expect: 2026-07-06 None (re-check after the canary: unchanged)
 unshare --user --map-root-user --net -- true && echo "netns available" || echo "STOP: no empty network namespace"
+# The transport child must start, prove its bytes and stop cleanly in this release (no request, no network).
+unshare --user --map-root-user --net -- "$PY" -I -B - <<'EOF'
+# g663-child-preflight v1 (offline; starts and stops one transport child, sends no request)
+import json, os, time
+from src.operations import live_antares as L, p2_transport as T
+
+limits = L.g663_canary_p2_profile().transport
+assert T.implementation_sha256() == os.environ["P2_TRANSPORT_SHA256"], "transport child bytes"
+assert T.CHILD_TEST_HOOK is None, "test hook set"
+child = T.P2ProcessTransport(L._p2_child_config(limits, L.OFFICIAL_API_BASE_URL))
+child._start(time.monotonic() + limits.child_startup_seconds)  # READY proves the bytes and no src import
+record = child.close()
+assert child.state == T.CLOSED and record["reaped"] and record["returncode"] == 0, record
+print(json.dumps({"stage": "child-preflight", "startup_seconds": child.stats["startup_seconds"],
+                  "child_implementation_sha256": T.implementation_sha256(), "exit": record}, sort_keys=True))
+EOF
 test ! -e "$CANARY_ROOT" && test ! -e "$EVIDENCE_DIR" || echo "STOP: root/evidence exists; never reuse"
 mkdir -m 0700 "$CANARY_ROOT" && mkdir -p -m 0700 "$EVIDENCE_DIR"
-declare -px RELEASE_SHA WHEEL_SHA256 RELEASE_ROOT PY PROVIDER_SHA256 SCIENCE_SHA256 PROFILE_SHA256 \
-  TRANSPORT_SHA256 NIGHT RUN_ID CANARY_ROOT EVIDENCE_DIR > "$EVIDENCE_DIR/canary.env"
+declare -px RELEASE_SHA WHEEL_SHA256 RELEASE_ROOT PY PROVIDER_SHA256 P2_TRANSPORT_SHA256 SCIENCE_SHA256 \
+  PROFILE_SHA256 TRANSPORT_SHA256 NIGHT RUN_ID CANARY_ROOT EVIDENCE_DIR > "$EVIDENCE_DIR/canary.env"
 ```
 
 Any line printing `STOP`, or any unexpected value, stops the procedure. Do
@@ -359,7 +418,7 @@ not improvise; ask Control.
 ```bash
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 "$PY" -I -B - > "$EVIDENCE_DIR/acquire-$TS.json" 2> "$EVIDENCE_DIR/acquire-$TS.log" <<'EOF'
-# g663-canary-acquire v1 (NOT EXECUTED in G6.6.3A)
+# g663-canary-acquire v2 (NOT EXECUTED in G6.6.3A or G6.6.3D)
 import hashlib, json, os
 from pathlib import Path
 from src.operations import backfill as B, live_antares as L, production_range as R
@@ -370,6 +429,7 @@ env = os.environ
 night, run_id, release = env["NIGHT"], env["RUN_ID"], env["RELEASE_SHA"]
 assert night in ("2026-07-07", "2026-07-13") and run_id == f"g663-p2-{night}-v1", (night, run_id)
 assert hashlib.sha256(Path(L.__file__).read_bytes()).hexdigest() == env["PROVIDER_SHA256"], "provider bytes"
+assert L._p2_transport.implementation_sha256() == env["P2_TRANSPORT_SHA256"], "transport child bytes"
 profile = L.g663_canary_p2_profile()  # refuses unless its canonical bytes hash to the frozen identity
 assert (L.G663_CANARY_P2_PROFILE_SHA256, L.G663_CANARY_TRANSPORT_SHA256) == (
     env["PROFILE_SHA256"], env["TRANSPORT_SHA256"]), "profile identity"
@@ -441,7 +501,7 @@ Control authorization.
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 unshare --user --map-root-user --net -- "$PY" -I -B - > "$EVIDENCE_DIR/verify-$TS.json" \
   2> "$EVIDENCE_DIR/verify-$TS.log" <<'EOF'
-# g663-canary-verify v1 (NOT EXECUTED in G6.6.3A)
+# g663-canary-verify v1 (NOT EXECUTED in G6.6.3A or G6.6.3D)
 import hashlib, json, os, socket
 from pathlib import Path
 from unittest import mock
@@ -504,14 +564,15 @@ echo "exit=$?"
 
 All of the following must hold, and all evidence stays in `$EVIDENCE_DIR`.
 
-1. **Preflight (7.1)** printed no `STOP` and only the expected identities.
+1. **Preflight (7.1)** printed no `STOP` and only the expected identities,
+   and the transport-child preflight exited 0 with `returncode` 0.
    The authority tail (`2026-07-06`) and publication gate (`None`) are
    unchanged afterwards. The cache is still absent.
 2. **Acquisition (7.2)** exited 0. Its final document has
    `terminal_evidence` = `natural-exhaustion-below-50` and
    `p2_budget.secondary_nodes` > 0 (the floor saturation was actually
    resolved by P2). `client` equals the guarded identity with
-   `transport_sha256` = `41ad48a1…`. The fetch completed every object.
+   `transport_sha256` = `6e0291f3…`. The fetch completed every object.
 3. **Verification (7.3)**, run in an empty network namespace, exited 0. It
    re-proved the sealed query, the journal, P2 replay, the fetch
    checkpoint, the selection descriptor and artifact reopen. The canary
@@ -551,10 +612,16 @@ retry in the same root.
 * **Floor-saturation scale on Jul07/Jul13 is unknown.** The P1 failure
   stopped at the first saturated floor. Node budgets that bind fail closed
   (`p2_*_nodes_exhausted`). They never truncate science.
-* **Abandoned page threads.** A page abandoned at the iterator deadline can
-  keep its daemon worker thread and socket until the next read times out,
-  the server closes, or the process exits. It can never deliver bytes to
-  the failed iterator, and the night has already failed.
+* **Transport child on Arnor (G6.6.3D).** Each P2 night query runs one
+  child process of the release's own interpreter (`-I -B`), in its own
+  session, with stdio on `/dev/null`. The 7.1 preflight proves that it
+  starts, proves its bytes and stops cleanly in the release environment
+  before any live step. A child failure during the canary (startup, IPC,
+  kill) fails the root closed with a typed `P2Transport…Error`, never
+  science. A child stuck in uninterruptible kernel sleep (for example on a
+  hung filesystem) may not be reapable within the 5 s join; that is fatal
+  for the night (`P2TransportUnkillableError`) and is reported, never
+  ignored.
 * **Server-defined continuation content.** The guard constrains a
   continuation's origin and path, not its query string. Pagination content
   remains as trusted as it is for the pinned client and every historical P1

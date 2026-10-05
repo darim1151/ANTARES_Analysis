@@ -20,7 +20,6 @@ import math
 import os
 import socket
 import tempfile
-import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,6 +34,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import pandas as pd
 
 from .. import query
+from . import p2_transport as _p2_transport
 from ..history import prepare_alerts, prepare_loci, validation_summary
 from .science import (
     FetchProviderError,
@@ -2170,62 +2170,69 @@ def _run_p2_query(provider, request, progress, event_hook):
     if state.active is not None and not state.failed:
         commit(state.unknown())
     search = None
-    while state.frontier and not state.failed:
-        reservation, reason = state.reservation()
-        if reason:
-            commit(state.failure(reason))
-            break
-        commit(reservation)
-        tile = state.frontier[0]["tile"]
-        records, exhausted, error, retryable = [], False, None, False
-        iterator = None
-        try:
-            if search is None:
-                try:
-                    search, _, _ = provider._load_client()
-                except Exception as exc:
-                    raise ValueError("P2 offline client initialization failed.") from exc
-            iterator = iter(search(_build_tile_query(tile)))
-            while len(records) < 50:
-                try:
-                    locus = next(iterator)
-                except StopIteration:
-                    exhausted = True
-                    break
-                try:
-                    record = query.locus_to_record(locus)
-                    identity = str(record.get("locus_id") or "").strip()
-                    if (not identity or not _record_matches_tile(record, tile)
-                            or query.lsst_identifier_counts(pd.DataFrame([record]))["lsst_identifier_count"] != 1):
-                        raise ValueError("P2 locus normalization/membership failed.")
-                    record["locus_id"] = identity
-                    from .query_progress import encode_records
-                    if len(_canonical_json_bytes(encode_records([record]))) > profile.max_event_bytes // 50:
-                        raise ValueError("P2 normalized record exceeds qualified byte ceiling.")
-                except Exception as exc:
-                    # All local record failures are malformed input, including
-                    # numeric overflow and codec errors. Iterator transport
-                    # failures remain outside this nonretryable boundary.
-                    raise ValueError("P2 record validation failed.") from exc
-                records.append(record)
-        except Exception as exc:
-            error, retryable = _exception_type(exc), _retryable_query_error(exc)
-        finally:
-            if iterator is not None:
-                try:
-                    close = getattr(iterator, "close", None)
-                    if callable(close):
-                        close()
-                except Exception as exc:
-                    # Lookup and invocation failures are known NON-SCIENCE,
-                    # never converted into an unknown crash on restart.
-                    error = error or _exception_type(exc)
-                    retryable = False
-        outcome = state.outcome(len(records), exhausted, exception_type=error,
-                                retryable=retryable, records=records if exhausted and error is None else ())
-        commit(outcome)
-        if error and not state.failed:
-            provider.sleeper(provider.retry_delay_seconds * state.outcomes[state.frontier[0]["id"]])
+    try:
+        while state.frontier and not state.failed:
+            reservation, reason = state.reservation()
+            if reason:
+                commit(state.failure(reason))
+                break
+            commit(reservation)
+            tile = state.frontier[0]["tile"]
+            records, exhausted, error, retryable = [], False, None, False
+            iterator = None
+            try:
+                if search is None:
+                    try:
+                        search, _, _ = provider._load_client()
+                    except Exception as exc:
+                        raise ValueError("P2 offline client initialization failed.") from exc
+                iterator = iter(search(_build_tile_query(tile)))
+                while len(records) < 50:
+                    try:
+                        locus = next(iterator)
+                    except StopIteration:
+                        exhausted = True
+                        break
+                    try:
+                        record = query.locus_to_record(locus)
+                        identity = str(record.get("locus_id") or "").strip()
+                        if (not identity or not _record_matches_tile(record, tile)
+                                or query.lsst_identifier_counts(pd.DataFrame([record]))["lsst_identifier_count"] != 1):
+                            raise ValueError("P2 locus normalization/membership failed.")
+                        record["locus_id"] = identity
+                        from .query_progress import encode_records
+                        if len(_canonical_json_bytes(encode_records([record]))) > profile.max_event_bytes // 50:
+                            raise ValueError("P2 normalized record exceeds qualified byte ceiling.")
+                    except Exception as exc:
+                        # All local record failures are malformed input, including
+                        # numeric overflow and codec errors. Iterator transport
+                        # failures remain outside this nonretryable boundary.
+                        raise ValueError("P2 record validation failed.") from exc
+                    records.append(record)
+            except Exception as exc:
+                error, retryable = _exception_type(exc), _retryable_query_error(exc)
+            finally:
+                if iterator is not None:
+                    try:
+                        close = getattr(iterator, "close", None)
+                        if callable(close):
+                            close()
+                    except Exception as exc:
+                        # Lookup and invocation failures are known NON-SCIENCE,
+                        # never converted into an unknown crash on restart.
+                        error = error or _exception_type(exc)
+                        retryable = False
+            outcome = state.outcome(len(records), exhausted, exception_type=error,
+                                    retryable=retryable, records=records if exhausted and error is None else ())
+            commit(outcome)
+            if error and not state.failed:
+                provider.sleeper(provider.retry_delay_seconds * state.outcomes[state.frontier[0]["id"]])
+    finally:
+        # G6.6.3D: the night's one transport child ends with its query.  A child
+        # that cannot be proven dead raises here; nothing continues past it.
+        listing = getattr(search, "__self__", None)
+        if isinstance(listing, _GuardedListing):
+            listing.close()
 
     raw = pd.DataFrame(state.records)
     duplicate_ids = sorted(set(raw.loc[raw["locus_id"].duplicated(keep=False), "locus_id"])) if not raw.empty else []
@@ -2287,13 +2294,15 @@ def _run_p2_query(provider, request, progress, event_hook):
 # termination on a null or missing ``links.next``.  Every bound is a refusal:
 # reaching one leaves the logical iterator incomplete, never complete.  P1
 # never reaches this code.
+#
+# G6.6.3D: the blocking HTTP exchange of each page runs in a dedicated,
+# OS-killable child process (``p2_transport``); pagination, decoding,
+# deadlines and every completeness decision stay here.
 # ---------------------------------------------------------------------------
 
-P2_TRANSPORT_SCHEMA = "v3.p2-transport-limits.v1"
+P2_TRANSPORT_SCHEMA = "v3.p2-transport-limits.v2"
 P2_PAGINATION_CONTRACT = "p2-guarded-jsonapi-links-next-v1"
 _P2_SORT = "-properties.newest_alert_observation_time"
-_P2_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
-_P2_STREAM_CHUNK_BYTES = 8192
 _P2_TRANSPORT_BOUNDS = {
     "max_pages": (1, 10_000),
     "max_consecutive_empty_pages": (0, 1_000),
@@ -2303,6 +2312,13 @@ _P2_TRANSPORT_BOUNDS = {
     "connect_timeout_seconds": (1, 600),
     "read_timeout_seconds": (1, 600),
     "max_redirects": (0, 10),
+    # G6.6.3D process boundary.
+    "ipc_max_header_bytes": (4_096, 1 << 20),
+    "ipc_max_chunk_bytes": (4_096, 1 << 24),
+    "child_startup_seconds": (1, 600),
+    "child_shutdown_seconds": (1, 600),
+    "terminate_grace_seconds": (1, 60),
+    "kill_join_seconds": (1, 60),
 }
 
 
@@ -2332,7 +2348,11 @@ class P2IteratorBytesError(P2TransportGuardError):
 
 
 class P2DeadlineError(P2TransportGuardError):
-    """The whole-iterator wall-clock deadline elapsed."""
+    """The whole-iterator wall-clock deadline elapsed.
+
+    A page still in flight is ended by killing its transport child, which
+    must then be proven dead; the transport is never restarted.
+    """
 
 
 class P2MalformedContinuationError(P2TransportGuardError):
@@ -2378,6 +2398,27 @@ class P2TransportHTTPError(RuntimeError):
     """
 
 
+class P2TransportProcessError(P2TransportGuardError):
+    """The isolated transport child reported a failure the parent does not recognise."""
+
+
+class P2TransportStartupError(P2TransportProcessError):
+    """The transport child did not start and prove its identity within its bound."""
+
+
+class P2TransportProtocolError(P2TransportProcessError):
+    """IPC contract broken: malformed, oversized, foreign or out-of-order frame,
+    end of stream or child death before COMPLETE, or an over-bound request."""
+
+
+class P2TransportUnavailableError(P2TransportProcessError):
+    """The transport already failed or closed; it is never restarted."""
+
+
+class P2TransportUnkillableError(P2TransportProcessError):
+    """The child could not be proven dead (no reaped exit status): fatal for the night."""
+
+
 _P2_TRANSPORT_GUARD_TYPES = frozenset(
     f"{guard.__module__}.{guard.__name__}"
     for guard in (
@@ -2386,6 +2427,8 @@ _P2_TRANSPORT_GUARD_TYPES = frozenset(
         P2RelativeContinuationError, P2InsecureContinuationError,
         P2CrossOriginContinuationError, P2ContinuationPathError, P2ContinuationCycleError,
         P2UnsafeRedirectError, P2RedirectLimitError, P2UnexpectedStatusError,
+        P2TransportProcessError, P2TransportStartupError, P2TransportProtocolError,
+        P2TransportUnavailableError, P2TransportUnkillableError,
     )
 )
 
@@ -2407,6 +2450,12 @@ class P2TransportLimits:
     connect_timeout_seconds: int
     read_timeout_seconds: int
     max_redirects: int
+    ipc_max_header_bytes: int
+    ipc_max_chunk_bytes: int
+    child_startup_seconds: int
+    child_shutdown_seconds: int
+    terminate_grace_seconds: int
+    kill_join_seconds: int
 
     def __post_init__(self):
         for name, (minimum, maximum) in _P2_TRANSPORT_BOUNDS.items():
@@ -2420,18 +2469,11 @@ class P2TransportLimits:
                 "redirects": "same-origin-https-api-prefix-validated-before-request",
                 "termination": "complete-page-then-links-next-null-or-missing",
                 "limit_semantics": "refusal-never-completeness",
+                "isolation": ("dedicated-child-process-per-night-query;parent-owned-deadline;"
+                              "sigterm-grace-sigkill-join-reaped;never-restarted-after-failure"),
+                "ipc": _p2_transport.PROTOCOL, "ipc_wait": "remaining-iterator-deadline",
+                "child_implementation_sha256": _p2_transport.implementation_sha256(),
                 **{name: getattr(self, name) for name in _P2_TRANSPORT_BOUNDS}}
-
-
-def _p2_plain_url(value):
-    """One printable-ASCII URL: no whitespace, control character or backslash.
-
-    URL parsers disagree on these (``urlsplit`` drops tabs and keeps ``\\`` in
-    the authority; urllib3 splits on ``\\``), so they are refused before any
-    origin decision rather than interpreted.
-    """
-    return (isinstance(value, str) and bool(value) and value.isascii() and "\\" not in value
-            and not any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value))
 
 
 class _GuardedListing:
@@ -2439,23 +2481,25 @@ class _GuardedListing:
 
     Each call returns an independent lazy iterator: like the client, the next
     page is requested only when the consumer asks past the previous page.
-    Each HTTP page uses a fresh session, as ``requests.get`` does, so no
-    cookie, connection or session state is shared between pages, iterators or
-    concurrently acquired nights.  Nothing global is patched.
+    Pagination, continuation validation, the iterator byte budget and
+    deadline, JSON and JSON:API decoding and natural exhaustion stay in this
+    (scientific) process.  Only each page's blocking HTTP exchange runs in the
+    transport child, with a fresh session per page as ``requests.get`` uses,
+    so no cookie, connection or session state is shared between pages,
+    iterators or nights.  Nothing global is patched.
     """
 
-    def __init__(self, limits, base_url, session_factory, schema_factory):
+    def __init__(self, limits, base_url, transport, schema_factory):
         if type(limits) is not P2TransportLimits:
             raise ValueError("Guarded transport requires exact P2TransportLimits.")
-        if not callable(session_factory) or not callable(schema_factory):
-            raise ValueError("Guarded transport requires session and schema factories.")
+        if not callable(getattr(transport, "fetch", None)) or not callable(schema_factory):
+            raise ValueError("Guarded transport requires a page transport and a schema factory.")
         base = _validated_base_url(base_url)
         self.limits = limits
         self.listing_url = urljoin(base, "loci")  # exactly the client's search URL
         listing = urlsplit(self.listing_url)
         self._host, self._listing_path = listing.hostname, listing.path
-        self._service_prefix = urlsplit(base).path
-        self._session_factory = session_factory
+        self._transport = transport
         self._schema_factory = schema_factory
 
     def search(self, query):
@@ -2504,7 +2548,7 @@ class _GuardedListing:
         return links.get("next")
 
     def _validated_continuation(self, target):
-        if not _p2_plain_url(target):
+        if not _p2_transport.plain_url(target):
             raise P2MalformedContinuationError("P2 links.next is not one plain URL string.")
         try:
             parts = urlsplit(target)
@@ -2523,101 +2567,82 @@ class _GuardedListing:
             raise P2ContinuationPathError("P2 links.next is not the listing being paged.")
         return parts.path, parts.query
 
-    def _validated_redirect(self, response, requested):
-        location = response.headers.get("Location")
-        if not _p2_plain_url(location):
-            raise P2UnsafeRedirectError("P2 redirect lacks one plain Location.")
-        base = response.url if isinstance(response.url, str) and response.url else requested
-        target = urljoin(base, location)
-        try:
-            parts = urlsplit(target)
-            port, host = parts.port, parts.hostname
-        except ValueError as exc:
-            raise P2UnsafeRedirectError("P2 redirect target is not parseable.") from exc
-        if (parts.scheme != "https" or host != self._host or port not in (None, 443)
-                or parts.username is not None or parts.password is not None or parts.fragment
-                or not parts.path.startswith(self._service_prefix)):
-            raise P2UnsafeRedirectError("P2 redirect leaves the ANTARES API boundary.")
-        return target
-
     def _request(self, url, params, iterator_budget, remaining):
-        outcome, cancelled = {}, threading.Event()
-
-        def fetch():
-            try:
-                outcome["response"] = self._fetch_page(url, params, iterator_budget, cancelled)
-            except BaseException as exc:  # re-raised below in the consuming thread
-                outcome["error"] = exc
-
-        worker = threading.Thread(target=fetch, name="antares-p2-page", daemon=True)
-        worker.start()
-        worker.join(remaining)
-        if worker.is_alive():
-            # The abandoned page stops at its next chunk or socket timeout and
-            # can never deliver bytes to this (now failed) iterator.
-            cancelled.set()
-            raise P2DeadlineError("P2 iterator deadline elapsed during an HTTP page.")
-        if "error" in outcome:
-            raise outcome["error"]
-        return outcome["response"]
-
-    def _send(self, session, url, params):
-        """One HTTP exchange through the session's own transport adapter.
-
-        ``Session.send`` pre-computes ``Response.next`` even with
-        ``allow_redirects=False``, which reads a redirect response's whole body
-        without any ceiling.  The request and environment settings here are
-        exactly those ``Session.request`` derives for ``requests.get``; only
-        that redirect bookkeeping is skipped, so every body this page reads
-        passes through the bounded reader in :meth:`_fetch_page`.
-        """
+        """One page through the transport child, mapped to the typed P2 errors."""
         import requests
 
         limits = self.limits
-        prepared = session.prepare_request(requests.Request("GET", url, params=params or {}))
-        settings = session.merge_environment_settings(prepared.url, {}, True, None, None)
-        return session.get_adapter(prepared.url).send(
-            prepared, stream=True, verify=settings["verify"], cert=settings["cert"],
-            proxies=settings["proxies"],
-            timeout=(limits.connect_timeout_seconds, limits.read_timeout_seconds))
-
-    def _fetch_page(self, url, params, iterator_budget, cancelled):
-        limits = self.limits
         budget = min(limits.max_page_bytes, iterator_budget)
-        overflow = P2PageBytesError if limits.max_page_bytes <= iterator_budget else P2IteratorBytesError
-        session = self._session_factory()
+        overflow = "page_bytes" if limits.max_page_bytes <= iterator_budget else "iterator_bytes"
         try:
-            for _hop in range(limits.max_redirects + 1):
-                response = self._send(session, url, params)
-                try:
-                    status = int(response.status_code)
-                    if status in _P2_REDIRECT_STATUSES:
-                        url, params = self._validated_redirect(response, url), None
-                        continue
-                    if status >= 400:
-                        raise P2TransportHTTPError(f"ANTARES returned HTTP {status}.")
-                    if status != 200:
-                        raise P2UnexpectedStatusError(f"ANTARES returned unexpected HTTP {status}.")
-                    declared = response.headers.get("Content-Length")
-                    if (isinstance(declared, str) and declared.isascii() and declared.isdigit()
-                            and int(declared) > budget):
-                        raise overflow("P2 response declares more bytes than its ceiling.")
-                    body = bytearray()
-                    for chunk in response.iter_content(_P2_STREAM_CHUNK_BYTES):
-                        if cancelled.is_set():
-                            raise P2DeadlineError("P2 page was abandoned at its deadline.")
-                        body += chunk
-                        if len(body) > budget:
-                            raise overflow("P2 response exceeded its byte ceiling.")
-                    # Exactly how requests caches a consumed body, so the
-                    # client's Response.json() decoding then applies unchanged.
-                    response._content = bytes(body)
-                    return response
-                finally:
-                    response.close()
-            raise P2RedirectLimitError("P2 page exceeded its redirect ceiling.")
-        finally:
-            session.close()
+            body, encoding = self._transport.fetch(url, params, budget, overflow, remaining)
+        except _p2_transport.TransportFailure as failure:
+            raise _p2_transport_error(failure) from None
+        # Exactly the body and charset requests derived in the child, cached the
+        # way requests caches a consumed body: the client's Response.json()
+        # decoding and error types then apply unchanged in this process.
+        response = requests.Response()
+        response.status_code, response._content, response.encoding = 200, body, encoding
+        return response
+
+    def close(self):
+        """End this listing's transport child (cooperatively, else killed)."""
+        close = getattr(self._transport, "close", None)
+        if callable(close):
+            try:
+                close()
+            except _p2_transport.TransportFailure as failure:
+                raise _p2_transport_error(failure) from None
+
+
+_P2_REFUSALS = {
+    "page_bytes": (P2PageBytesError, "P2 response exceeded its byte ceiling."),
+    "iterator_bytes": (P2IteratorBytesError, "P2 response exceeded its byte ceiling."),
+    "unsafe_redirect": (P2UnsafeRedirectError, "P2 redirect leaves the ANTARES API boundary."),
+    "redirect_limit": (P2RedirectLimitError, "P2 page exceeded its redirect ceiling."),
+    "unexpected_status": (P2UnexpectedStatusError, "ANTARES returned unexpected HTTP {status}."),
+    "http_status": (P2TransportHTTPError, "ANTARES returned HTTP {status}."),
+}
+_P2_PARENT_FAILURES = {
+    "deadline": (P2DeadlineError, "P2 iterator deadline elapsed; the transport child was killed."),
+    "startup": (P2TransportStartupError, "P2 transport child did not start within its bound."),
+    "protocol": (P2TransportProtocolError, "P2 transport child broke the IPC contract."),
+    "request_bound": (P2TransportProtocolError, "P2 page request exceeds the IPC bound."),
+    "unavailable": (P2TransportUnavailableError, "P2 transport failed or closed; never restarted."),
+    "unkillable": (P2TransportUnkillableError, "P2 transport child could not be proven dead."),
+}
+
+
+def _p2_remote_request_errors():
+    """``requests`` transport exceptions the child may report, by exact type name.
+
+    The parent re-raises these exact classes (without any text), so journal
+    exception types and the shared retry classification are unchanged.  JSON
+    decoding happens in this process, so its errors never cross the boundary.
+    """
+    from requests import exceptions as E
+
+    return {f"{error.__module__}.{error.__name__}": error for error in (
+        E.RequestException, E.HTTPError, E.ConnectionError, E.ProxyError, E.SSLError, E.Timeout,
+        E.ConnectTimeout, E.ReadTimeout, E.URLRequired, E.TooManyRedirects, E.MissingSchema,
+        E.InvalidSchema, E.InvalidURL, E.InvalidHeader, E.InvalidProxyURL, E.ChunkedEncodingError,
+        E.ContentDecodingError, E.RetryError)}
+
+
+def _p2_transport_error(failure):
+    """The typed P2 error for one transport failure; anything unrecognised is terminal."""
+    if failure.kind == "remote":
+        if failure.code in _P2_REFUSALS:
+            kind, message = _P2_REFUSALS[failure.code]
+            return kind(message.format(status=failure.status))
+        if failure.code == "exception":
+            known = _p2_remote_request_errors().get(failure.remote_type)
+            if known is not None:
+                return known()
+        return P2TransportProcessError("P2 transport child reported an unrecognised failure.")
+    kind, message = _P2_PARENT_FAILURES.get(
+        failure.kind, (P2TransportProcessError, "P2 transport failed."))
+    return kind(message)
 
 
 def _p2_client_identity(transport, base_url):
@@ -2628,8 +2653,22 @@ def _p2_client_identity(transport, base_url):
             "transport_sha256": _sha256_json(transport.as_dict())}
 
 
+def _p2_child_config(limits, base_url):
+    """The transport child's whole configuration: the exact limits it enforces."""
+    base = urlsplit(_validated_base_url(base_url))
+    return {"host": base.hostname, "service_prefix": base.path,
+            **{name: getattr(limits, name) for name in (
+                "max_redirects", "connect_timeout_seconds", "read_timeout_seconds",
+                "ipc_max_header_bytes", "ipc_max_chunk_bytes", "child_startup_seconds",
+                "child_shutdown_seconds", "terminate_grace_seconds", "kill_join_seconds")}}
+
+
 def _load_p2_client(provider):
-    """P2 service callables: mocked offline, or the guarded paginator on Arnor."""
+    """P2 service callables: mocked offline, or the guarded paginator on Arnor.
+
+    The paginator's transport child starts only on its first page, so loading
+    the client (for example for ``client_identity``) never starts a process.
+    """
     profile = provider.proof_profile
     callbacks = (provider._search_fn, provider._get_by_id_fn, provider._connectivity_fn)
     environment = getattr(provider.capability, "environment", None)
@@ -2655,7 +2694,8 @@ def _load_p2_client(provider):
     if timeout != CLIENT_TIMEOUT_SECONDS:
         raise RuntimeError(
             f"Phase 6 requires the pinned {CLIENT_TIMEOUT_SECONDS}-second API timeout.")
-    listing = _GuardedListing(profile.transport, base_url, requests.Session,
+    listing = _GuardedListing(profile.transport, base_url,
+                              _p2_transport.P2ProcessTransport(_p2_child_config(profile.transport, base_url)),
                               lambda: _LocusListingSchema(many=True, partial=True))
     provider._client_identity_cache = _p2_client_identity(profile.transport, base_url)
     return listing.search, get_by_id, get_available_tags
@@ -2664,17 +2704,21 @@ def _load_p2_client(provider):
 # SHA-256 of the canonical ``as_dict()`` JSON of the frozen canary profile and
 # of its transport limits.  The transport digest is also the client identity's
 # ``transport_sha256``; the profile digest is every P2 event's ``profile_sha256``.
-G663_CANARY_P2_PROFILE_SHA256 = "d1dfee3b066e2a5f90f1b4842d1184c9e6bd32d4a1b772d3819f082b4b189684"
-G663_CANARY_TRANSPORT_SHA256 = "41ad48a1c82a585498ce7838672962dfc5583bc91b4e49c497d9a62240dd0650"
+# G6.6.3D: the transport contract now includes the process boundary and the
+# SHA-256 of ``p2_transport.py``, so both digests changed from G6.6.3A
+# (d1dfee3b... and 41ad48a1...).
+G663_CANARY_P2_PROFILE_SHA256 = "6ce4b3a29d79154513bfe20213cd956475e20bc224795e54724c6af44c6a105c"
+G663_CANARY_TRANSPORT_SHA256 = "6e0291f3dd203dbccc9a00239072f6501b06dbafc9f1d37c97498be1d7052ddd"
 
 
 def g663_canary_p2_profile() -> P2ProofProfile:
-    """The one frozen G6.6.3A Jul07/Jul13 canary profile.
+    """The one frozen Jul07/Jul13 canary profile (G6.6.3A limits, G6.6.3D process boundary).
 
     Explicit opt-in only: no default path selects it and no source or
     artifact registry trusts it.  Any change is a new Control qualification
     identity, so the profile refuses to exist unless its canonical bytes still
-    hash to ``G663_CANARY_P2_PROFILE_SHA256``.
+    hash to ``G663_CANARY_P2_PROFILE_SHA256``; those bytes include the
+    SHA-256 of the transport child's implementation.
     """
     profile = P2ProofProfile(
         max_depth=18, max_nodes_per_root=511, max_nodes_per_night=4095,
@@ -2682,8 +2726,11 @@ def g663_canary_p2_profile() -> P2ProofProfile:
         transport=P2TransportLimits(
             max_pages=64, max_consecutive_empty_pages=2, max_page_bytes=16_777_216,
             max_iterator_bytes=67_108_864, iterator_deadline_seconds=600,
-            connect_timeout_seconds=60, read_timeout_seconds=60, max_redirects=2))
+            connect_timeout_seconds=60, read_timeout_seconds=60, max_redirects=2,
+            ipc_max_header_bytes=65_536, ipc_max_chunk_bytes=1_048_576,
+            child_startup_seconds=30, child_shutdown_seconds=5,
+            terminate_grace_seconds=2, kill_join_seconds=5))
     if (_sha256_json(profile.as_dict()) != G663_CANARY_P2_PROFILE_SHA256
             or _sha256_json(profile.transport.as_dict()) != G663_CANARY_TRANSPORT_SHA256):
-        raise RuntimeError("The frozen G6.6.3A canary profile identity changed.")
+        raise RuntimeError("The frozen G6.6.3D canary profile identity changed.")
     return profile

@@ -1,5 +1,12 @@
 """G6.6.3A guarded P2 transport qualification (offline; no ANTARES request).
 
+G6.6.3D: each page's blocking HTTP exchange now runs in a dedicated transport
+child process.  The HTTP guard rules below run the child's own page function
+in-process (``InProcessPages``) through ``requests``' adapter seam; every
+whole-night, socket and deadline test runs the real child, which reaches the
+same offline service over loopback (``ServiceServer``).  The process boundary
+itself is qualified in ``test_g663d_process_transport``.
+
 The pinned antares-client 1.14.0 ``_list_all_resources`` follows ``links.next``
 inside one ``next()`` with no page, byte, time, cycle, scheme or origin bound,
 and ``requests.get`` follows redirects anywhere.  An explicit P2 profile with
@@ -25,10 +32,12 @@ import hashlib
 import http.server
 import io
 import json
+import os
 import random
 import re
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -48,6 +57,7 @@ from test_operations_phase6 import FakeLocus, _body_matches_locus
 from test_g662_p2_proof import dense_loci, floor_tile, test_profile
 from src import query
 from src.operations import backfill as B, live_antares as L, production_range as R, science as S
+from src.operations import p2_transport as T
 from src.operations import query_checkpoint as Q
 from src.operations.science import ArtifactValidationError, ProviderOutcome, QueryInterruptedError
 
@@ -63,6 +73,7 @@ RELEASE = "a" * 40
 GUARD = "src.operations.live_antares."
 CANARY = L.g663_canary_p2_profile()
 FIRST_TILE = L._make_initial_tiles(61218.0, 61219.0)[0]
+CHILD_HOOKS = str(ROOT / "tests" / "g663d_child_hooks.py")
 
 
 def listing_schema():
@@ -73,13 +84,64 @@ def listing_schema():
 def limits(**changes):
     values = dict(max_pages=64, max_consecutive_empty_pages=2, max_page_bytes=16_777_216,
                   max_iterator_bytes=67_108_864, iterator_deadline_seconds=600,
-                  connect_timeout_seconds=60, read_timeout_seconds=60, max_redirects=2)
+                  connect_timeout_seconds=60, read_timeout_seconds=60, max_redirects=2,
+                  ipc_max_header_bytes=65_536, ipc_max_chunk_bytes=1_048_576,
+                  child_startup_seconds=30, child_shutdown_seconds=5,
+                  terminate_grace_seconds=2, kill_join_seconds=5)
     values.update(changes)
     return L.P2TransportLimits(**values)
 
 
+class InProcessPages:
+    """The transport child's own page function and failure encoding, without the process.
+
+    Used only to drive the HTTP guard rules through ``requests``' adapter seam;
+    the process boundary that replaces it in production is qualified separately.
+    """
+
+    def __init__(self, transport, session_factory):
+        self.config = L._p2_child_config(transport, BASE)
+        self.session_factory = session_factory
+
+    def fetch(self, url, params, budget, overflow, remaining):
+        try:
+            return T.fetch_page(self.session_factory, self.config, url, params, budget, overflow)
+        except Exception as exc:
+            failure = T.classify_failure(exc)
+            raise T.TransportFailure("remote", failure["code"], failure["type"], failure["status"]) from exc
+
+
 def guarded(transport=None, session_factory=requests.Session):
-    return L._GuardedListing(transport or CANARY.transport, BASE, session_factory, listing_schema)
+    transport = transport or CANARY.transport
+    return L._GuardedListing(transport, BASE, InProcessPages(transport, session_factory), listing_schema)
+
+
+def child_hook(port=None, **args):
+    return {"path": CHILD_HOOKS, "name": "configure", "args": {"port": port, **args}}
+
+
+def process_guarded(test, transport=None, port=None, **hook_args):
+    """The production paginator over a real transport child routed to a loopback port."""
+    transport = transport or CANARY.transport
+    child = T.P2ProcessTransport(L._p2_child_config(transport, BASE), hook=child_hook(port, **hook_args))
+    test.addCleanup(child.close)
+    return L._GuardedListing(transport, BASE, child, listing_schema)
+
+
+def transport_children():
+    """Live (or unreaped) child processes of this test process: transport children."""
+    me, children = os.getpid(), []
+    proc = Path("/proc")
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if entry.name.isdigit():
+                with contextlib.suppress(OSError, IndexError, ValueError):
+                    if int((entry / "stat").read_text().rsplit(")", 1)[1].split()[1]) == me:
+                        children.append(int(entry.name))
+        return sorted(children)
+    listing = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True).stdout
+    return sorted(int(pid) for pid, ppid in (line.split() for line in listing.splitlines())
+                  if int(ppid) == me and int(pid) != me)
 
 
 def listing_resource(locus):
@@ -137,27 +199,40 @@ class FakeAntares:
         self.lock = threading.Lock()
 
     @contextlib.contextmanager
-    def installed(self):
+    def installed(self, **child):
+        """In-process HTTP (P1, fetch) through the adapter seam; the P2 transport
+        child reaches the same service and call log over loopback.  ``child``
+        are extra child hook arguments (for example a misbehaviour)."""
         service = self
 
         def send(adapter, request, **kwargs):
             return service.send(adapter, request, **kwargs)
-        with mock.patch.object(HTTPAdapter, "send", send):
-            yield self
+        server = ServiceServer(self)
+        try:
+            with mock.patch.object(HTTPAdapter, "send", send), \
+                    mock.patch.object(T, "CHILD_TEST_HOOK", server.hook(**child)):
+                yield self
+        finally:
+            server.close()
+        server.assert_no_violations()
 
-    def send(self, adapter, request, **kwargs):
+    def record(self, url, timeout, stream):
         with self.lock:
-            self.calls.append({"url": request.url, "timeout": kwargs.get("timeout"),
-                               "stream": kwargs.get("stream")})
-            index = len(self.calls) - 1
+            self.calls.append({"url": url, "timeout": timeout, "stream": stream})
+            return len(self.calls) - 1
+
+    def spec(self, request, index):
         parts = urlsplit(request.url)
         if parts.scheme != "https" or parts.hostname != HOST or parts.port not in (None, 443):
             # Foreign targets are answered (an empty, terminal listing) so a test can
             # prove that the pinned client *did* go there and the guard did not.
-            response = respond(adapter, request, json_body={"data": [], "links": {"next": None}})
-        else:
-            spec = self.script(self, request, index) if self.script is not None else None
-            response = respond(adapter, request, **(spec if spec is not None else self.default(request.url)))
+            return {"json_body": {"data": [], "links": {"next": None}}}
+        spec = self.script(self, request, index) if self.script is not None else None
+        return spec if spec is not None else self.default(request.url)
+
+    def send(self, adapter, request, **kwargs):
+        index = self.record(request.url, kwargs.get("timeout"), kwargs.get("stream"))
+        response = respond(adapter, request, **self.spec(request, index))
         self.calls[index]["status"] = response.status_code
         return response
 
@@ -210,6 +285,81 @@ class FakeAntares:
         elif self.terminal == "missing":
             document["links"] = {"self": url}
         return {"json_body": document}
+
+
+class ServiceServer:
+    """A loopback HTTP/1.1 front for one ``FakeAntares``, used only by transport children.
+
+    The child's test adapter sends the official URL and its send arguments in
+    headers, so the service sees exactly the request the child prepared and
+    records it in the same call log as in-process traffic.  A script that
+    raises makes the child's adapter raise the same ``requests`` exception.
+    """
+
+    def __init__(self, service):
+        outer = self
+        self.service = service
+        folder = tempfile.mkdtemp(prefix="g663d-child-")
+        self.violations = Path(folder) / "violations.log"
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_GET(self):
+                outer.handle(self)
+
+            def log_message(self, *args):
+                pass
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def hook(self, **args):
+        return child_hook(self.port, violations=str(self.violations), **args)
+
+    def handle(self, handler):
+        url = handler.headers.get("X-G663-Original-URL")
+        sent = json.loads(handler.headers.get("X-G663-Send") or "{}")
+        timeout = sent.get("timeout")
+        index = self.service.record(url, tuple(timeout) if isinstance(timeout, list) else timeout,
+                                    sent.get("stream"))
+        try:
+            spec = self.service.spec(types.SimpleNamespace(url=url), index)
+        except Exception as exc:
+            spec = {"status": 599, "headers": {"X-G663-Raise": f"{type(exc).__module__}.{type(exc).__name__}"}}
+        status = spec.get("status", 200)
+        headers = {"Content-Type": "application/vnd.api+json", **(spec.get("headers") or {})}
+        stream = spec.get("stream")
+        body = json.dumps(spec["json_body"]).encode() if spec.get("json_body") is not None else spec.get("body", b"")
+        try:
+            handler.send_response(status)
+            for key, value in headers.items():
+                handler.send_header(key, value)
+            if "Content-Length" not in headers and stream is None:
+                handler.send_header("Content-Length", str(len(body)))
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            if stream is None:
+                handler.wfile.write(body)
+            else:
+                for chunk in iter(lambda: stream.read(65536), b""):
+                    handler.wfile.write(chunk)
+        except OSError:  # the child already refused or abandoned this page
+            pass
+        handler.close_connection = True
+        if status != 599:
+            self.service.calls[index]["status"] = status
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def assert_no_violations(self):
+        recorded = self.violations.read_text() if self.violations.exists() else ""
+        if recorded:
+            raise AssertionError(f"a transport child attempted network access: {recorded}")
 
 
 class NoNetwork:
@@ -451,6 +601,7 @@ class CountingStream(io.RawIOBase):
 
 
 def page_threads():
+    """G6.6.3A's page threads no longer exist: no thread may ever run a page."""
     return [thread for thread in threading.enumerate() if thread.name == "antares-p2-page"]
 
 
@@ -577,7 +728,7 @@ class TransportGuardTests(OfflineTestCase):
                     self.assertIsNone(error)
                 else:
                     self.assertRefused(error, kind)
-                    self.assertLessEqual(stream.read_bytes, ceiling + L._P2_STREAM_CHUNK_BYTES)
+                    self.assertLessEqual(stream.read_bytes, ceiling + T.STREAM_CHUNK_BYTES)
         one = tile_loci(FIRST_TILE, 5)
         def padded(loci, target):
             raw = json.dumps({"data": [listing_resource(l) for l in loci], "links": {"next": target}}).encode()
@@ -824,15 +975,14 @@ class TransportGuardTests(OfflineTestCase):
         loci = tile_loci(FIRST_TILE, 30)
         valid = {None: page(loci[:10], next=link(2)), "2": page(loci[10:20], next=link(3))}
 
-        class Reset(requests.exceptions.ConnectionError):
-            pass
-
         def raise_reset(url):
-            raise Reset("connection reset by peer")
+            # G6.6.3D: only whitelisted requests exception types cross the process
+            # boundary (by exact name); anything else is a terminal process error.
+            raise requests.exceptions.ConnectionError("connection reset by peer")
         for name, third, kind, retryable in (
                 ("http-503", {"status": 503, "body": b"busy"}, L.P2TransportHTTPError, True),
                 ("non-json", {"body": b"<html>502</html>"}, requests.exceptions.JSONDecodeError, True),
-                ("connection-reset", raise_reset, Reset, True),
+                ("connection-reset", raise_reset, requests.exceptions.ConnectionError, True),
                 ("insecure-next", page(loci[20:30], next=f"http://{HOST}/v1/loci?p=4"),
                  L.P2InsecureContinuationError, False),
                 ("unexpected-206", {"status": 206, "body": b"{}"}, L.P2UnexpectedStatusError, False)):
@@ -864,10 +1014,13 @@ class TransportGuardTests(OfflineTestCase):
                         limits(**{name: value})
             limits(**{name: low})
             limits(**{name: high})
+        pages = InProcessPages(CANARY.transport, requests.Session)
         with self.assertRaises(ValueError):
-            L._GuardedListing(CANARY.transport.as_dict(), BASE, requests.Session, listing_schema)
+            L._GuardedListing(CANARY.transport.as_dict(), BASE, pages, listing_schema)
+        with self.assertRaises(ValueError):  # a bare session factory is no page transport
+            L._GuardedListing(CANARY.transport, BASE, requests.Session, listing_schema)
         with self.assertRaises(RuntimeError):
-            L._GuardedListing(CANARY.transport, "https://evil.example/v1/", requests.Session, listing_schema)
+            L._GuardedListing(CANARY.transport, "https://evil.example/v1/", pages, listing_schema)
         with self.assertRaises(ValueError):
             L.P2ProofProfile(**{**{k: getattr(CANARY, k) for k in (
                 "max_depth", "max_nodes_per_root", "max_nodes_per_night", "max_search_attempts",
@@ -951,7 +1104,8 @@ def official_next(handler, offset):
 
 
 class LoopbackSocketTests(OfflineTestCase):
-    """Timeouts, deadlines and resets on real sockets (127.0.0.1 only)."""
+    """Timeouts, deadlines and resets on real sockets (127.0.0.1 only), through the
+    real transport child: a deadline kills it, and only a reaped status proves it dead."""
 
     body = L._build_tile_query(FIRST_TILE)
     loci = tile_loci(FIRST_TILE, 30)
@@ -967,11 +1121,19 @@ class LoopbackSocketTests(OfflineTestCase):
         send_json(handler, {"data": [listing_resource(l) for l in self.loci[offset:offset + size]],
                             "links": {"next": official_next(handler, offset + size) if more else None}}, delay=delay)
 
-    def wait_for_page_threads(self, seconds):
-        deadline = time.monotonic() + seconds
-        while page_threads() and time.monotonic() < deadline:
-            time.sleep(.05)
-        return page_threads()
+    def assertKilled(self, listing, *, spawns=1):
+        child = listing._transport
+        self.assertEqual(child.state, T.FAILED)
+        self.assertTrue(child.exit_record["reaped"], child.exit_record)
+        self.assertIsNotNone(child.exit_record["returncode"])
+        self.assertEqual(child.stats["spawns"], spawns)
+        self.assertEqual(transport_children(), [])
+        with self.assertRaises(ProcessLookupError):  # the pid no longer exists at all
+            os.kill(child.exit_record["pid"], 0)
+        # Never restarted: the failed transport refuses every further page.
+        _records, error = drain(listing.search(self.body))
+        self.assertIs(type(error), L.P2TransportUnavailableError)
+        self.assertEqual(child.stats["spawns"], spawns)
 
     def test_socket_equivalence_with_same_origin_relative_redirect(self):
         def handle(handler):
@@ -984,7 +1146,8 @@ class LoopbackSocketTests(OfflineTestCase):
                 return
             self.listing_page(handler)
         server = self.serve(handle)
-        records, error = drain(guarded(session_factory=server.session).search(self.body))
+        listing = process_guarded(self, None, server.port)
+        records, error = drain(listing.search(self.body))
         guarded_paths = list(server.paths)
         server.paths.clear()
 
@@ -1000,64 +1163,80 @@ class LoopbackSocketTests(OfflineTestCase):
         self.assertEqual(len(records), 30)
         self.assertEqual(guarded_paths, server.paths)
         self.assertEqual(len(guarded_paths), 4)
+        self.assertEqual((listing._transport.state, listing._transport.stats["spawns"]), (T.RUNNING, 1))
+        self.assertEqual(listing._transport.stats["requests"], 3)  # one child, three pages
+        listing.close()
+        self.assertEqual((listing._transport.state, listing._transport.exit_record["returncode"]), (T.CLOSED, 0))
+        self.assertEqual(transport_children(), [])
 
     def test_read_timeout_is_a_transport_failure(self):
         server = self.serve(lambda handler: self.listing_page(handler, delay=2.5))
         started = time.monotonic()
-        records, error = drain(guarded(limits(read_timeout_seconds=1), server.session).search(self.body))
+        listing = process_guarded(self, limits(read_timeout_seconds=1), server.port)
+        records, error = drain(listing.search(self.body))
         self.assertLess(time.monotonic() - started, 2.4)
-        self.assertIsInstance(error, requests.exceptions.ReadTimeout)
+        self.assertIs(type(error), requests.exceptions.ReadTimeout)  # the exact type crosses
         self.assertTrue(L._retryable_query_error(error))
         self.assertEqual(records, [])
+        self.assertEqual(listing._transport.state, T.RUNNING)  # a healthy child reported it
 
-    def test_iterator_deadline_interrupts_a_stalled_page_and_the_page_thread_ends(self):
+    def test_iterator_deadline_kills_a_stalled_page_and_the_child_is_reaped(self):
         server = self.serve(lambda handler: self.listing_page(handler, delay=3.0))
         started = time.monotonic()
-        records, error = drain(guarded(limits(iterator_deadline_seconds=1), server.session).search(self.body))
+        listing = process_guarded(self, limits(iterator_deadline_seconds=1), server.port)
+        records, error = drain(listing.search(self.body))
         self.assertLess(time.monotonic() - started, 2.0)
         self.assertIs(type(error), L.P2DeadlineError)
         self.assertEqual(records, [])
-        self.assertEqual(self.wait_for_page_threads(6.0), [])
+        self.assertFalse(listing._transport.exit_record["escalated_to_sigkill"])
+        self.assertKilled(listing)
 
     def test_slow_drip_body_defeats_read_timeout_but_not_the_iterator_deadline(self):
-        stop = threading.Event()
+        state = {"sent": 0, "ended": None}
 
         def drip(handler):
             handler.send_response(200)
             handler.send_header("Content-Type", "application/vnd.api+json")
             handler.send_header("Content-Length", "100000")
             handler.end_headers()
-            while not stop.is_set():
+            while True:
                 try:
                     handler.wfile.write(b" ")
                     handler.wfile.flush()
                 except OSError:
+                    state["ended"] = time.monotonic()
                     break
+                state["sent"] += 1
                 time.sleep(.1)
             handler.close_connection = True
-            with contextlib.suppress(OSError):
-                handler.connection.shutdown(socket.SHUT_RDWR)
         server = self.serve(drip)
         started = time.monotonic()
-        records, error = drain(guarded(limits(iterator_deadline_seconds=1, read_timeout_seconds=60),
-                                       server.session).search(self.body))
-        self.assertLess(time.monotonic() - started, 2.0)
+        listing = process_guarded(self, limits(iterator_deadline_seconds=1, read_timeout_seconds=60), server.port)
+        records, error = drain(listing.search(self.body))
+        killed = time.monotonic()
+        self.assertLess(killed - started, 2.0)
         self.assertIs(type(error), L.P2DeadlineError)
         self.assertEqual(records, [])
-        # Until its socket ends (read timeout, EOF or process exit) the abandoned
-        # page thread lingers, but it can never deliver bytes to the failed iterator.
-        self.assertEqual(len(page_threads()), 1)
-        stop.set()
-        self.assertEqual(self.wait_for_page_threads(6.0), [])
+        self.assertKilled(listing)
+        # The killed child's socket is gone: the drip stops by itself, nothing is read.
+        deadline = time.monotonic() + 5.0
+        while state["ended"] is None and time.monotonic() < deadline:
+            time.sleep(.05)
+        self.assertIsNotNone(state["ended"])
+        self.assertLess(state["ended"] - killed, 2.0)
+        settled = state["sent"]
+        time.sleep(.5)
+        self.assertEqual(state["sent"], settled)
 
     def test_deadline_across_individually_fast_pages(self):
         self.loci = tile_loci(FIRST_TILE, 300)
         server = self.serve(lambda handler: self.listing_page(handler, delay=.4, size=1))
-        records, error = drain(guarded(limits(iterator_deadline_seconds=1), server.session).search(self.body))
+        listing = process_guarded(self, limits(iterator_deadline_seconds=1), server.port)
+        records, error = drain(listing.search(self.body))
         self.assertIs(type(error), L.P2DeadlineError)
         self.assertLessEqual(len(server.paths), 4)  # each page alone is far inside its timeouts
         self.assertTrue(1 <= len(records) <= len(server.paths))
-        self.assertEqual(self.wait_for_page_threads(3.0), [])
+        self.assertKilled(listing)
 
     def test_connection_reset_after_earlier_valid_pages(self):
         def handle(handler):
@@ -1072,11 +1251,13 @@ class LoopbackSocketTests(OfflineTestCase):
             handler.close_connection = True
             handler.connection.shutdown(socket.SHUT_RDWR)
         server = self.serve(handle)
-        records, error = drain(guarded(session_factory=server.session).search(self.body))
+        listing = process_guarded(self, None, server.port)
+        records, error = drain(listing.search(self.body))
         self.assertIsInstance(error, (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError))
         self.assertTrue(L._retryable_query_error(error))
         self.assertEqual(len(records), 20)
         self.assertEqual(len(server.paths), 3)
+        self.assertEqual(listing._transport.state, T.RUNNING)
 
 
 FIRST_QUERY = json.dumps(L._build_tile_query(FIRST_TILE))
@@ -1148,6 +1329,7 @@ class GuardedP2NightTests(OfflineTestCase):
             result = provider.query(night.request)
         self.assertOfficial(service.urls)
         self.assertEqual(page_threads(), [])
+        self.assertEqual(transport_children(), [])  # the night's child ended with its query
         return provider, result
 
     def test_floor_saturated_night_completes_identically_to_qualified_callbacks(self):
@@ -1352,6 +1534,7 @@ class FailClosedMatrixTests(OfflineTestCase):
         self.assertOfficial(service.urls)
         self.assertEqual(len(service.calls), requests_made)
         self.assertEqual(page_threads(), [])
+        self.assertEqual(transport_children(), [])
         # 1. incomplete, never complete: typed terminal evidence
         self.assertFalse(result.clean)
         self.assertEqual(result.outcome, ProviderOutcome.QUERY_INTERRUPTION)
@@ -1406,19 +1589,25 @@ CANARY_CANONICAL = (
     '{"acceptance":"natural-exhaustion-below-50","axis_ties":["time","ra","dec"],"crash_reserve":4,'
     '"grammar":"v3.p2-query-decisions.v1","max_depth":18,"max_event_bytes":33554432,'
     '"max_nodes_per_night":4095,"max_nodes_per_root":511,"max_search_attempts":250000,'
-    '"midpoint":"binary64-(lower+upper)/2","primary":{"cache_version":"probe50_time_ra_dec_v1",'
-    '"dec_bins":6,"min_dec_degrees":0.05,"min_ra_degrees":0.05,"min_time_seconds":30.0,'
-    '"name":"probe_first_time_ra_dec","probe_limit":50,"probe_threshold":50,"ra_bins":24,'
-    '"time_bin_minutes":30},"schema_version":"v3.p2-proof-profile.v2","transport":{'
-    '"connect_timeout_seconds":60,"continuation":"absolute-https-same-origin-same-listing-path-never-repeated",'
-    '"iterator_deadline_seconds":600,"limit_semantics":"refusal-never-completeness",'
-    '"max_consecutive_empty_pages":2,"max_iterator_bytes":67108864,"max_page_bytes":16777216,'
-    '"max_pages":64,"max_redirects":2,"pagination":"p2-guarded-jsonapi-links-next-v1",'
-    '"read_timeout_seconds":60,"redirects":"same-origin-https-api-prefix-validated-before-request",'
-    '"schema_version":"v3.p2-transport-limits.v1","termination":"complete-page-then-links-next-null-or-missing"},'
-    '"traversal":"lower-child-first","trigger":"saturated_primary_floor"}')
-CANARY_PROFILE_SHA256 = "d1dfee3b066e2a5f90f1b4842d1184c9e6bd32d4a1b772d3819f082b4b189684"
-CANARY_TRANSPORT_SHA256 = "41ad48a1c82a585498ce7838672962dfc5583bc91b4e49c497d9a62240dd0650"
+    '"midpoint":"binary64-(lower+upper)/2","primary":{"cache_version":"probe50_time_ra_dec_v1","dec_bins":6,'
+    '"min_dec_degrees":0.05,"min_ra_degrees":0.05,"min_time_seconds":30.0,"name":"probe_first_time_ra_dec",'
+    '"probe_limit":50,"probe_threshold":50,"ra_bins":24,"time_bin_minutes":30},'
+    '"schema_version":"v3.p2-proof-profile.v2",'
+    '"transport":{"child_implementation_sha256":"2e661e528899c6a6ac02eb6af38efbcc23ad9e5cad2e083963c9f9a24cea5bee",'
+    '"child_shutdown_seconds":5,"child_startup_seconds":30,"connect_timeout_seconds":60,'
+    '"continuation":"absolute-https-same-origin-same-listing-path-never-repeated",'
+    '"ipc":"g663d.p2-transport-ipc.v1","ipc_max_chunk_bytes":1048576,"ipc_max_header_bytes":65536,'
+    '"ipc_wait":"remaining-iterator-deadline",'
+    '"isolation":"dedicated-child-process-per-night-query;parent-owned-deadline;sigterm-grace-sigkill-join-reaped;never-restarted-after-failure",'
+    '"iterator_deadline_seconds":600,"kill_join_seconds":5,"limit_semantics":"refusal-never-completeness",'
+    '"max_consecutive_empty_pages":2,"max_iterator_bytes":67108864,"max_page_bytes":16777216,"max_pages":64,'
+    '"max_redirects":2,"pagination":"p2-guarded-jsonapi-links-next-v1","read_timeout_seconds":60,'
+    '"redirects":"same-origin-https-api-prefix-validated-before-request",'
+    '"schema_version":"v3.p2-transport-limits.v2","terminate_grace_seconds":2,'
+    '"termination":"complete-page-then-links-next-null-or-missing"},"traversal":"lower-child-first",'
+    '"trigger":"saturated_primary_floor"}')
+CANARY_PROFILE_SHA256 = "6ce4b3a29d79154513bfe20213cd956475e20bc224795e54724c6af44c6a105c"
+CANARY_TRANSPORT_SHA256 = "6e0291f3dd203dbccc9a00239072f6501b06dbafc9f1d37c97498be1d7052ddd"
 
 
 def baseline_module(sha, path, alias):
@@ -1461,7 +1650,8 @@ class FrozenProfileTests(OfflineTestCase):
         self.assertEqual(contract["extraction_method"], CANARY.extraction_method())
         state = L._P2State(night.request, CANARY, L._make_initial_tiles(61218.0, 61219.0), 2)
         self.assertEqual(state.base("reserve")["profile_sha256"], CANARY_PROFILE_SHA256)
-        # Jul07/Jul13 identities under the frozen profile (recorded in the G6.6.3A packet).
+        # Jul07/Jul13 identities under the frozen profile.  G6.6.3D changed them (the profile
+        # now binds the process boundary); G6.6.3A recorded e1e28e86... and 08ab9c77....
         digests = {}
         for day in ("2026-07-07", "2026-07-13"):
             request = R.LiveRangeAdapter(ROOT, RELEASE, None).acquisition_request(day)
@@ -1472,8 +1662,8 @@ class FrozenProfileTests(OfflineTestCase):
             self.assertNotIn("extraction_method", B.selection_descriptor_for_request(request))
             digests[day] = L._sha256_json(p2)
         self.assertEqual(digests, {
-            "2026-07-07": "e1e28e8657ad67a7f1e870949e9f6d93f84fa1375cb22818c7c04b4aa5c51fe5",
-            "2026-07-13": "08ab9c771471f5bbbeb1cdf6996d48748e87e8ab3c7b56b662ff2f1b729ceb13"})
+            "2026-07-07": "f1df451787cc22728fb5bf66ebd124f818b303d27e74f74b01c05aa550fdf036",
+            "2026-07-13": "df812a2ec232e331f33e1f0020ffd46591cae1775335e067eb77f859e1a24b45"})
 
     def test_offline_g662b_profile_identity_is_unchanged(self):
         old = baseline_module(G662B, "src/operations/live_antares.py", "src.operations._g663_g662b_provider")
@@ -1520,6 +1710,13 @@ class GuardedWiringTests(OfflineTestCase):
             search, get_by_id, connectivity = night.provider()._load_client()
             self.assertIs(type(search.__self__), L._GuardedListing)
             self.assertIs(search.__self__.limits, CANARY.transport)
+            # G6.6.3D: the paginator's pages go through a process transport that
+            # starts lazily; loading the client starts nothing.
+            child = search.__self__._transport
+            self.assertIs(type(child), T.P2ProcessTransport)
+            self.assertEqual((child.state, child.stats["spawns"]), (T.NOT_STARTED, 0))
+            self.assertEqual(child._config, L._p2_child_config(CANARY.transport, BASE))
+            self.assertEqual(transport_children(), [])
             from antares_client import search as client
             self.assertIs(get_by_id, client.get_by_id)
             self.assertIs(connectivity, client.get_available_tags)
@@ -1589,7 +1786,11 @@ class G663FirewallTests(unittest.TestCase):
         "P2RelativeContinuationError", "P2InsecureContinuationError", "P2CrossOriginContinuationError",
         "P2ContinuationPathError", "P2ContinuationCycleError", "P2UnsafeRedirectError",
         "P2RedirectLimitError", "P2UnexpectedStatusError", "P2TransportHTTPError", "P2TransportLimits",
-        "_p2_plain_url", "_GuardedListing", "_p2_client_identity", "_load_p2_client", "g663_canary_p2_profile"}
+        "_GuardedListing", "_p2_client_identity", "_load_p2_client", "g663_canary_p2_profile",
+        # G6.6.3D process boundary (P2 only)
+        "P2TransportProcessError", "P2TransportStartupError", "P2TransportProtocolError",
+        "P2TransportUnavailableError", "P2TransportUnkillableError", "_p2_remote_request_errors",
+        "_p2_transport_error", "_p2_child_config"}
 
     @staticmethod
     def definitions(source):
@@ -1608,9 +1809,12 @@ class G663FirewallTests(unittest.TestCase):
     def baseline(self, path):
         return subprocess.check_output(["git", "show", f"{G662B}:{path}"], cwd=ROOT).decode()
 
-    def test_only_two_runtime_files_differ_from_g662b(self):
+    def test_only_the_p2_runtime_files_differ_from_g662b(self):
         changed = subprocess.check_output(["git", "diff", "--name-only", G662B, "--", "src"], cwd=ROOT).decode().split()
-        self.assertEqual(sorted(changed), ["src/operations/live_antares.py", "src/operations/science.py"])
+        untracked = subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard", "--", "src"],
+                                            cwd=ROOT).decode().split()
+        self.assertEqual(sorted(changed + untracked), ["src/operations/live_antares.py", "src/operations/p2_transport.py",
+                                                       "src/operations/science.py"])
         for path in ("src/operations/publication.py", "src/operations/transaction.py", "src/operations/storage.py",
                      "src/operations/commissioning.py", "src/operations/query_checkpoint.py",
                      "src/operations/query_progress.py", "src/operations/fetch_checkpoint.py", "src/history.py",
@@ -1625,10 +1829,31 @@ class G663FirewallTests(unittest.TestCase):
         removed = set(old) - set(new)
         added = set(new) - set(old)
         self.assertEqual(removed, {"import:from urllib.parse import urlsplit, urlunsplit"})
-        self.assertEqual(changed, {"LiveAntaresProvider", "P2ProofProfile", "_P2State"})
+        self.assertEqual(changed, {"LiveAntaresProvider", "P2ProofProfile", "_P2State", "_run_p2_query"})
         self.assertEqual({name for name in added if not name.startswith(("=", "import:"))}, self.G663_LIVE_NEW)
         self.assertEqual({name for name in added if name.startswith("import:")},
-                         {"import:import threading", "import:from urllib.parse import urljoin, urlsplit, urlunsplit"})
+                         {"import:from . import p2_transport as _p2_transport",
+                          "import:from urllib.parse import urljoin, urlsplit, urlunsplit"})
+        # G6.6.3D: the P2 reducer only gained a try/finally that ends the night's child.
+        self.assertIn(
+            "    finally:\n"
+            "        # G6.6.3D: the night's one transport child ends with its query.  A child\n"
+            "        # that cannot be proven dead raises here; nothing continues past it.\n"
+            "        listing = getattr(search, \"__self__\", None)\n"
+            "        if isinstance(listing, _GuardedListing):\n"
+            "            listing.close()\n", new["_run_p2_query"])
+        reverted = new["_run_p2_query"].replace(
+            "    finally:\n"
+            "        # G6.6.3D: the night's one transport child ends with its query.  A child\n"
+            "        # that cannot be proven dead raises here; nothing continues past it.\n"
+            "        listing = getattr(search, \"__self__\", None)\n"
+            "        if isinstance(listing, _GuardedListing):\n"
+            "            listing.close()\n", "")
+        body_start = reverted.index("    try:\n        while state.frontier")
+        body_end = reverted.index("\n\n    raw = pd.DataFrame(")
+        body = reverted[body_start + len("    try:\n"):body_end]
+        dedented = "\n".join(line[4:] if line.strip() else line for line in body.splitlines())
+        self.assertEqual(reverted[:body_start] + dedented + reverted[body_end:], old["_run_p2_query"])
         self.assertTrue(all(name[1:].startswith(("P2_", "_P2_", "G663_")) for name in added if name.startswith("=")))
         # Inside the provider class only _load_client differs, and only by its P2 branch.
         def methods(source):
@@ -1674,7 +1899,7 @@ DOC = ROOT / "docs" / "operations" / "V3_G663_TRANSPORT_CANARY_QUALIFICATION.md"
 
 
 def runbook_script(marker):
-    match = re.search(r"<<'EOF'\n(# " + re.escape(marker) + r" v1 .*?\n)EOF\n", DOC.read_text(), re.S)
+    match = re.search(r"<<'EOF'\n(# " + re.escape(marker) + r" v\d+ .*?\n)EOF\n", DOC.read_text(), re.S)
     if match is None:
         raise AssertionError(f"runbook script {marker} is missing")
     return match.group(1)
@@ -1716,6 +1941,7 @@ class CanaryRunbookDryRunTests(OfflineTestCase):
     def environment(self, night):
         return {"NIGHT": night, "RUN_ID": f"g663-p2-{night}-v1", "RELEASE_SHA": "6" * 40,
                 "PROVIDER_SHA256": hashlib.sha256((ROOT / "src/operations/live_antares.py").read_bytes()).hexdigest(),
+                "P2_TRANSPORT_SHA256": hashlib.sha256((ROOT / "src/operations/p2_transport.py").read_bytes()).hexdigest(),
                 "PROFILE_SHA256": CANARY_PROFILE_SHA256, "TRANSPORT_SHA256": CANARY_TRANSPORT_SHA256}
 
     def run_script(self, marker, environment):
@@ -1740,19 +1966,37 @@ class CanaryRunbookDryRunTests(OfflineTestCase):
 
     def test_runbook_identities_are_the_committed_bytes(self):
         text = DOC.read_text()
-        exported = dict(re.findall(r"^export (PROVIDER_SHA256|SCIENCE_SHA256|PROFILE_SHA256|TRANSPORT_SHA256)=([0-9a-f]{64})$",
-                                   text, re.M))
+        exported = dict(re.findall(
+            r"^export (PROVIDER_SHA256|P2_TRANSPORT_SHA256|SCIENCE_SHA256|PROFILE_SHA256|TRANSPORT_SHA256)=([0-9a-f]{64})$",
+            text, re.M))
         self.assertEqual(exported, {
             "PROVIDER_SHA256": hashlib.sha256((ROOT / "src/operations/live_antares.py").read_bytes()).hexdigest(),
+            "P2_TRANSPORT_SHA256": hashlib.sha256((ROOT / "src/operations/p2_transport.py").read_bytes()).hexdigest(),
             "SCIENCE_SHA256": hashlib.sha256((ROOT / "src/operations/science.py").read_bytes()).hexdigest(),
             "PROFILE_SHA256": L.G663_CANARY_P2_PROFILE_SHA256, "TRANSPORT_SHA256": L.G663_CANARY_TRANSPORT_SHA256})
-        for path, digest in re.findall(r"^(src/operations/\S+\.py)\s+sha256 ([0-9a-f]{64})$", text, re.M):
+        listed = re.findall(r"^(src/operations/\S+\.py)\s+sha256 ([0-9a-f]{64})$", text, re.M)
+        self.assertEqual(sorted(path for path, _digest in listed), [
+            "src/operations/live_antares.py", "src/operations/p2_transport.py", "src/operations/science.py"])
+        for path, digest in listed:
             self.assertEqual(hashlib.sha256((ROOT / path).read_bytes()).hexdigest(), digest, path)
+        self.assertIn(f"child implementation (p2_transport.py) sha256 {T.implementation_sha256()}", text)
         self.assertIn(f"G663_CANARY_P2_PROFILE_SHA256 = {CANARY_PROFILE_SHA256}", text)
         self.assertIn(f"G663_CANARY_TRANSPORT_SHA256 = {CANARY_TRANSPORT_SHA256}", text)
-        for night, digest in (("2026-07-07", "e1e28e8657ad67a7f1e870949e9f6d93f84fa1375cb22818c7c04b4aa5c51fe5"),
-                              ("2026-07-13", "08ab9c771471f5bbbeb1cdf6996d48748e87e8ab3c7b56b662ff2f1b729ceb13")):
+        for night, digest in (("2026-07-07", "f1df451787cc22728fb5bf66ebd124f818b303d27e74f74b01c05aa550fdf036"),
+                              ("2026-07-13", "df812a2ec232e331f33e1f0020ffd46591cae1775335e067eb77f859e1a24b45")):
             self.assertIn(f"{night} scientific contract sha256 = {digest}", text)
+
+    def test_transport_child_preflight_starts_and_stops_one_production_child(self):
+        environment = self.environment("2026-07-07")
+        self.assertIsNone(T.CHILD_TEST_HOOK)  # the production child: no test hook at all
+        report = self.documents(self.run_script("g663-child-preflight", environment))[-1]
+        self.assertEqual((report["stage"], report["child_implementation_sha256"]),
+                         ("child-preflight", environment["P2_TRANSPORT_SHA256"]))
+        self.assertEqual((report["exit"]["returncode"], report["exit"]["reaped"]), (0, True))
+        self.assertLess(report["startup_seconds"], CANARY.transport.child_startup_seconds)
+        self.assertEqual(transport_children(), [])
+        with self.assertRaises(AssertionError):  # other bytes refuse before any child starts
+            self.run_script("g663-child-preflight", {**environment, "P2_TRANSPORT_SHA256": "0" * 64})
 
     def test_jul07_acquisition_resume_and_network_free_verification(self):
         night = "2026-07-07"
@@ -1769,7 +2013,7 @@ class CanaryRunbookDryRunTests(OfflineTestCase):
         self.assertEqual(acquired["terminal_evidence"], "natural-exhaustion-below-50")
         self.assertEqual(acquired["p2_budget"]["secondary_nodes"], 3)
         self.assertEqual((acquired["loci"], acquired["fetch"]["alert_rows"]), (len(loci), 2 * len(loci)))
-        self.assertEqual(acquired["query_contract_sha256"], "e1e28e8657ad67a7f1e870949e9f6d93f84fa1375cb22818c7c04b4aa5c51fe5")
+        self.assertEqual(acquired["query_contract_sha256"], "f1df451787cc22728fb5bf66ebd124f818b303d27e74f74b01c05aa550fdf036")
         self.assertOfficial(service.urls)
         # An identical re-run resumes: the sealed query and complete fetch are reused, no requests.
         service.calls.clear()
