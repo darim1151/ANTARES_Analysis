@@ -82,7 +82,7 @@ class SavedAcquisitionAdoptionTests(unittest.TestCase):
                                      provider_factory=self.adapter.provider_factory),
             release_sha=OLD_RELEASE, work_capability=RangeWorkCapability.for_local(root, root.name),
             publication_roots=self.roots, read_capability_factory=F.mock_read_capability,
-            settings=self.settings)
+            settings=self.settings, prior_free_attestations=self.test_prior_free_attestations)
         self.assertTrue(controller.acquire(day)["ok"])
         return root / "nights" / f"night-{day}"
 

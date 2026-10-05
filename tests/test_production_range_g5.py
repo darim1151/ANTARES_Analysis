@@ -394,7 +394,10 @@ class SeparatedWorkTests(unittest.TestCase):
                 "/astro/store/shire/ANTARES/work/backfill/g5-canary", "--candidate-release", RELEASE]
         with mock.patch.object(R, "range_read_capability", side_effect=AssertionError("live call")), self.assertRaises(B.BackfillRefused):
             R.main(args)
-        with contextlib.redirect_stdout(io.StringIO()) as output:
+        adapter = R.LiveRangeAdapter(Path(args[-3]), RELEASE, None)
+        fixture_attestation = ({**B.acquisition_identity(adapter),
+            "evidence": "G6.6.2B exact plan-only test fixture; no production approval"},)
+        with mock.patch.object(R, "RANGE_PRIOR_FREE_ACQUISITION_ATTESTATIONS", fixture_attestation), contextlib.redirect_stdout(io.StringIO()) as output:
             R.main(["plan", *args[1:]])
         self.assertEqual(json.loads(output.getvalue())["execution"], "NOT EXECUTED")
 
@@ -477,6 +480,15 @@ class ProductionAuthorityTests(unittest.TestCase):
                 connectivity_fn=lambda: [], sleeper=lambda _: None)
         self.adapter = R.LiveRangeAdapter(self.work_root, RELEASE, F.mock_read_capability,
                                           provider_factory=provider_factory)
+        # Explicit offline qualification trust, never a production attestation.
+        identity = B.acquisition_identity(self.adapter)
+        self.test_prior_free_attestations = ({**identity,
+            "evidence": "G6.6.2B synthetic fixture; reviewed prior-free P1 test adapter"},)
+        self.stack.enter_context(mock.patch.object(R, "RANGE_PRIOR_FREE_ACQUISITION_ATTESTATIONS",
+                                                   self.test_prior_free_attestations))
+        self.stack.enter_context(mock.patch.object(B, "QUALIFIED_SOURCE_PROFILES",
+            (*B.QUALIFIED_SOURCE_PROFILES, B.SourceProfile("candidate-P1-test",
+                frozenset({identity["provider_implementation_sha256"]})))))
         self.settings = B.BackfillSettings(acquisition_concurrency=2, segment_size=2)
         probe = self.controller()
         initial = P.production_binding_from_sentinel(self.observer.sentinel(NIGHT))
@@ -498,7 +510,8 @@ class ProductionAuthorityTests(unittest.TestCase):
         return B.BackfillController(None, self.adapter, release_sha=RELEASE,
             work_capability=self.work, publication_roots=self.roots,
             read_capability_factory=F.mock_read_capability, settings=self.settings,
-            publisher=publisher, range_authorization=scope)
+            publisher=publisher, range_authorization=scope,
+            prior_free_attestations=self.test_prior_free_attestations)
 
     def build_first(self):
         controller = self.controller(self.publisher, self.authority.scope)

@@ -240,11 +240,13 @@ class LiveRangeAdapter:
     scenario = LiveAntaresProvider.scenario
     provider_module = "src.operations.live_antares"
 
-    def __init__(self, work_root, release_sha, read_factory, *, provider_factory=LiveAntaresProvider):
+    def __init__(self, work_root, release_sha, read_factory, *, provider_factory=LiveAntaresProvider,
+                 proof_profile=None):
         self.work_root = Path(work_root)
         self.release_sha = release_sha
         self.read_factory = read_factory
         self.provider_factory = provider_factory
+        self.proof_profile = proof_profile
 
     def acquisition_request(self, night):
         minimum, maximum = night_mjd_interval(night)
@@ -254,7 +256,8 @@ class LiveRangeAdapter:
     def scientific_contract(self, request):
         if request != dataclasses.replace(self.acquisition_request(request.date_utc), prior_locus_ids=request.prior_locus_ids):
             raise BackfillRefused("Live range request differs from the exact UTC scientific contract.")
-        return _scientific_query_contract(request)
+        from .live_antares import scientific_contract_for_profile
+        return scientific_contract_for_profile(request, self.proof_profile)
 
     def execution_policy(self):
         # Same bounded defaults as the existing live provider, without issuing a read.
@@ -263,6 +266,7 @@ class LiveRangeAdapter:
         provider.max_fetch_attempts = 3
         provider.max_fetch_workers = 4
         provider.retry_delay_seconds = 0.5
+        provider.proof_profile = self.proof_profile
         return provider.execution_policy()
 
     def _provider(self, request):
@@ -271,7 +275,8 @@ class LiveRangeAdapter:
         capability = self.read_factory(root, run_id, request.date_utc, self.release_sha)
         if capability.environment != "local-mock" and self.provider_factory is not LiveAntaresProvider:
             raise BackfillRefused("Provider injection is restricted to local qualification.")
-        provider = self.provider_factory(capability)
+        provider = (self.provider_factory(capability, proof_profile=self.proof_profile)
+                    if self.provider_factory is LiveAntaresProvider else self.provider_factory(capability))
         if provider.execution_policy() != self.execution_policy():
             raise BackfillRefused("Live range execution configuration drifted.")
         return provider
@@ -299,11 +304,14 @@ class LiveRangeAdapter:
         provider.retry_delay_seconds, provider.sleeper = 0.5, refuse
         provider.clock, provider.monotonic = _utc_now, time.monotonic
         provider._client_identity_cache = None
+        provider.proof_profile = self.proof_profile
+        if self.proof_profile is not None:
+            provider.capability.environment = "local-mock"
         if provider.execution_policy() != self.execution_policy():
             raise BackfillRefused("Journal replay configuration drifted.")
         return provider.query(request, _progress=types.SimpleNamespace(events=list(events), commit=refuse))
 
-    def construct_checkpoint(self, request, query_result, checkpoint):
+    def construct_checkpoint(self, request, query_result, checkpoint, *, source_profile=None):
         # Existing fetch_resumable reopens all segments, prepares and validates;
         # a complete checkpoint calls no service callback.
         root = self.work_root / "nights" / f"night-{request.date_utc}"
@@ -311,8 +319,46 @@ class LiveRangeAdapter:
         # carrying the same previously authorized night identity; no client is loaded.
         capability = LiveAntaresReadCapability(root, root.name, request.date_utc,
                     self.release_sha, "arnor-commissioning", _LIVE_READ_TOKEN)
-        provider = LiveAntaresProvider(capability)
+        selected_profile = source_profile.proof_profile if source_profile is not None else self.proof_profile
+        provider = LiveAntaresProvider(capability, proof_profile=selected_profile)
         return provider.fetch_resumable(request, query_result, checkpoint)
+
+
+def qualify_candidate_acquisition(adapter, candidate, adopted=None, *, saved=None, resume=False):
+    """Scientific qualification only; conveys no publication capability."""
+    from .backfill import (QUALIFIED_SOURCE_PROFILES, selection_descriptor_for_request,
+                           selection_descriptor_identity)
+    request = adapter.acquisition_request(candidate.date_utc)
+    current_hash = hashlib.sha256(_canonical(adapter.scientific_contract(request))).hexdigest()
+    provenance = candidate.provenance
+    expected_hash = current_hash if adopted is None else adopted["query_contract_sha256"]
+    if provenance.get("night_query_contract_sha256") != expected_hash:
+        raise BackfillRefused("Candidate full query contract differs from its exact selected/source profile.")
+    expected_descriptor = selection_descriptor_for_request(request)
+    if adopted is not None:
+        if not resume:
+            if saved is None or dict(saved.entry) != dict(adopted):
+                raise BackfillRefused("Adopted candidate lacks exact verified source proof.")
+            if saved.selection_descriptor != expected_descriptor:
+                raise BackfillRefused("Verified source selection differs from intended selection.")
+        matches = [profile for profile in QUALIFIED_SOURCE_PROFILES
+                   if adopted["source_provider_implementation_sha256"] in profile.provider_sha256s
+                   and hashlib.sha256(_canonical(profile.scientific_contract(request))).hexdigest() == expected_hash]
+        if len(matches) != 1:
+            raise BackfillRefused("Authorized adoption profile is unsupported or ambiguous.")
+        source_is_p1 = matches[0].proof_profile is None
+    else:
+        source_is_p1 = adapter.proof_profile is None
+    expected = selection_descriptor_identity(expected_descriptor)
+    observed = {key: provenance.get(key) for key in expected}
+    # Preserve already-bound legacy P1 candidates/recovery. New mixed/P2 paths
+    # cannot omit additive compatibility provenance.
+    if all(value is None for value in observed.values()) and source_is_p1 and adapter.proof_profile is None:
+        if expected_hash != current_hash:
+            raise BackfillRefused("Legacy P1 candidate cannot bypass exact current full contract.")
+        return
+    if observed != expected:
+        raise BackfillRefused("Candidate selection descriptor identity differs from verified semantics.")
 
 
 def qualify_range_night(authority, binding, authorization, candidate, *, resume=False, approval=None):
@@ -340,15 +386,15 @@ def qualify_range_night(authority, binding, authorization, candidate, *, resume=
             or binding.segment_cache_root != str(SEGMENT_CACHE)
             or binding.expires_at_utc != scope.expires_at_utc):
         raise BackfillRefused("One-shot night does not bind its exact range/candidate/roots.")
-    expected_contract = _scientific_query_contract(NightScienceRequest(
-        binding.night_utc, *night_mjd_interval(binding.night_utc), target_loci=None))
     if (candidate.provenance.get("range_authorization_sha256") != scope.digest
             or candidate.provenance.get("configuration_sha256") != scope.configuration_sha256
-            or candidate.provenance.get("night_query_contract_sha256") != hashlib.sha256(_canonical(expected_contract)).hexdigest()):
+            or candidate.date_utc != binding.night_utc):
         raise BackfillRefused("Candidate acquisition evidence belongs to another range/scientific request.")
     # An adopted night publishes only the exact authorized saved acquisition; others none.
     adopted = scope.adopted_acquisitions.get(binding.night_utc)
     provenance = candidate.provenance
+    saved = None
+    adapter = LiveRangeAdapter(authority.work_root, scope.candidate_release_sha, None)
     if provenance.get("acquisition_source") != (dict(adopted) if adopted is not None else None):
         raise BackfillRefused("Candidate acquisition source differs from the authorized adoption.")
     if adopted is not None:
@@ -359,12 +405,12 @@ def qualify_range_night(authority, binding, authorization, candidate, *, resume=
         if not resume:
             # Initial issuance re-proves the pinned source; token-free recovery of a
             # gated transaction relies on the candidate record that bound consumption.
-            adapter = LiveRangeAdapter(authority.work_root, scope.candidate_release_sha, None)
-            observed = describe_saved_acquisition(
+            saved = describe_saved_acquisition(
                 Path(adopted["source_root"]), binding.night_utc, adapter, authority.segment_size,
-                completion_sha256=adopted["fetch_completion_sha256"]).entry
-            if observed != dict(adopted):
+                completion_sha256=adopted["fetch_completion_sha256"])
+            if dict(saved.entry) != dict(adopted):
                 raise BackfillRefused("Saved acquisition changed before publication capability issuance.")
+    qualify_candidate_acquisition(adapter, candidate, adopted, saved=saved, resume=resume)
     authority.__post_init__()
     # Even a later completed acquisition cannot bypass a blocked predecessor.
     predecessor = classify_night_authority(PRODUCTION_DATA_ROOT,

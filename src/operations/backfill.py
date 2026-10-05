@@ -433,6 +433,109 @@ class SavedAcquisition:
     binding: FetchCheckpointBinding
     checkpoint: SegmentedFetchCheckpoint
     completion: FetchCheckpointCompletion
+    source_profile: Any = None
+    selection_descriptor: Optional[Mapping[str, Any]] = None
+
+
+@dataclass(frozen=True)
+class SourceProfile:
+    """Trusted verifier configuration, never constructed from source claims."""
+    name: str
+    provider_sha256s: frozenset[str]
+    proof_profile: Any = None
+
+    def __post_init__(self):
+        from .live_antares import P2ProofProfile
+        if (not isinstance(self.name, str) or not self.name
+                or type(self.provider_sha256s) is not frozenset or not self.provider_sha256s
+                or any(not isinstance(value, str) or len(value) != 64
+                       or any(char not in "0123456789abcdef" for char in value)
+                       for value in self.provider_sha256s)
+                or (self.proof_profile is not None and type(self.proof_profile) is not P2ProofProfile)):
+            raise BackfillRefused("Source profile requires exact finite provider identities and a trusted proof profile.")
+
+    def execution_policy(self):
+        from .live_antares import LiveAntaresProvider
+        provider = object.__new__(LiveAntaresProvider)
+        provider.max_query_attempts, provider.max_fetch_attempts, provider.max_fetch_workers = 2, 3, 4
+        provider.retry_delay_seconds, provider.proof_profile = 0.5, self.proof_profile
+        return provider.execution_policy()
+
+    def scientific_contract(self, request):
+        from .live_antares import scientific_contract_for_profile
+        return scientific_contract_for_profile(request, self.proof_profile)
+
+
+QUALIFIED_SOURCE_PROFILES = (SourceProfile("historical-P1", ADOPTABLE_SOURCE_PROVIDERS),)
+SELECTION_DESCRIPTOR_SCHEMA = "v3.qualified-scientific-selection.v1"
+
+
+def selection_descriptor_for_request(request):
+    """Trusted intended interpretation; source callers invoke after full proof."""
+    from .live_antares import night_mjd_interval
+    from ..query import lsst_identifier_filter
+    if ((request.mjd_min, request.mjd_max) != night_mjd_interval(request.date_utc)
+            or request.query_tag is not None or request.lsst_only is not True
+            or request.target_loci is not None or request.prior_locus_ids):
+        raise BackfillRefused("Selection is not the exact prior-free exhaustive UTC night.")
+    return {"schema_version": SELECTION_DESCRIPTOR_SCHEMA, "date_utc": request.date_utc,
+        "time": {"field": "properties.newest_alert_observation_time", "mjd_min": request.mjd_min,
+                 "mjd_max": request.mjd_max, "lower": "inclusive", "upper": "exclusive", "timezone": "UTC"},
+        "spatial": {"ra_field": "ra", "dec_field": "dec", "units": "degrees",
+            "ra_min": 0.0, "ra_max": 360.0, "ra_lower": "inclusive", "ra_upper": "exclusive",
+            "dec_min": -90.0, "dec_max": 90.0, "dec_lower": "inclusive", "dec_upper": "inclusive_at_90_only"},
+        "lsst_filter": lsst_identifier_filter(), "query_tag": None, "lsst_only": True,
+        "target_loci": None, "prior_free": True,
+        "normalization": "locus_to_record-properties-overlay;string-strip-nonblank-locus-id;tile-membership",
+        "deduplication": {"key": "locus_id", "keep": "last", "scope": "accepted_tiles"},
+        "input_order": "lower-child-first;within-leaf-qualified-service-order;keep-last;reset-index",
+        "equivalence": "selection-semantics-only-not-service-snapshot"}
+
+
+def selection_descriptor_identity(descriptor):
+    return {"selection_descriptor_schema": descriptor["schema_version"],
+            "selection_descriptor_sha256": _sha256(_canonical(dict(descriptor)))}
+
+
+class _SourceProfileAdapter:
+    def __init__(self, consumer, profile):
+        self.consumer, self.profile = consumer, profile
+        self.provider_name, self.scenario = consumer.provider_name, consumer.scenario
+
+    def acquisition_request(self, night):
+        return self.consumer.acquisition_request(night)
+
+    def execution_policy(self):
+        return self.profile.execution_policy()
+
+    def scientific_contract(self, request):
+        return self.profile.scientific_contract(request)
+
+    def replay_query_journal(self, request, events):
+        from .production_range import LiveRangeAdapter
+        adapter = LiveRangeAdapter(self.consumer.work_root, self.consumer.release_sha, None,
+                                   proof_profile=self.profile.proof_profile)
+        return adapter.replay_query_journal(request, events)
+
+
+def _identify_source_profile(root, manifest, request):
+    from .query_checkpoint import CHECKPOINT_SCHEMA_VERSION, _parse_canonical_object
+    from .query_progress import DIRECTORY, SCHEMA
+    document = _parse_canonical_object(_read_regular(root / "checkpoints" / DIRECTORY / "identity.json"),
+                                       "Saved source profile identity")
+    identity = document.get("identity")
+    if (document.get("schema_version") != SCHEMA or document.get("authoritative") is not False
+            or not isinstance(identity, dict) or manifest.get("schema_version") != CHECKPOINT_SCHEMA_VERSION):
+        raise BackfillRefused("Saved source profile schema is unsupported.")
+    claimed = manifest.get("bindings", {}).get("query_policy")
+    matches = [profile for profile in QUALIFIED_SOURCE_PROFILES
+               if identity.get("provider_implementation_sha256") in profile.provider_sha256s
+               and _sha256(_canonical(claimed)) == _sha256(_canonical(
+                   {"scientific_contract": profile.scientific_contract(request),
+                    "execution_policy": profile.execution_policy()}))]
+    if len(matches) != 1:
+        raise BackfillRefused("Saved source profile is unsupported or ambiguous; no verifier fallback.")
+    return matches[0], identity["provider_implementation_sha256"]
 
 
 def _adoptable_source_root(root: Path, date_utc: str) -> bool:
@@ -465,7 +568,8 @@ def validate_adoption_entry(date_utc: str, entry: Any) -> Dict[str, Any]:
         or ".." in Path(root).parts
         or entry["source_run_id"] != Path(root).name
         or not _is_sha40(entry["source_release_sha"])
-        or entry["source_provider_implementation_sha256"] not in ADOPTABLE_SOURCE_PROVIDERS
+        or entry["source_provider_implementation_sha256"] not in frozenset(
+            value for profile in QUALIFIED_SOURCE_PROFILES for value in profile.provider_sha256s)
         or not hex64("source_configuration_sha256", "source_request_sha256", "query_integrity_sha256",
                      "query_contract_sha256", "query_tile_trace_sha256", "query_locus_order_sha256",
                      "fetch_identity_sha256", "fetch_completion_sha256")
@@ -520,6 +624,7 @@ def exact_tile_partition(tiles: Sequence[Mapping[str, float]], mjd_min: float, m
 
 def verify_saved_query_journal(
     root: Path, request: Any, bindings: QueryResultCheckpointBindings, loaded: Any, adapter: Any,
+    *, expected_provider_sha256: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], str]:
     """Strictly re-prove a saved query-progress journal, read-only.
 
@@ -556,7 +661,10 @@ def verify_saved_query_journal(
         or set(identity) != {"bindings", "request", "provider_implementation_sha256", "client", "initial_tiles"}
         or identity["bindings"] != normalized(_binding_payload(bindings))
         or identity["request"] != normalized(_request_binding(request))
-        or identity["provider_implementation_sha256"] not in ADOPTABLE_SOURCE_PROVIDERS
+        or identity["provider_implementation_sha256"] not in (
+            adapter.profile.provider_sha256s if isinstance(adapter, _SourceProfileAdapter) else ADOPTABLE_SOURCE_PROVIDERS)
+        or (expected_provider_sha256 is not None
+            and identity["provider_implementation_sha256"] != expected_provider_sha256)
         or identity["initial_tiles"] != normalized(_make_initial_tiles(request.mjd_min, request.mjd_max))
     ):
         raise BackfillRefused("Saved query journal identity is not this acquisition's.")
@@ -589,6 +697,11 @@ def verify_saved_query_journal(
         "accepted_tile_count", "split_count", "search_request_count", "returned_loci", "raw_returned_loci",
         "retry_count", "partial_rows_discarded", "coverage_complete", "terminal_pending_tile_count",
     )
+    if isinstance(adapter, _SourceProfileAdapter) and adapter.profile.proof_profile is not None:
+        compared += ("p2_events", "p2_budget", "deduplication", "retry_exception_types")
+        if _sha256(_canonical({key: observed.get(key) for key in compared})) != _sha256(_canonical(
+                {key: sealed.get(key) for key in compared})):
+            raise BackfillRefused("P2 saved journal differs from its exact sealed operational proof.")
     replayed_loci, sealed_loci = replayed.loci, loaded.query_result.loci
     if (
         not replayed.clean
@@ -636,24 +749,30 @@ def describe_saved_acquisition(
         if json.loads(raw_request) != _request_document(request):
             raise BackfillRefused("Saved acquisition request differs from this night's contract.")
         manifest = _read_json(root / "checkpoints" / DEFAULT_CHECKPOINT_NAME / "manifest.json")
+        profile, source_provider_sha = _identify_source_profile(root, manifest, request)
+        source_adapter = _SourceProfileAdapter(adapter, profile)
         claimed = manifest.get("bindings") if isinstance(manifest.get("bindings"), Mapping) else {}
         release, configuration = claimed.get("release_sha"), claimed.get("configuration_hash")
-        if not _is_sha40(release) or configuration != configuration_sha256(release, adapter, segment_size):
+        if not _is_sha40(release) or configuration != configuration_sha256(release, source_adapter, segment_size):
             raise BackfillRefused("Saved acquisition configuration differs from this range's policy.")
-        bindings = query_checkpoint_bindings(root.name, release, configuration, adapter, request)
+        bindings = query_checkpoint_bindings(root.name, release, configuration, source_adapter, request)
         loaded = load_query_result_checkpoint(root, request, bindings)
-        head, provider_sha = verify_saved_query_journal(root, request, bindings, loaded, adapter)
+        head, provider_sha = verify_saved_query_journal(root, request, bindings, loaded, source_adapter,
+                                                      expected_provider_sha256=source_provider_sha)
         details = loaded.query_result.evidence.details
         if not (
             loaded.query_result.clean
             and details.get("coverage_complete") is True
             and details.get("terminal_pending_tile_count") == 0
             and details.get("query_contract_sha256")
-            == _sha256(_canonical(dict(adapter.scientific_contract(request))))
+            == _sha256(_canonical(dict(source_adapter.scientific_contract(request))))
         ):
             raise BackfillRefused("Saved acquisition query did not prove complete coverage.")
         ids = BackfillController._ordered_ids(loaded)
-        binding = fetch_checkpoint_binding(root.name, release, configuration, adapter, request,
+        if profile.proof_profile is not None:
+            from .science import validate_p2_query_result
+            validate_p2_query_result(request, loaded.query_result, profile.proof_profile)
+        binding = fetch_checkpoint_binding(root.name, release, configuration, source_adapter, request,
                                            loaded, segment_size)
         checkpoint = SegmentedFetchCheckpoint.open_read_only(root, binding, completion_sha256=completion_sha256)
         completion = checkpoint.inspect_complete(ids)
@@ -683,7 +802,11 @@ def describe_saved_acquisition(
         "fetch_segments": completion.segment_count,
         "alert_rows": completion.alert_rows,
     })
-    return SavedAcquisition(entry, request, loaded, binding, checkpoint, completion)
+    # Compatibility metadata follows all query/journal/partition/fetch proof.
+    descriptor = selection_descriptor_for_request(request)
+    if descriptor != selection_descriptor_for_request(adapter.acquisition_request(date_utc)):
+        raise BackfillRefused("Verified source selection differs from current intended selection.")
+    return SavedAcquisition(entry, request, loaded, binding, checkpoint, completion, profile, descriptor)
 
 
 # ---------------------------------------------------------------------------
@@ -1514,7 +1637,8 @@ class BackfillController:
             query_result = dataclasses.replace(loaded.query_result, request=construction_request)
             self._hook("before_construct", date_utc=date_utc)
             checkpoint_constructor = getattr(self.adapter, "construct_checkpoint", None)
-            result = (checkpoint_constructor(construction_request, query_result, checkpoint)
+            constructor_options = ({"source_profile": saved.source_profile} if adopted is not None else {})
+            result = (checkpoint_constructor(construction_request, query_result, checkpoint, **constructor_options)
                       if checkpoint_constructor is not None else
                       self.adapter.construct(construction_request, query_result,
                                              checkpoint.reconstruct_alerts(ids), completion))
@@ -1579,6 +1703,17 @@ class BackfillController:
             }
             if consumed_source is not None:
                 record["provenance"]["acquisition_source"] = consumed_source
+                descriptor = saved.selection_descriptor
+            elif self.adapter.provider_name == "live-antares":
+                descriptor = selection_descriptor_for_request(self.adapter.acquisition_request(date_utc))
+            else:
+                descriptor = None
+            if descriptor is not None:
+                descriptor_identity = selection_descriptor_identity(descriptor)
+                record["provenance"].update(descriptor_identity)
+                record["provenance"]["binding_sha256"] = _sha256(_canonical({
+                    "historical_binding_sha256": record["provenance"]["binding_sha256"],
+                    **descriptor_identity}))
             _write_json_new(temporary / "candidate-record.json", record)
             os.rename(temporary, workspace.candidate)  # candidate appears atomically
             workspace.append_event(

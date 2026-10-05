@@ -1311,6 +1311,18 @@ def _validate_phase6_manifest_evidence(
     """Fail closed on missing or contradictory live completion evidence."""
     from .. import query as historical_query
 
+    expected_profile = None
+    supplied_method = manifest.get("extraction_method")
+    if supplied_method != _PHASE6_EXTRACTION_METHOD:
+        matches = [profile for profile in QUALIFIED_P2_PROFILES
+                   if _phase6_json_hash(supplied_method) == _phase6_json_hash(profile.extraction_method())]
+        if len(matches) != 1:
+            _raise_artifact("p2_profile_unsupported", "Unknown or ambiguous P2 proof profile.")
+        expected_profile = matches[0]
+    expected_method = (_PHASE6_EXTRACTION_METHOD if expected_profile is None
+                       else expected_profile.extraction_method())
+    expected_mode = expected_method["name"]
+
     night = manifest.get("date_utc")
     try:
         parsed_night = date.fromisoformat(night)
@@ -1348,7 +1360,7 @@ def _validate_phase6_manifest_evidence(
         "lsst_filter": expected_filter,
         "sort_requested": None,
         "parallel_parent_shards": 1,
-        "extraction_method": _PHASE6_EXTRACTION_METHOD,
+        "extraction_method": expected_method,
         "deduplication": {
             "key": "locus_id",
             "keep": "last",
@@ -1373,8 +1385,8 @@ def _validate_phase6_manifest_evidence(
         or manifest.get("parallel_shards") != 1
         or manifest.get("saturated_chunk_count") != 0
         or manifest.get("lsst_filter") != expected_filter
-        or manifest.get("extraction_method") != _PHASE6_EXTRACTION_METHOD
-        or manifest.get("source_query_mode") != "probe_first_time_ra_dec"
+        or manifest.get("extraction_method") != expected_method
+        or manifest.get("source_query_mode") != expected_mode
         or manifest.get("cache_used") is not False
     ):
         _raise_artifact(
@@ -1404,7 +1416,7 @@ def _validate_phase6_manifest_evidence(
         != "antares-client-jsonapi-links-next"
         or query_details.get("interval") != expected_interval
         or query_details.get("spatial_domain") != expected_spatial_domain
-        or query_details.get("extraction_method") != _PHASE6_EXTRACTION_METHOD
+        or query_details.get("extraction_method") != expected_method
         or query_details.get("cache_used") is not False
         or query_details.get("initial_tile_override") is not False
         or query_details.get("coverage_complete") is not True
@@ -1456,7 +1468,7 @@ def _validate_phase6_manifest_evidence(
         or execution_policy.get("api_timeout_seconds") != 60
         or execution_policy.get("probe_limit") != 50
         or execution_policy.get("probe_threshold") != 50
-        or execution_policy.get("extraction_method") != _PHASE6_EXTRACTION_METHOD
+        or execution_policy.get("extraction_method") != expected_method
         or execution_policy.get("tile_cache") is not False
         or execution_policy.get("lightcurve_cache") is not False
         or execution_policy.get("parallel_parent_shards") != 1
@@ -1483,6 +1495,31 @@ def _validate_phase6_manifest_evidence(
     processed_count = query_details.get("processed_tile_count")
     search_request_count = query_details.get("search_request_count")
     trace = query_details.get("tile_trace")
+    p2_replay = None
+    if expected_profile is not None:
+        p2_replay = _p2_replay_events(query_details.get("p2_events"), mjd_min, mjd_max,
+                                     expected_profile, max_query_attempts)
+        _validate_p2_details(query_details, p2_replay)
+        # Artifact validation enforces the same complete, typed identity proof
+        # as strict saved-source verification, in addition to final-frame proof.
+        verified_query = NightQueryResult(
+            NightScienceRequest(night, mjd_min, mjd_max, target_loci=None),
+            manifest["provider"], manifest["provider_scenario"],
+            ProviderOutcome.SUCCESS_ZERO if p2_replay["frame"].empty else ProviderOutcome.SUCCESS,
+            p2_replay["frame"], QueryStageEvidence(
+                query_evidence["completed"], query_evidence["partial"],
+                query_evidence["returned_loci"], (), query_details))
+        validate_p2_query_result(verified_query.request, verified_query, expected_profile)
+        from ..history import prepare_loci
+        expected_loci = prepare_loci(p2_replay["frame"], night, mjd_min, mjd_max,
+                                     query_details.get("request_completed_at_utc"),
+                                     source_query_mode=expected_mode)
+        left, right = _align_frame_optional_survey_nulls(loci, expected_loci)
+        try:
+            pd.testing.assert_frame_equal(left, right, check_exact=True)
+        except (AssertionError, TypeError, ValueError) as exc:
+            raise ArtifactValidationError(_artifact_issue(
+                "p2_locus_survivor_invalid", "P2 final science differs from independent keep-last replay.")) from exc
     if (
         type(accepted_count) is not int
         or accepted_count <= 0
@@ -1503,7 +1540,8 @@ def _validate_phase6_manifest_evidence(
         or query_details.get("iterator_exhausted_accepted_chunks") != accepted_count
         or query_details.get("iterator_exhausted_accepted_tiles") != accepted_count
         or processed_count != accepted_count + split_count
-        or search_request_count != accepted_count + split_count + retry_count
+        or search_request_count != (accepted_count + split_count + retry_count
+                                    if p2_replay is None else p2_replay["search_attempts"])
         or manifest.get("chunk_count") != accepted_count
         or manifest.get("split_count") != split_count
         or not isinstance(trace, list)
@@ -1513,7 +1551,7 @@ def _validate_phase6_manifest_evidence(
             "Probe-first tile counts or terminal evidence are invalid.",
         )
 
-    replay = _phase6_replay_trace(trace, mjd_min, mjd_max)
+    replay = (_phase6_replay_trace(trace, mjd_min, mjd_max) if p2_replay is None else p2_replay)
     if (
         replay["initial"] != 6912
         or replay["accepted"] != accepted_count
@@ -1697,7 +1735,7 @@ def _validate_phase6_manifest_evidence(
         "ingested_at_utc" not in loci.columns
         or not loci["ingested_at_utc"].eq(ingested).all()
         or "source_query_mode" not in loci.columns
-        or not loci["source_query_mode"].eq("probe_first_time_ra_dec").all()
+        or not loci["source_query_mode"].eq(expected_mode).all()
     ):
         _raise_artifact(
             "phase6_locus_provenance_invalid",
@@ -1737,6 +1775,309 @@ def _validate_phase6_manifest_evidence(
             "phase6_validation_boundary_invalid",
             "Independent validation does not enforce the half-open night.",
         )
+
+
+QUALIFIED_P2_PROFILES = ()  # Test qualification injects exact profiles; none are production-approved.
+
+
+def _p2_replay_events(events, mjd_min, mjd_max, profile, attempt_limit):
+    """Independent verifier: never calls the provider reducer or split oracle."""
+    from .query_progress import decode_records
+    from ..query import lsst_identifier_counts
+
+    def refuse(message):
+        _raise_artifact("p2_proof_invalid", message)
+
+    def node(tile, identity, parent=None, root=None, depth=None):
+        return {"id": identity, "parent": parent, "root": root, "depth": depth, "tile": tile}
+
+    def split(tile):
+        widths = [(tile["mjd_max"] - tile["mjd_min"]) * 86400.0 / 30.0,
+                  (tile["ra_max"] - tile["ra_min"]) / 0.05,
+                  (tile["dec_max"] - tile["dec_min"]) / 0.05]
+        axis = max(range(3), key=widths.__getitem__)
+        low, high = [("mjd_min", "mjd_max"), ("ra_min", "ra_max"),
+                     ("dec_min", "dec_max")][axis]
+        middle = (tile[low] + tile[high]) / 2.0
+        if not math.isfinite(middle) or not tile[low] < middle < tile[high]:
+            return None
+        return ["time", "ra", "dec"][axis], middle, ({**tile, high: middle}, {**tile, low: middle})
+
+    def matches(record, tile):
+        try:
+            values = [float(record[name]) for name in ("newest_alert_observation_time", "ra", "dec")]
+            return (all(math.isfinite(v) for v in values)
+                and tile["mjd_min"] <= values[0] < tile["mjd_max"]
+                and tile["ra_min"] <= values[1] < tile["ra_max"]
+                and tile["dec_min"] <= values[2]
+                and (values[2] <= tile["dec_max"] if tile["dec_max"] == 90.0 else values[2] < tile["dec_max"]))
+        except (KeyError, ValueError, TypeError):
+            return False
+
+    if not isinstance(events, list) or type(attempt_limit) is not int or not 1 <= attempt_limit <= 2:
+        refuse("P2 event list/attempt policy is invalid.")
+    initial = _phase6_initial_tiles(mjd_min, mjd_max)
+    frontier = deque(node(tile, f"i{index:05d}") for index, tile in enumerate(initial))
+    active = None
+    starts = unknowns = splits = discarded = errors = 0
+    roots, outcomes, records, accepted, trace, error_types = {}, {}, [], [], [], set()
+    profile_hash = _phase6_json_hash(profile.as_dict())
+
+    def budget():
+        return {"search_attempts": starts, "unknown_attempts": unknowns,
+                "secondary_nodes": sum(roots.values()),
+                "root_nodes": [[key, roots[key]] for key in sorted(roots)]}
+
+    for event in events:
+        try:
+            if (not frontier or not isinstance(event, dict) or set(event) != {"p2_event", "records"}
+                    or len(json.dumps(event, sort_keys=True, separators=(",", ":"),
+                                      ensure_ascii=False, allow_nan=False).encode()) + 1 > profile.max_event_bytes):
+                refuse("P2 event shape/resource limit is invalid.")
+            meta, supplied = event["p2_event"], decode_records(event["records"])
+            current = frontier[0]
+            tile = _phase6_trace_tile(current["tile"])
+            if (not all(tile[lo] < tile[hi] for lo, hi in (
+                    ("mjd_min", "mjd_max"), ("ra_min", "ra_max"), ("dec_min", "dec_max")))
+                    or not mjd_min <= tile["mjd_min"] < tile["mjd_max"] <= mjd_max
+                    or not 0.0 <= tile["ra_min"] < tile["ra_max"] <= 360.0
+                    or not -90.0 <= tile["dec_min"] < tile["dec_max"] <= 90.0):
+                refuse("P2 tile escapes its finite domain.")
+            base = {"grammar": "v3.p2-query-decisions.v1", "profile_sha256": profile_hash,
+                    "kind": meta.get("kind"), "node": current,
+                    "query_sha256": _phase6_json_hash(_phase6_tile_query(tile)),
+                    "reservation": (meta.get("reservation") if meta.get("kind") == "reserve" else active),
+                    "before": budget()}
+            if _phase6_json_hash({key: meta.get(key) for key in base}) != _phase6_json_hash(base):
+                refuse("P2 profile/node/query/frontier identity differs.")
+            kind = meta.get("kind")
+            if kind == "reserve":
+                attempt = outcomes.get(current["id"], 0) + 1
+                reservation = {"id": starts + 1, "attempt": attempt}
+                if (active is not None or starts >= profile.max_search_attempts or attempt > attempt_limit
+                        or meta.get("reservation") != reservation or supplied
+                        or type(meta["reservation"]["id"]) is not int
+                        or type(meta["reservation"]["attempt"]) is not int
+                        or _phase6_json_hash(meta) != _phase6_json_hash({**base, "after": {**budget(), "search_attempts": starts + 1}})):
+                    refuse("P2 reservation is invalid or over budget.")
+                active = reservation
+                starts += 1
+                continue
+            if kind == "unknown":
+                if (active is None or meta.get("reservation") != active or supplied
+                        or unknowns >= profile.crash_reserve
+                        or _phase6_json_hash(meta) != _phase6_json_hash({**base, "after": {**budget(), "unknown_attempts": unknowns + 1}})):
+                    refuse("P2 unknown reservation closure is invalid.")
+                unknowns += 1
+                active = None
+                continue
+            if kind != "outcome" or active is None or meta.get("reservation") != active:
+                refuse("Failed/unreserved P2 events cannot certify completed science.")
+            decision = meta.get("decision")
+            keys = {"validated_rows", "iterator_exhausted", "discarded_rows", "exception_type",
+                    "retryable", "children", "dimension", "midpoint", "entered_secondary", "reason", "status"}
+            if not isinstance(decision, dict) or set(decision) != keys:
+                refuse("P2 decision fields are invalid.")
+            count, exhausted = decision["validated_rows"], decision["iterator_exhausted"]
+            error, retryable = decision["exception_type"], decision["retryable"]
+            if (type(count) is not int or not 0 <= count <= 50 or type(exhausted) is not bool
+                    or type(retryable) is not bool or type(decision["entered_secondary"]) is not bool):
+                refuse("P2 response classification is invalid.")
+            expected = {"validated_rows": count, "iterator_exhausted": exhausted,
+                        "discarded_rows": count if error or count == 50 else 0,
+                        "exception_type": error, "retryable": retryable, "children": [],
+                        "dimension": None, "midpoint": None, "entered_secondary": False, "reason": None}
+            after = budget()
+            if error is not None:
+                if (not isinstance(error, str) or not error or not retryable or exhausted or count >= 50
+                        or active["attempt"] >= attempt_limit or supplied):
+                    refuse("Unresolved/malformed retry cannot certify P2 completeness.")
+                expected["status"] = "attempt_error"
+                errors += 1
+                error_types.add(error)
+            elif exhausted and count < 50:
+                if retryable or len(supplied) != count or any(
+                        not isinstance(record, dict) or not isinstance(record.get("locus_id"), str)
+                        or not record["locus_id"] or record["locus_id"] != record["locus_id"].strip()
+                        or not matches(record, tile)
+                        or lsst_identifier_counts(pd.DataFrame([record]))["lsst_identifier_count"] != 1
+                        for record in supplied):
+                    refuse("P2 leaf lacks bounded positive exhaustion/membership.")
+                expected["status"] = "accepted_exhausted"
+                accepted.append(tile)
+                records.extend(supplied)
+                frontier.popleft()
+            elif count == 50 and exhausted is False:
+                if retryable or supplied:
+                    refuse("P2 saturation is provisional, never accepted records.")
+                expected["status"] = "split_saturated"
+                ordinary = _phase6_split_tile(tile) if current["root"] is None else ()
+                split_result = split(tile)
+                if split_result is None:
+                    refuse("Collapsed midpoint cannot certify a split.")
+                dimension, midpoint, children = split_result
+                if ordinary:
+                    if ordinary != children:
+                        refuse("P2 changed primary split arithmetic.")
+                    root, depth = None, None
+                else:
+                    root = current["root"] or current["id"]
+                    depth = current["depth"] if current["root"] is not None else 0
+                    if type(depth) is not int or not 0 <= depth < profile.max_depth:
+                        refuse("P2 secondary depth is exhausted.")
+                    expected["entered_secondary"] = current["root"] is None
+                    next_roots = dict(roots)
+                    if expected["entered_secondary"]:
+                        if root in next_roots:
+                            refuse("P2 secondary root repeated.")
+                        next_roots[root] = 1
+                    next_roots[root] += 2
+                    if (next_roots[root] > profile.max_nodes_per_root
+                            or sum(next_roots.values()) > profile.max_nodes_per_night):
+                        refuse("P2 logical node budget is exhausted.")
+                    after = {**after, "secondary_nodes": sum(next_roots.values()),
+                             "root_nodes": [[key, next_roots[key]] for key in sorted(next_roots)]}
+                    roots = next_roots
+                expected.update(dimension=dimension, midpoint=midpoint,
+                    children=[node(child, current["id"] + str(index), current["id"], root,
+                                   depth + 1 if root is not None else None)
+                              for index, child in enumerate(children)])
+                splits += 1
+                frontier.popleft()
+                frontier.extendleft(reversed(expected["children"]))
+            else:
+                refuse("P2 response lacks below-threshold natural exhaustion.")
+            if _phase6_json_hash(meta) != _phase6_json_hash({**base, "decision": expected, "after": after}):
+                refuse("P2 decision/paired children/budget transition differs.")
+            discarded += expected["discarded_rows"]
+            row = {**tile, "attempt": active["attempt"], "status": expected["status"],
+                   "iterator_exhausted": exhausted, "query_sha256": base["query_sha256"]}
+            if error:
+                row.update(partial_rows_discarded=count, exception_type=error, retryable=True)
+            elif expected["status"] == "accepted_exhausted":
+                row["returned_loci"] = count
+            else:
+                row["returned_before_split"] = count
+            trace.append(row)
+            outcomes[current["id"]] = outcomes.get(current["id"], 0) + 1
+            active = None
+        except (KeyError, TypeError, ValueError, IndexError) as exc:
+            raise ArtifactValidationError(_artifact_issue("p2_proof_invalid", "P2 replay is contradictory.")) from exc
+    if frontier or active is not None or len(accepted) != len(initial) + splits:
+        refuse("P2 proof has an unresolved frontier/reservation.")
+    raw = pd.DataFrame(records)
+    duplicates = sorted(set(raw.loc[raw["locus_id"].duplicated(keep=False), "locus_id"])) if not raw.empty else []
+    frame = raw.drop_duplicates("locus_id", keep="last").reset_index(drop=True) if not raw.empty else raw
+    return {"initial": len(initial), "accepted": len(accepted), "splits": splits,
+            "attempt_errors": errors, "raw_rows": len(raw), "discarded_rows": discarded,
+            "retry_exception_types": sorted(error_types), "search_attempts": starts,
+            "budget": budget(), "frame": frame, "trace": trace, "accepted_tiles": accepted,
+            "duplicate_ids": duplicates}
+
+
+def _validate_p2_details(details, replay):
+    frame = replay["frame"]
+    identifiers = frame["locus_id"].tolist() if not frame.empty else []
+    duplicates = replay["duplicate_ids"]
+    expected_dedup = {"key": "locus_id", "keep": "last", "scope": "accepted_tiles",
+        "raw_rows": replay["raw_rows"], "duplicate_rows_removed": replay["raw_rows"] - len(frame),
+        "duplicate_identity_count": len(duplicates), "duplicate_identities": duplicates,
+        "duplicate_identity_sha256": hashlib.sha256("".join(value + "\n" for value in duplicates).encode()).hexdigest()}
+    expected = {"p2_budget": replay["budget"], "tile_trace": replay["trace"],
+        "tile_trace_sha256": _phase6_json_hash({"tiles": replay["trace"]}),
+        "locus_order_sha256": hashlib.sha256("".join(value + "\n" for value in identifiers).encode()).hexdigest(),
+        "deduplication": expected_dedup, "search_request_count": replay["search_attempts"],
+        "initial_tile_count": replay["initial"], "accepted_tile_count": replay["accepted"],
+        "split_count": replay["splits"], "retry_count": replay["attempt_errors"],
+        "raw_returned_loci": replay["raw_rows"], "returned_loci": len(frame),
+        "partial_rows_discarded": replay["discarded_rows"],
+        "retry_exception_types": replay["retry_exception_types"],
+        "processed_tile_count": replay["accepted"] + replay["splits"],
+        "logical_chunk_count": replay["accepted"], "accepted_chunk_count": replay["accepted"],
+        "iterator_exhausted_accepted_chunks": replay["accepted"],
+        "iterator_exhausted_accepted_tiles": replay["accepted"],
+        "unresolved_saturated_chunk_count": 0, "unresolved_saturated_tile_count": 0,
+        "terminal_pending_tile_count": 0, "coverage_complete": True,
+        "coverage_lineage_complete": True, "all_accepted_iterators_exhausted": True,
+        "iterator_exhausted": True,
+        "completion_classification": "COMPLETE_ZERO" if frame.empty else "COMPLETE_NONZERO"}
+    if _phase6_json_hash({key: details.get(key) for key in expected}) != _phase6_json_hash(expected):
+        _raise_artifact("p2_evidence_mismatch", "P2 independent replay differs from recorded evidence.")
+
+
+def validate_p2_query_result(request, result, profile):
+    """Called only with a closed registry's trusted profile, after checkpoint proof."""
+    from .. import query
+    from astropy.time import Time
+    from datetime import date
+    civil_date = date.fromisoformat(request.date_utc)
+    expected_min = float(Time(civil_date.isoformat(), format="iso", scale="utc").mjd)
+    if (civil_date.isoformat() != request.date_utc or (request.mjd_min, request.mjd_max) != (expected_min, expected_min + 1.0)
+            or request.query_tag is not None or request.target_loci is not None or request.lsst_only is not True):
+        _raise_artifact("p2_request_invalid", "P2 requires an exact exhaustive UTC night.")
+    if (not result.clean or result.request != request or result.provider_name != "live-antares"
+            or result.scenario != "commissioning-v1" or not isinstance(result.loci, pd.DataFrame)
+            or result.evidence.completed is not True or result.evidence.partial is not False
+            or type(result.evidence.returned_loci) is not int
+            or result.evidence.returned_loci != len(result.loci)
+            or result.outcome != (ProviderOutcome.SUCCESS_ZERO if result.loci.empty else ProviderOutcome.SUCCESS)):
+        _raise_artifact("p2_query_incomplete", "P2 query did not complete its exact request.")
+    details = result.evidence.details
+    expected_contract = {"target_date_utc": request.date_utc,
+        "interval": {"mjd_min": request.mjd_min, "mjd_max": request.mjd_max,
+                     "lower_bound": "inclusive", "upper_bound": "exclusive", "timezone": "UTC"},
+        "spatial_domain": {"ra_min": 0.0, "ra_max": 360.0, "ra_lower_bound": "inclusive",
+            "ra_upper_bound": "exclusive", "dec_min": -90.0, "dec_max": 90.0,
+            "dec_lower_bound": "inclusive", "dec_upper_bound": "inclusive_at_90_only"},
+        "query_tag": None, "lsst_only": True, "lsst_filter": query.lsst_identifier_filter(),
+        "sort_requested": None, "parallel_parent_shards": 1,
+        "extraction_method": profile.extraction_method(),
+        "deduplication": {"key": "locus_id", "keep": "last", "scope": "accepted_tiles"}}
+    expected_details = {"query_contract_sha256": _phase6_json_hash(expected_contract),
+        "query_sha256": _phase6_json_hash(expected_contract),
+        "target_date_utc": request.date_utc, "interval": expected_contract["interval"],
+        "spatial_domain": expected_contract["spatial_domain"],
+        "extraction_method": profile.extraction_method(), "query_tag": None, "lsst_only": True,
+        "lsst_filter": expected_contract["lsst_filter"],
+        "lsst_filter_sha256": _phase6_json_hash({"filter": expected_contract["lsst_filter"]}),
+        "sort_requested": None, "service_ordering": "ANTARES client/API default",
+        "pagination_mode": "antares-client-jsonapi-links-next", "terminal_evidence": "natural-exhaustion-below-50",
+        "cache_used": False, "initial_tile_override": False, "secret_material_recorded": False}
+    if _phase6_json_hash({key: details.get(key) for key in expected_details}) != _phase6_json_hash(expected_details):
+        _raise_artifact("p2_query_contract_invalid", "P2 query profile/target/completion differs.")
+    policy = details.get("execution_policy")
+    fixed_policy = {"api_timeout_seconds": 60, "probe_limit": 50, "probe_threshold": 50,
+                    "extraction_method": profile.extraction_method(), "tile_cache": False,
+                    "lightcurve_cache": False, "parallel_parent_shards": 1}
+    variable_keys = {"max_query_attempts", "max_fetch_attempts_per_object", "max_fetch_workers", "retry_delay_seconds"}
+    if (not isinstance(policy, dict) or set(policy) != set(fixed_policy) | variable_keys
+            or _phase6_json_hash({key: policy.get(key) for key in fixed_policy}) != _phase6_json_hash(fixed_policy)
+            or any(type(policy.get(key)) is not int or not 1 <= policy[key] <= upper for key, upper in
+                   (("max_query_attempts", 2), ("max_fetch_attempts_per_object", 3), ("max_fetch_workers", 4)))
+            or type(policy.get("retry_delay_seconds")) not in (int, float)
+            or not math.isfinite(policy["retry_delay_seconds"]) or not 0 <= policy["retry_delay_seconds"] <= 5):
+        _raise_artifact("p2_policy_invalid", "P2 execution policy is outside exact bounded qualification.")
+    expected_client = {"distribution": "mock-antares-client", "version": "1.14.0",
+        "api_base_url": "https://api.antares.noirlab.edu/v1/", "api_timeout_seconds": 60,
+        "authentication": "public-search-no-credentials", "pagination_contract": "mocked-jsonapi-links-next-until-null"}
+    if details.get("capability_environment") != "local-mock" or _phase6_json_hash(details.get("client")) != _phase6_json_hash(expected_client):
+        _raise_artifact("p2_client_invalid", "P2 is qualified only with the exact offline test client.")
+    try:
+        started, completed = (_canonical_utc(details[key], key) for key in
+                              ("request_started_at_utc", "request_completed_at_utc"))
+        if any(not isinstance(details[key], str) or _canonical_utc(details[key], key) != details[key] for key in
+               ("request_started_at_utc", "request_completed_at_utc")):
+            raise ValueError("Noncanonical timing.")
+        if completed < started or type(details.get("runtime_seconds")) not in (int, float) or not math.isfinite(details["runtime_seconds"]) or details["runtime_seconds"] < 0:
+            raise ValueError("Contradictory timing.")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ArtifactValidationError(_artifact_issue("p2_timing_invalid", "P2 timing evidence is invalid.")) from exc
+    replay = _p2_replay_events(details.get("p2_events"), request.mjd_min, request.mjd_max,
+                               profile, details["execution_policy"]["max_query_attempts"])
+    _validate_p2_details(details, replay)
+    if list(replay["frame"].columns) != list(result.loci.columns) or not replay["frame"].equals(result.loci):
+        _raise_artifact("p2_query_frame_invalid", "P2 ordered keep-last frame differs from independent replay.")
+    return replay
 
 
 def _read_parquet_bytes(payload: bytes, name: str) -> pd.DataFrame:

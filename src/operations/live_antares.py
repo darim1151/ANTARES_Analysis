@@ -566,6 +566,7 @@ class LiveAntaresProvider:
         clock: Callable[[], datetime] = _utc_now,
         monotonic: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
+        proof_profile: Optional[P2ProofProfile] = None,
     ) -> None:
         if type(capability) is not LiveAntaresReadCapability:
             raise LiveCapabilityError("A sealed live-read capability is required.")
@@ -616,8 +617,16 @@ class LiveAntaresProvider:
         self.monotonic = monotonic
         self.sleeper = sleeper
         self._client_identity_cache: Optional[Mapping[str, Any]] = None
+        if proof_profile is not None and type(proof_profile) is not P2ProofProfile:
+            raise ValueError("P2 requires an explicit validated proof profile.")
+        self.proof_profile = proof_profile
 
     def _load_client(self) -> Tuple[Callable[..., Any], Callable[..., Any], Callable[..., Any]]:
+        if getattr(self, "proof_profile", None) is not None and (
+                self.capability.environment != "local-mock"
+                or not all(callable(callback) for callback in
+                           (self._search_fn, self._get_by_id_fn, self._connectivity_fn))):
+            raise LiveCapabilityError("P2 requires injected offline callbacks pending Control transport qualification.")
         if self._search_fn is not None:
             assert self._get_by_id_fn is not None
             assert self._connectivity_fn is not None
@@ -650,7 +659,7 @@ class LiveAntaresProvider:
 
     def execution_policy(self) -> Mapping[str, Any]:
         """Return the bounded transport policy included in release provenance."""
-        return {
+        policy = {
             "max_query_attempts": self.max_query_attempts,
             "max_fetch_attempts_per_object": self.max_fetch_attempts,
             "max_fetch_workers": self.max_fetch_workers,
@@ -663,11 +672,14 @@ class LiveAntaresProvider:
             "lightcurve_cache": False,
             "parallel_parent_shards": 1,
         }
+        if getattr(self, "proof_profile", None) is not None:
+            policy["extraction_method"] = self.proof_profile.extraction_method()
+        return policy
 
     def scientific_contract(self, request: NightScienceRequest) -> Mapping[str, Any]:
         """Return the exact, side-effect-free scientific request contract."""
         self._validate_request(request)
-        return _scientific_query_contract(request)
+        return scientific_contract_for_profile(request, getattr(self, "proof_profile", None))
 
     def client_identity(self) -> Mapping[str, Any]:
         self._load_client()
@@ -778,6 +790,8 @@ class LiveAntaresProvider:
         accepted.  Final accepted rows are deduplicated by ``locus_id`` with
         ``keep='last'``, exactly as in the accepted historical path.
         """
+        if getattr(self, "proof_profile", None) is not None:
+            return _run_p2_query(self, request, _progress, _event_hook)
         self._validate_request(request)
         search, _get_by_id, _connectivity = self._load_client()
         scientific_contract = _scientific_query_contract(request)
@@ -1321,7 +1335,8 @@ class LiveAntaresProvider:
             query_result.evidence.details.get(
                 "request_completed_at_utc", request.ingested_at_utc
             ),
-            source_query_mode=EXTRACTION_METHOD,
+            source_query_mode=(self.proof_profile.extraction_method()["name"]
+                               if getattr(self, "proof_profile", None) is not None else EXTRACTION_METHOD),
         )
         alerts = prepare_alerts(raw_alerts, request.date_utc, request.range_label)
         fetch_evidence = FetchStageEvidence(
@@ -1844,3 +1859,407 @@ __all__ = [
     "OFFICIAL_API_BASE_URL",
     "PINNED_CLIENT_VERSION",
 ]
+
+
+# Explicit offline opt-in. Historical functions and the default P1 grammar above
+# retain their original meaning. No production limits or attestation live here.
+P2_GRAMMAR = "v3.p2-query-decisions.v1"
+
+
+@dataclass(frozen=True)
+class P2ProofProfile:
+    max_depth: int
+    max_nodes_per_root: int
+    max_nodes_per_night: int
+    max_search_attempts: int
+    crash_reserve: int
+    max_event_bytes: int
+
+    def __post_init__(self):
+        for name in ("max_depth", "max_nodes_per_root", "max_nodes_per_night",
+                     "max_search_attempts", "crash_reserve", "max_event_bytes"):
+            value = getattr(self, name)
+            minimum = 0 if name in {"max_depth", "crash_reserve"} else 1
+            if type(value) is not int or value < minimum:
+                raise ValueError(f"{name} must be a finite integer >= {minimum}.")
+
+    def as_dict(self):
+        return {"schema_version": "v3.p2-proof-profile.v1", "grammar": P2_GRAMMAR,
+                "primary": extraction_method_contract(), "trigger": "saturated_primary_floor",
+                "axis_ties": ["time", "ra", "dec"], "midpoint": "binary64-(lower+upper)/2",
+                "traversal": "lower-child-first", "acceptance": "natural-exhaustion-below-50",
+                **{name: getattr(self, name) for name in (
+                    "max_depth", "max_nodes_per_root", "max_nodes_per_night",
+                    "max_search_attempts", "crash_reserve", "max_event_bytes")}}
+
+    def extraction_method(self):
+        return {**extraction_method_contract(), "name": "hierarchical_completeness_p2",
+                "cache_version": "offline_p2_v1", "proof_profile": self.as_dict()}
+
+
+def scientific_contract_for_profile(request, profile=None):
+    contract = _scientific_query_contract(request)
+    if profile is not None:
+        if type(profile) is not P2ProofProfile:
+            raise ValueError("Unsupported proof profile.")
+        contract = {**contract, "extraction_method": profile.extraction_method()}
+    return contract
+
+
+def _p2_split(tile):
+    ratios = ((tile["mjd_max"] - tile["mjd_min"]) * 86400.0 / 30.0,
+              (tile["ra_max"] - tile["ra_min"]) / 0.05,
+              (tile["dec_max"] - tile["dec_min"]) / 0.05)
+    index = max(range(3), key=lambda n: ratios[n])
+    lower, upper = (("mjd_min", "mjd_max"), ("ra_min", "ra_max"),
+                    ("dec_min", "dec_max"))[index]
+    midpoint = (tile[lower] + tile[upper]) / 2.0
+    if not math.isfinite(midpoint) or not tile[lower] < midpoint < tile[upper]:
+        raise ValueError("p2_midpoint_collapse")
+    children = ({**tile, upper: midpoint}, {**tile, lower: midpoint})
+    return ("time", "ra", "dec")[index], midpoint, children
+
+
+def _p2_node(tile, node_id, parent=None, root=None, depth=None):
+    return {"id": node_id, "parent": parent, "root": root, "depth": depth,
+            "tile": dict(tile)}
+
+
+class _P2State:
+    """Provider-side deterministic reducer. Science has a separate verifier."""
+
+    def __init__(self, request, profile, initial, attempts):
+        self.request, self.profile, self.attempt_limit = request, profile, attempts
+        self.frontier = deque(_p2_node(tile, f"i{n:05d}") for n, tile in enumerate(initial))
+        self.active = None
+        self.starts = self.unknowns = self.splits = self.discarded = self.errors = 0
+        self.root_nodes, self.outcomes = {}, {}
+        self.records, self.trace, self.accepted, self.error_types = [], [], [], set()
+        self.failed = None
+
+    def budget(self):
+        return {"search_attempts": self.starts, "unknown_attempts": self.unknowns,
+                "secondary_nodes": sum(self.root_nodes.values()),
+                "root_nodes": [[key, self.root_nodes[key]] for key in sorted(self.root_nodes)]}
+
+    def base(self, kind, reservation=None):
+        node = self.frontier[0]
+        return {"grammar": P2_GRAMMAR, "profile_sha256": _sha256_json(self.profile.as_dict()),
+                "kind": kind, "node": node,
+                "query_sha256": _sha256_json(_build_tile_query(node["tile"])),
+                "reservation": reservation, "before": self.budget()}
+
+    def reservation(self):
+        if self.active is not None or not self.frontier or self.failed:
+            raise ValueError("P2 cannot reserve this frontier.")
+        if self.starts >= self.profile.max_search_attempts:
+            return None, "p2_search_budget_exhausted"
+        attempt = self.outcomes.get(self.frontier[0]["id"], 0) + 1
+        if attempt > self.attempt_limit:
+            return None, "p2_retry_exhausted"
+        reservation = {"id": self.starts + 1, "attempt": attempt}
+        event = self.base("reserve", reservation)
+        event["after"] = {**self.budget(), "search_attempts": self.starts + 1}
+        return {"p2_event": event, "records": []}, None
+
+    def unknown(self):
+        if self.active is None:
+            raise ValueError("P2 has no unknown reservation.")
+        if self.unknowns >= self.profile.crash_reserve:
+            return self.failure("p2_crash_reserve_exhausted")
+        event = self.base("unknown", self.active)
+        event["after"] = {**self.budget(), "unknown_attempts": self.unknowns + 1}
+        return {"p2_event": event, "records": []}
+
+    def failure(self, reason):
+        event = self.base("failure", self.active)
+        event["reason"] = reason
+        event["after"] = self.budget()
+        return {"p2_event": event, "records": []}
+
+    def outcome(self, count, exhausted, *, exception_type=None, retryable=False, records=()):
+        from .query_progress import encode_records
+        if self.active is None:
+            raise ValueError("P2 outcome lacks a reservation.")
+        node = self.frontier[0]
+        event = self.base("outcome", self.active)
+        decision = {"validated_rows": count, "iterator_exhausted": exhausted,
+                    "discarded_rows": count if exception_type or count == 50 else 0,
+                    "exception_type": exception_type, "retryable": retryable,
+                    "children": [], "dimension": None, "midpoint": None,
+                    "entered_secondary": False, "reason": None}
+        after = self.budget()
+        if exception_type:
+            decision["status"] = "attempt_error"
+            if not retryable or self.active["attempt"] >= self.attempt_limit:
+                decision["reason"] = "p2_retry_exhausted" if retryable else "p2_malformed"
+        elif exhausted and 0 <= count < 50:
+            decision["status"] = "accepted_exhausted"
+        elif count == 50 and not exhausted:
+            decision["status"] = "split_saturated"
+            children = _split_tile(node["tile"]) if node["root"] is None else ()
+            if children:
+                dimension, midpoint, independently = _p2_split(node["tile"])
+                if children != independently:
+                    raise ValueError("P1/P2 primary arithmetic differs.")
+                root, depth = None, None
+            else:
+                root = node["root"] or node["id"]
+                depth = node["depth"] if node["root"] is not None else 0
+                decision["entered_secondary"] = node["root"] is None
+                counts = dict(self.root_nodes)
+                if decision["entered_secondary"]:
+                    counts[root] = 1
+                if depth >= self.profile.max_depth:
+                    decision["reason"] = "p2_depth_exhausted"
+                elif counts[root] + 2 > self.profile.max_nodes_per_root:
+                    decision["reason"] = "p2_root_nodes_exhausted"
+                elif sum(counts.values()) + 2 > self.profile.max_nodes_per_night:
+                    decision["reason"] = "p2_night_nodes_exhausted"
+                else:
+                    try:
+                        dimension, midpoint, children = _p2_split(node["tile"])
+                    except ValueError:
+                        decision["reason"] = "p2_midpoint_collapse"
+                if decision["reason"] is None:
+                    counts[root] += 2
+                if sum(counts.values()) > self.profile.max_nodes_per_night:
+                    # Entry itself cannot exceed the aggregate root capacity.
+                    counts = dict(self.root_nodes)
+                    decision["reason"] = "p2_night_nodes_exhausted"
+                after = {**after, "secondary_nodes": sum(counts.values()),
+                         "root_nodes": [[key, counts[key]] for key in sorted(counts)]}
+            if decision["reason"] is None:
+                decision.update(dimension=dimension, midpoint=midpoint,
+                    children=[_p2_node(tile, node["id"] + str(n), node["id"], root,
+                                       depth + 1 if root is not None else None)
+                              for n, tile in enumerate(children)])
+        else:
+            raise ValueError("P2 outcome lacks positive exhaustion or saturation.")
+        event.update(decision=decision, after=after)
+        return {"p2_event": event, "records": encode_records(records)}
+
+    def apply(self, event):
+        from .query_progress import decode_records
+        from .query_checkpoint import QueryCheckpointError
+        try:
+            if (not self.frontier or self.failed or not isinstance(event, dict)
+                    or set(event) != {"p2_event", "records"}):
+                raise ValueError("P2 event/frontier is invalid.")
+            meta, records = event["p2_event"], decode_records(event["records"])
+            if not isinstance(meta, dict):
+                raise ValueError("P2 metadata is invalid.")
+            kind = meta.get("kind")
+            if kind == "reserve":
+                expected, reason = self.reservation()
+                if reason or _sha256_json(event) != _sha256_json(expected):
+                    raise ValueError("P2 reservation differs.")
+                self.starts += 1
+                self.active = meta["reservation"]
+                return
+            if kind == "unknown":
+                if _sha256_json(event) != _sha256_json(self.unknown()):
+                    raise ValueError("P2 unknown-outcome evidence differs.")
+                self.unknowns += 1
+                self.active = None
+                return
+            if kind == "failure":
+                reason = meta.get("reason")
+                expected = self.failure(reason)
+                permitted = (reason == "p2_crash_reserve_exhausted" and self.active is not None
+                             and self.unknowns >= self.profile.crash_reserve)
+                if self.active is None:
+                    _, blocked = self.reservation()
+                    permitted = reason == blocked and blocked is not None
+                if not permitted or _sha256_json(event) != _sha256_json(expected):
+                    raise ValueError("P2 failure is not justified.")
+                self.failed = reason
+                return
+            if kind != "outcome" or self.active is None:
+                raise ValueError("P2 outcome is unsupported/unreserved.")
+            decision = meta.get("decision", {})
+            count, exhausted = decision.get("validated_rows"), decision.get("iterator_exhausted")
+            error, retryable = decision.get("exception_type"), decision.get("retryable")
+            if (type(count) is not int or not 0 <= count <= 50 or type(exhausted) is not bool
+                    or type(retryable) is not bool or (error is not None and
+                    (not isinstance(error, str) or not error))):
+                raise ValueError("P2 observed response is invalid.")
+            if error is None and retryable:
+                raise ValueError("P2 success cannot be retryable.")
+            expected = self.outcome(count, exhausted, exception_type=error,
+                                    retryable=retryable, records=records)
+            if _sha256_json(event) != _sha256_json(expected):
+                raise ValueError("P2 decision/budget transition differs.")
+            accepted = decision["status"] == "accepted_exhausted"
+            if ((accepted and (len(records) != count or any(
+                    not isinstance(r, dict) or not isinstance(r.get("locus_id"), str)
+                    or not r["locus_id"] or r["locus_id"] != r["locus_id"].strip()
+                    or not _record_matches_tile(r, self.frontier[0]["tile"])
+                    or query.lsst_identifier_counts(pd.DataFrame([r]))["lsst_identifier_count"] != 1
+                    for r in records)))
+                    or (not accepted and records)):
+                raise ValueError("P2 accepted records differ.")
+            node = self.frontier[0]
+            self.outcomes[node["id"]] = self.outcomes.get(node["id"], 0) + 1
+            self.active = None
+            self.root_nodes = dict(meta["after"]["root_nodes"])
+            self.discarded += decision["discarded_rows"]
+            trace = {**node["tile"], "attempt": meta["reservation"]["attempt"],
+                     "status": decision["status"], "iterator_exhausted": exhausted,
+                     "query_sha256": meta["query_sha256"]}
+            if error:
+                self.errors += 1
+                self.error_types.add(error)
+                trace.update(partial_rows_discarded=count, exception_type=error, retryable=retryable)
+            elif accepted:
+                trace["returned_loci"] = count
+                self.accepted.append(node["tile"])
+                self.records.extend(records)
+                self.frontier.popleft()
+            else:
+                trace["returned_before_split"] = count
+                if decision["reason"] is None:
+                    self.splits += 1
+                    self.frontier.popleft()
+                    self.frontier.extendleft(reversed(decision["children"]))
+            self.trace.append(trace)
+            if decision["reason"]:
+                self.failed = decision["reason"]
+        except (ValueError, TypeError, KeyError, IndexError) as exc:
+            raise QueryCheckpointError("P2 journal decision is contradictory.") from exc
+
+
+def _run_p2_query(provider, request, progress, event_hook):
+    from .query_checkpoint import QueryCheckpointError, _canonical_json_bytes
+    provider._validate_request(request)
+    profile = provider.proof_profile
+    initial = [_canonical_tile(tile, mjd_min=request.mjd_min, mjd_max=request.mjd_max)
+               for tile in provider._initial_tiles_fn(request.mjd_min, request.mjd_max)]
+    if initial != _make_initial_tiles(request.mjd_min, request.mjd_max):
+        raise QueryCheckpointError("P2 requires the frozen canonical P1 initial grid.")
+    state = _P2State(request, profile, initial, provider.max_query_attempts)
+    events = list(progress.events) if progress is not None else []
+    for event in events:
+        if len(_canonical_json_bytes(event)) > profile.max_event_bytes:
+            raise QueryCheckpointError("P2 event exceeds its qualified byte ceiling.")
+        state.apply(event)
+    started, t0 = provider.clock(), provider.monotonic()
+
+    def commit(event):
+        if len(_canonical_json_bytes(event)) > profile.max_event_bytes:
+            raise QueryCheckpointError("P2 event exceeds its qualified byte ceiling.")
+        # Apply only after durable commit. A hook observes the complete boundary.
+        if progress is not None:
+            progress.commit(event)
+        state.apply(event)
+        events.append(event)
+        if event_hook is not None:
+            event_hook("p2_committed", {"kind": event["p2_event"]["kind"],
+                       "event": json.loads(_canonical_json_bytes(event)), "budget": state.budget()})
+
+    if state.active is not None and not state.failed:
+        commit(state.unknown())
+    search = None
+    while state.frontier and not state.failed:
+        reservation, reason = state.reservation()
+        if reason:
+            commit(state.failure(reason))
+            break
+        commit(reservation)
+        tile = state.frontier[0]["tile"]
+        records, exhausted, error, retryable = [], False, None, False
+        iterator = None
+        try:
+            if search is None:
+                try:
+                    search, _, _ = provider._load_client()
+                except Exception as exc:
+                    raise ValueError("P2 offline client initialization failed.") from exc
+            iterator = iter(search(_build_tile_query(tile)))
+            while len(records) < 50:
+                try:
+                    locus = next(iterator)
+                except StopIteration:
+                    exhausted = True
+                    break
+                try:
+                    record = query.locus_to_record(locus)
+                    identity = str(record.get("locus_id") or "").strip()
+                    if (not identity or not _record_matches_tile(record, tile)
+                            or query.lsst_identifier_counts(pd.DataFrame([record]))["lsst_identifier_count"] != 1):
+                        raise ValueError("P2 locus normalization/membership failed.")
+                    record["locus_id"] = identity
+                    from .query_progress import encode_records
+                    if len(_canonical_json_bytes(encode_records([record]))) > profile.max_event_bytes // 50:
+                        raise ValueError("P2 normalized record exceeds qualified byte ceiling.")
+                except Exception as exc:
+                    # All local record failures are malformed input, including
+                    # numeric overflow and codec errors. Iterator transport
+                    # failures remain outside this nonretryable boundary.
+                    raise ValueError("P2 record validation failed.") from exc
+                records.append(record)
+        except Exception as exc:
+            error, retryable = _exception_type(exc), _retryable_query_error(exc)
+        finally:
+            if iterator is not None:
+                try:
+                    close = getattr(iterator, "close", None)
+                    if callable(close):
+                        close()
+                except Exception as exc:
+                    # Lookup and invocation failures are known NON-SCIENCE,
+                    # never converted into an unknown crash on restart.
+                    error = error or _exception_type(exc)
+                    retryable = False
+        outcome = state.outcome(len(records), exhausted, exception_type=error,
+                                retryable=retryable, records=records if exhausted and error is None else ())
+        commit(outcome)
+        if error and not state.failed:
+            provider.sleeper(provider.retry_delay_seconds * state.outcomes[state.frontier[0]["id"]])
+
+    raw = pd.DataFrame(state.records)
+    duplicate_ids = sorted(set(raw.loc[raw["locus_id"].duplicated(keep=False), "locus_id"])) if not raw.empty else []
+    frame = raw.drop_duplicates("locus_id", keep="last").reset_index(drop=True) if not raw.empty else raw
+    complete = not state.frontier and state.active is None and not state.failed
+    if complete and len(state.accepted) != len(initial) + state.splits:
+        raise QueryCheckpointError("P2 frontier does not cover the canonical night.")
+    contract = provider.scientific_contract(request)
+    finished = provider.clock()
+    classification = (LiveCompletion.COMPLETE_ZERO if frame.empty else LiveCompletion.COMPLETE_NONZERO) if complete else LiveCompletion.INCOMPLETE
+    details = {"completion_classification": classification.value, "target_date_utc": request.date_utc,
+        "interval": contract["interval"], "spatial_domain": contract["spatial_domain"],
+        "query_sha256": _sha256_json(contract), "query_contract_sha256": _sha256_json(contract),
+        "query_tag": None, "lsst_only": True, "lsst_filter": contract["lsst_filter"],
+        "lsst_filter_sha256": _sha256_json({"filter": contract["lsst_filter"]}),
+        "sort_requested": None, "service_ordering": "ANTARES client/API default",
+        "pagination_mode": "antares-client-jsonapi-links-next", "terminal_evidence": "natural-exhaustion-below-50" if complete else state.failed,
+        "extraction_method": profile.extraction_method(), "execution_policy": provider.execution_policy(),
+        "cache_used": False, "capability_environment": provider.capability.environment,
+        "initial_tile_override": False, "initial_tile_count": len(initial),
+        "search_request_count": state.starts, "processed_tile_count": len(state.accepted) + state.splits,
+        "logical_chunk_count": len(state.accepted), "accepted_chunk_count": len(state.accepted),
+        "accepted_tile_count": len(state.accepted), "split_count": state.splits,
+        "unresolved_saturated_chunk_count": 0 if complete else 1,
+        "unresolved_saturated_tile_count": 0 if complete else 1,
+        "iterator_exhausted_accepted_chunks": len(state.accepted), "iterator_exhausted_accepted_tiles": len(state.accepted),
+        "all_accepted_iterators_exhausted": complete, "iterator_exhausted": complete,
+        "coverage_complete": complete, "coverage_lineage_complete": complete,
+        "terminal_pending_tile_count": len(state.frontier), "raw_returned_loci": len(raw),
+        "returned_loci": len(frame), "deduplication": {**contract["deduplication"],
+            "raw_rows": len(raw), "duplicate_rows_removed": len(raw) - len(frame),
+            "duplicate_identity_count": len(duplicate_ids), "duplicate_identities": duplicate_ids,
+            "duplicate_identity_sha256": _identifier_hash(duplicate_ids)},
+        "partial_rows_discarded": state.discarded, "retry_count": state.errors,
+        "retry_exception_types": sorted(state.error_types), "tile_trace": state.trace,
+        "tile_trace_sha256": _sha256_json({"tiles": state.trace}),
+        "locus_order_sha256": _identifier_hash(frame["locus_id"].tolist() if not frame.empty else []),
+        "p2_events": events, "p2_budget": state.budget(),
+        "request_started_at_utc": _iso(started), "request_completed_at_utc": _iso(finished),
+        "runtime_seconds": round(max(0.0, provider.monotonic() - t0), 6),
+        "client": (provider.client_identity() if complete or search is not None
+                   else {"distribution": "unavailable"}), "secret_material_recorded": False}
+    errors = () if complete else (ProviderIssue(state.failed or "p2_incomplete", ProviderStage.QUERY,
+        ProviderOutcome.QUERY_INTERRUPTION, "P2 did not prove complete coverage.", retryable=False, partial=True),)
+    return NightQueryResult(request, provider.provider_name, provider.scenario,
+        (ProviderOutcome.SUCCESS_ZERO if frame.empty else ProviderOutcome.SUCCESS) if complete else ProviderOutcome.QUERY_INTERRUPTION,
+        frame, QueryStageEvidence(complete, not complete, len(frame), errors, details))
