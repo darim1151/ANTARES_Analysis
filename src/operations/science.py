@@ -2060,8 +2060,19 @@ def validate_p2_query_result(request, result, profile):
     expected_client = {"distribution": "mock-antares-client", "version": "1.14.0",
         "api_base_url": "https://api.antares.noirlab.edu/v1/", "api_timeout_seconds": 60,
         "authentication": "public-search-no-credentials", "pagination_contract": "mocked-jsonapi-links-next-until-null"}
-    if details.get("capability_environment") != "local-mock" or _phase6_json_hash(details.get("client")) != _phase6_json_hash(expected_client):
-        _raise_artifact("p2_client_invalid", "P2 is qualified only with the exact offline test client.")
+    qualified = {("local-mock", _phase6_json_hash(expected_client))}
+    transport = getattr(profile, "transport", None)
+    if transport is not None:
+        # G6.6.3A: only a guarded-transport profile may have searched live, on
+        # Arnor, through exactly the bounded paginator its limits identify.
+        qualified.add(("arnor-commissioning", _phase6_json_hash({
+            "distribution": "antares-client", "version": "1.14.0",
+            "api_base_url": "https://api.antares.noirlab.edu/v1/", "api_timeout_seconds": 60,
+            "authentication": "public-search-no-credentials",
+            "pagination_contract": "p2-guarded-jsonapi-links-next-v1",
+            "transport_sha256": _phase6_json_hash(transport.as_dict())})))
+    if (details.get("capability_environment"), _phase6_json_hash(details.get("client"))) not in qualified:
+        _raise_artifact("p2_client_invalid", "P2 client/environment is not exactly qualified for this profile.")
     try:
         started, completed = (_canonical_utc(details[key], key) for key in
                               ("request_started_at_utc", "request_completed_at_utc"))

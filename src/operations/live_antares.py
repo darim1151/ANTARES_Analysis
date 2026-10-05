@@ -20,6 +20,7 @@ import math
 import os
 import socket
 import tempfile
+import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,7 +30,7 @@ from enum import Enum
 from importlib import metadata
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import pandas as pd
 
@@ -622,11 +623,8 @@ class LiveAntaresProvider:
         self.proof_profile = proof_profile
 
     def _load_client(self) -> Tuple[Callable[..., Any], Callable[..., Any], Callable[..., Any]]:
-        if getattr(self, "proof_profile", None) is not None and (
-                self.capability.environment != "local-mock"
-                or not all(callable(callback) for callback in
-                           (self._search_fn, self._get_by_id_fn, self._connectivity_fn))):
-            raise LiveCapabilityError("P2 requires injected offline callbacks pending Control transport qualification.")
+        if getattr(self, "proof_profile", None) is not None:
+            return _load_p2_client(self)
         if self._search_fn is not None:
             assert self._get_by_id_fn is not None
             assert self._connectivity_fn is not None
@@ -1874,6 +1872,9 @@ class P2ProofProfile:
     max_search_attempts: int
     crash_reserve: int
     max_event_bytes: int
+    # None keeps the G6.6.2B offline-only profile (mocked callbacks only).
+    # Exact P2TransportLimits is the only route to live searches (G6.6.3A).
+    transport: Optional["P2TransportLimits"] = None
 
     def __post_init__(self):
         for name in ("max_depth", "max_nodes_per_root", "max_nodes_per_night",
@@ -1882,19 +1883,26 @@ class P2ProofProfile:
             minimum = 0 if name in {"max_depth", "crash_reserve"} else 1
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be a finite integer >= {minimum}.")
+        if self.transport is not None and type(self.transport) is not P2TransportLimits:
+            raise ValueError("transport must be exact P2TransportLimits or None.")
 
     def as_dict(self):
-        return {"schema_version": "v3.p2-proof-profile.v1", "grammar": P2_GRAMMAR,
+        document = {"schema_version": "v3.p2-proof-profile.v1", "grammar": P2_GRAMMAR,
                 "primary": extraction_method_contract(), "trigger": "saturated_primary_floor",
                 "axis_ties": ["time", "ra", "dec"], "midpoint": "binary64-(lower+upper)/2",
                 "traversal": "lower-child-first", "acceptance": "natural-exhaustion-below-50",
                 **{name: getattr(self, name) for name in (
                     "max_depth", "max_nodes_per_root", "max_nodes_per_night",
                     "max_search_attempts", "crash_reserve", "max_event_bytes")}}
+        if self.transport is not None:
+            document.update(schema_version="v3.p2-proof-profile.v2",
+                            transport=self.transport.as_dict())
+        return document
 
     def extraction_method(self):
         return {**extraction_method_contract(), "name": "hierarchical_completeness_p2",
-                "cache_version": "offline_p2_v1", "proof_profile": self.as_dict()}
+                "cache_version": "offline_p2_v1" if self.transport is None else "guarded_p2_v1",
+                "proof_profile": self.as_dict()}
 
 
 def scientific_contract_for_profile(request, profile=None):
@@ -1992,7 +2000,9 @@ class _P2State:
         if exception_type:
             decision["status"] = "attempt_error"
             if not retryable or self.active["attempt"] >= self.attempt_limit:
-                decision["reason"] = "p2_retry_exhausted" if retryable else "p2_malformed"
+                decision["reason"] = ("p2_retry_exhausted" if retryable else
+                                      "p2_transport_guard" if exception_type in _P2_TRANSPORT_GUARD_TYPES
+                                      else "p2_malformed")
         elif exhausted and 0 <= count < 50:
             decision["status"] = "accepted_exhausted"
         elif count == 50 and not exhausted:
@@ -2263,3 +2273,378 @@ def _run_p2_query(provider, request, progress, event_hook):
     return NightQueryResult(request, provider.provider_name, provider.scenario,
         (ProviderOutcome.SUCCESS_ZERO if frame.empty else ProviderOutcome.SUCCESS) if complete else ProviderOutcome.QUERY_INTERRUPTION,
         frame, QueryStageEvidence(complete, not complete, len(frame), errors, details))
+
+
+# ---------------------------------------------------------------------------
+# G6.6.3A guarded P2 transport.
+#
+# antares-client 1.14.0 follows ``links.next`` inside one ``next()`` with no
+# page, byte, time, cycle, scheme or origin bound, and lets requests follow
+# redirects anywhere.  Only an explicit P2ProofProfile carrying exact
+# P2TransportLimits may search live, and it then pages through this
+# provider-owned paginator instead.  Scientific decoding is the client's: the
+# same request URL and parameters, its own listing schema, page order, and
+# termination on a null or missing ``links.next``.  Every bound is a refusal:
+# reaching one leaves the logical iterator incomplete, never complete.  P1
+# never reaches this code.
+# ---------------------------------------------------------------------------
+
+P2_TRANSPORT_SCHEMA = "v3.p2-transport-limits.v1"
+P2_PAGINATION_CONTRACT = "p2-guarded-jsonapi-links-next-v1"
+_P2_SORT = "-properties.newest_alert_observation_time"
+_P2_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_P2_STREAM_CHUNK_BYTES = 8192
+_P2_TRANSPORT_BOUNDS = {
+    "max_pages": (1, 10_000),
+    "max_consecutive_empty_pages": (0, 1_000),
+    "max_page_bytes": (1, 1 << 30),
+    "max_iterator_bytes": (1, 1 << 32),
+    "iterator_deadline_seconds": (1, 86_400),
+    "connect_timeout_seconds": (1, 600),
+    "read_timeout_seconds": (1, 600),
+    "max_redirects": (0, 10),
+}
+
+
+class P2TransportGuardError(ValueError):
+    """A finite transport bound or continuation rule refused one iterator.
+
+    The iterator is incomplete and nothing it yielded may become science.
+    ``ValueError`` keeps the unchanged shared classifier terminal (no retry).
+    Messages never carry response bodies, headers or URLs.
+    """
+
+
+class P2PageLimitError(P2TransportGuardError):
+    """The iterator needed more HTTP pages than its profile allows."""
+
+
+class P2EmptyPageLimitError(P2TransportGuardError):
+    """Too many consecutive empty pages still carried a continuation."""
+
+
+class P2PageBytesError(P2TransportGuardError):
+    """One response body exceeded the per-page byte ceiling."""
+
+
+class P2IteratorBytesError(P2TransportGuardError):
+    """Cumulative response bodies exceeded the per-iterator byte ceiling."""
+
+
+class P2DeadlineError(P2TransportGuardError):
+    """The whole-iterator wall-clock deadline elapsed."""
+
+
+class P2MalformedContinuationError(P2TransportGuardError):
+    """``links``/``links.next`` is not one plain absolute URL string."""
+
+
+class P2RelativeContinuationError(P2TransportGuardError):
+    """``links.next`` is relative; the pinned client cannot follow it either."""
+
+
+class P2InsecureContinuationError(P2TransportGuardError):
+    """``links.next`` is not HTTPS."""
+
+
+class P2CrossOriginContinuationError(P2TransportGuardError):
+    """``links.next`` leaves the exact ANTARES API origin."""
+
+
+class P2ContinuationPathError(P2TransportGuardError):
+    """``links.next`` names a resource other than the listing being paged."""
+
+
+class P2ContinuationCycleError(P2TransportGuardError):
+    """``links.next`` repeats a page this iterator already requested."""
+
+
+class P2UnsafeRedirectError(P2TransportGuardError):
+    """A redirect lacks a same-origin HTTPS target inside the API prefix."""
+
+
+class P2RedirectLimitError(P2TransportGuardError):
+    """One page exceeded its redirect ceiling."""
+
+
+class P2UnexpectedStatusError(P2TransportGuardError):
+    """A non-200, non-redirect status below 400."""
+
+
+class P2TransportHTTPError(RuntimeError):
+    """HTTP status >= 400, transient like the client's ``AntaresException``.
+
+    Retried only within the bounded per-node attempts; the body is not read.
+    """
+
+
+_P2_TRANSPORT_GUARD_TYPES = frozenset(
+    f"{guard.__module__}.{guard.__name__}"
+    for guard in (
+        P2TransportGuardError, P2PageLimitError, P2EmptyPageLimitError, P2PageBytesError,
+        P2IteratorBytesError, P2DeadlineError, P2MalformedContinuationError,
+        P2RelativeContinuationError, P2InsecureContinuationError,
+        P2CrossOriginContinuationError, P2ContinuationPathError, P2ContinuationCycleError,
+        P2UnsafeRedirectError, P2RedirectLimitError, P2UnexpectedStatusError,
+    )
+)
+
+
+@dataclass(frozen=True)
+class P2TransportLimits:
+    """Finite HTTP bounds for one logical P2 search iterator.
+
+    Each iterator belongs to one durable search reservation and a night's
+    reservations are finite, so these bounds also bound total live search
+    traffic; restarting can never renew them.
+    """
+
+    max_pages: int
+    max_consecutive_empty_pages: int
+    max_page_bytes: int
+    max_iterator_bytes: int
+    iterator_deadline_seconds: int
+    connect_timeout_seconds: int
+    read_timeout_seconds: int
+    max_redirects: int
+
+    def __post_init__(self):
+        for name, (minimum, maximum) in _P2_TRANSPORT_BOUNDS.items():
+            value = getattr(self, name)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError(f"{name} must be an integer in [{minimum}, {maximum}].")
+
+    def as_dict(self):
+        return {"schema_version": P2_TRANSPORT_SCHEMA, "pagination": P2_PAGINATION_CONTRACT,
+                "continuation": "absolute-https-same-origin-same-listing-path-never-repeated",
+                "redirects": "same-origin-https-api-prefix-validated-before-request",
+                "termination": "complete-page-then-links-next-null-or-missing",
+                "limit_semantics": "refusal-never-completeness",
+                **{name: getattr(self, name) for name in _P2_TRANSPORT_BOUNDS}}
+
+
+class _GuardedListing:
+    """Provider-owned, finitely bounded replacement for the client's pagination.
+
+    Each call returns an independent lazy iterator: like the client, the next
+    page is requested only when the consumer asks past the previous page.
+    Each HTTP page uses a fresh session, as ``requests.get`` does, so no
+    cookie, connection or session state is shared between pages, iterators or
+    concurrently acquired nights.  Nothing global is patched.
+    """
+
+    def __init__(self, limits, base_url, session_factory, schema_factory):
+        if type(limits) is not P2TransportLimits:
+            raise ValueError("Guarded transport requires exact P2TransportLimits.")
+        if not callable(session_factory) or not callable(schema_factory):
+            raise ValueError("Guarded transport requires session and schema factories.")
+        base = _validated_base_url(base_url)
+        self.limits = limits
+        self.listing_url = urljoin(base, "loci")  # exactly the client's search URL
+        listing = urlsplit(self.listing_url)
+        self._host, self._listing_path = listing.hostname, listing.path
+        self._service_prefix = urlsplit(base).path
+        self._session_factory = session_factory
+        self._schema_factory = schema_factory
+
+    def search(self, query):
+        return self._pages({"sort": _P2_SORT,
+                            "elasticsearch_query[locus_listing]": json.dumps(query)})
+
+    def _pages(self, params):
+        import requests
+
+        limits, url = self.limits, self.listing_url
+        deadline = time.monotonic() + limits.iterator_deadline_seconds
+        first = urlsplit(requests.Request("GET", url, params=params).prepare().url)
+        requested = {(first.path, first.query)}
+        pages = received = empty_run = 0
+        while True:
+            if pages >= limits.max_pages:
+                raise P2PageLimitError("P2 iterator reached its HTTP page ceiling.")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise P2DeadlineError("P2 iterator deadline elapsed.")
+            response = self._request(url, params, limits.max_iterator_bytes - received, remaining)
+            pages += 1
+            received += len(response.content)
+            payload = response.json()  # the client's own decoder and error type
+            items = self._schema_factory().load(payload)
+            yield from items
+            target = self._continuation(payload)
+            if target is None:
+                return  # natural exhaustion: a complete page without links.next
+            empty_run = 0 if items else empty_run + 1
+            if empty_run > limits.max_consecutive_empty_pages:
+                raise P2EmptyPageLimitError("P2 iterator received too many empty continuing pages.")
+            key = self._validated_continuation(target)
+            if key in requested:
+                raise P2ContinuationCycleError("P2 links.next repeats an already requested page.")
+            requested.add(key)
+            url, params = target, None
+
+    @staticmethod
+    def _continuation(payload):
+        # The client reads payload.get("links", {}).get("next"): absent or
+        # null ends iteration.  A links member that is not an object refuses.
+        links = payload.get("links", {}) if isinstance(payload, dict) else None
+        if not isinstance(links, dict):
+            raise P2MalformedContinuationError("P2 JSON:API links member is not an object.")
+        return links.get("next")
+
+    def _validated_continuation(self, target):
+        if (not isinstance(target, str) or not target or not target.isascii()
+                or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in target)):
+            raise P2MalformedContinuationError("P2 links.next is not one plain URL string.")
+        try:
+            parts = urlsplit(target)
+            port, host = parts.port, parts.hostname
+        except ValueError as exc:
+            raise P2MalformedContinuationError("P2 links.next is not a parseable URL.") from exc
+        if not parts.scheme:
+            raise P2RelativeContinuationError("P2 links.next is relative; it is never resolved.")
+        if parts.scheme != "https":
+            raise P2InsecureContinuationError("P2 links.next is not HTTPS.")
+        if parts.username is not None or parts.password is not None or parts.fragment:
+            raise P2MalformedContinuationError("P2 links.next carries credentials or a fragment.")
+        if host != self._host or port not in (None, 443):
+            raise P2CrossOriginContinuationError("P2 links.next leaves the ANTARES API origin.")
+        if parts.path != self._listing_path:
+            raise P2ContinuationPathError("P2 links.next is not the listing being paged.")
+        return parts.path, parts.query
+
+    def _validated_redirect(self, response, requested):
+        location = response.headers.get("Location")
+        if (not isinstance(location, str) or not location or location != location.strip()
+                or not location.isascii()):
+            raise P2UnsafeRedirectError("P2 redirect lacks one plain Location.")
+        base = response.url if isinstance(response.url, str) and response.url else requested
+        target = urljoin(base, location)
+        try:
+            parts = urlsplit(target)
+            port, host = parts.port, parts.hostname
+        except ValueError as exc:
+            raise P2UnsafeRedirectError("P2 redirect target is not parseable.") from exc
+        if (parts.scheme != "https" or host != self._host or port not in (None, 443)
+                or parts.username is not None or parts.password is not None
+                or not parts.path.startswith(self._service_prefix)):
+            raise P2UnsafeRedirectError("P2 redirect leaves the ANTARES API boundary.")
+        return target
+
+    def _request(self, url, params, iterator_budget, remaining):
+        outcome, cancelled = {}, threading.Event()
+
+        def fetch():
+            try:
+                outcome["response"] = self._fetch_page(url, params, iterator_budget, cancelled)
+            except BaseException as exc:  # re-raised below in the consuming thread
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=fetch, name="antares-p2-page", daemon=True)
+        worker.start()
+        worker.join(remaining)
+        if worker.is_alive():
+            # The abandoned page stops at its next chunk or socket timeout and
+            # can never deliver bytes to this (now failed) iterator.
+            cancelled.set()
+            raise P2DeadlineError("P2 iterator deadline elapsed during an HTTP page.")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["response"]
+
+    def _fetch_page(self, url, params, iterator_budget, cancelled):
+        limits = self.limits
+        budget = min(limits.max_page_bytes, iterator_budget)
+        overflow = P2PageBytesError if limits.max_page_bytes <= iterator_budget else P2IteratorBytesError
+        session = self._session_factory()
+        try:
+            for _hop in range(limits.max_redirects + 1):
+                response = session.get(
+                    url, params=params, allow_redirects=False, stream=True,
+                    timeout=(limits.connect_timeout_seconds, limits.read_timeout_seconds))
+                try:
+                    status = int(response.status_code)
+                    if status in _P2_REDIRECT_STATUSES:
+                        url, params = self._validated_redirect(response, url), None
+                        continue
+                    if status >= 400:
+                        raise P2TransportHTTPError(f"ANTARES returned HTTP {status}.")
+                    if status != 200:
+                        raise P2UnexpectedStatusError(f"ANTARES returned unexpected HTTP {status}.")
+                    declared = response.headers.get("Content-Length")
+                    if (isinstance(declared, str) and declared.isascii() and declared.isdigit()
+                            and int(declared) > budget):
+                        raise overflow("P2 response declares more bytes than its ceiling.")
+                    body = bytearray()
+                    for chunk in response.iter_content(_P2_STREAM_CHUNK_BYTES):
+                        if cancelled.is_set():
+                            raise P2DeadlineError("P2 page was abandoned at its deadline.")
+                        body += chunk
+                        if len(body) > budget:
+                            raise overflow("P2 response exceeded its byte ceiling.")
+                    # Exactly how requests caches a consumed body, so the
+                    # client's Response.json() decoding then applies unchanged.
+                    response._content = bytes(body)
+                    return response
+                finally:
+                    response.close()
+            raise P2RedirectLimitError("P2 page exceeded its redirect ceiling.")
+        finally:
+            session.close()
+
+
+def _p2_client_identity(transport, base_url):
+    return {"distribution": "antares-client", "version": PINNED_CLIENT_VERSION,
+            "api_base_url": base_url, "api_timeout_seconds": CLIENT_TIMEOUT_SECONDS,
+            "authentication": "public-search-no-credentials",
+            "pagination_contract": P2_PAGINATION_CONTRACT,
+            "transport_sha256": _sha256_json(transport.as_dict())}
+
+
+def _load_p2_client(provider):
+    """P2 service callables: mocked offline, or the guarded paginator on Arnor."""
+    profile = provider.proof_profile
+    callbacks = (provider._search_fn, provider._get_by_id_fn, provider._connectivity_fn)
+    environment = getattr(provider.capability, "environment", None)
+    if environment == "local-mock" and all(callable(callback) for callback in callbacks):
+        return callbacks
+    if (profile.transport is None or environment != "arnor-commissioning"
+            or type(provider.capability) is not LiveAntaresReadCapability
+            or any(callback is not None for callback in callbacks)):
+        raise LiveCapabilityError(
+            "P2 live search requires a guarded-transport profile and sealed Arnor LIVE_ANTARES_READ.")
+    try:
+        import requests
+        from antares_client._api.schemas import _LocusListingSchema
+        from antares_client.config import config
+        from antares_client.search import get_available_tags, get_by_id
+    except ImportError as exc:
+        raise RuntimeError("The pinned ANTARES client is unavailable.") from exc
+    version = metadata.version("antares-client")
+    if version != PINNED_CLIENT_VERSION:
+        raise RuntimeError(f"Expected antares-client {PINNED_CLIENT_VERSION}; found {version}.")
+    base_url = _validated_base_url(str(config.get("ANTARES_API_BASE_URL", "")))
+    timeout = int(config.get("API_TIMEOUT", CLIENT_TIMEOUT_SECONDS))
+    if timeout != CLIENT_TIMEOUT_SECONDS:
+        raise RuntimeError(
+            f"Phase 6 requires the pinned {CLIENT_TIMEOUT_SECONDS}-second API timeout.")
+    listing = _GuardedListing(profile.transport, base_url, requests.Session,
+                              lambda: _LocusListingSchema(many=True, partial=True))
+    provider._client_identity_cache = _p2_client_identity(profile.transport, base_url)
+    return listing.search, get_by_id, get_available_tags
+
+
+def g663_canary_p2_profile() -> P2ProofProfile:
+    """The one frozen G6.6.3A Jul07/Jul13 canary profile.
+
+    Explicit opt-in only: no default path selects it and no source or
+    artifact registry trusts it.  Any change is a new Control qualification
+    identity (see ``G663_CANARY_P2_PROFILE_SHA256``).
+    """
+    return P2ProofProfile(
+        max_depth=18, max_nodes_per_root=511, max_nodes_per_night=4095,
+        max_search_attempts=250_000, crash_reserve=4, max_event_bytes=33_554_432,
+        transport=P2TransportLimits(
+            max_pages=64, max_consecutive_empty_pages=2, max_page_bytes=16_777_216,
+            max_iterator_bytes=67_108_864, iterator_deadline_seconds=600,
+            connect_timeout_seconds=60, read_timeout_seconds=60, max_redirects=2))
