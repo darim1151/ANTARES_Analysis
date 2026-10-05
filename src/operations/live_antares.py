@@ -2423,6 +2423,17 @@ class P2TransportLimits:
                 **{name: getattr(self, name) for name in _P2_TRANSPORT_BOUNDS}}
 
 
+def _p2_plain_url(value):
+    """One printable-ASCII URL: no whitespace, control character or backslash.
+
+    URL parsers disagree on these (``urlsplit`` drops tabs and keeps ``\\`` in
+    the authority; urllib3 splits on ``\\``), so they are refused before any
+    origin decision rather than interpreted.
+    """
+    return (isinstance(value, str) and bool(value) and value.isascii() and "\\" not in value
+            and not any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value))
+
+
 class _GuardedListing:
     """Provider-owned, finitely bounded replacement for the client's pagination.
 
@@ -2493,8 +2504,7 @@ class _GuardedListing:
         return links.get("next")
 
     def _validated_continuation(self, target):
-        if (not isinstance(target, str) or not target or not target.isascii()
-                or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in target)):
+        if not _p2_plain_url(target):
             raise P2MalformedContinuationError("P2 links.next is not one plain URL string.")
         try:
             parts = urlsplit(target)
@@ -2515,8 +2525,7 @@ class _GuardedListing:
 
     def _validated_redirect(self, response, requested):
         location = response.headers.get("Location")
-        if (not isinstance(location, str) or not location or location != location.strip()
-                or not location.isascii()):
+        if not _p2_plain_url(location):
             raise P2UnsafeRedirectError("P2 redirect lacks one plain Location.")
         base = response.url if isinstance(response.url, str) and response.url else requested
         target = urljoin(base, location)
@@ -2526,7 +2535,7 @@ class _GuardedListing:
         except ValueError as exc:
             raise P2UnsafeRedirectError("P2 redirect target is not parseable.") from exc
         if (parts.scheme != "https" or host != self._host or port not in (None, 443)
-                or parts.username is not None or parts.password is not None
+                or parts.username is not None or parts.password is not None or parts.fragment
                 or not parts.path.startswith(self._service_prefix)):
             raise P2UnsafeRedirectError("P2 redirect leaves the ANTARES API boundary.")
         return target
@@ -2552,6 +2561,26 @@ class _GuardedListing:
             raise outcome["error"]
         return outcome["response"]
 
+    def _send(self, session, url, params):
+        """One HTTP exchange through the session's own transport adapter.
+
+        ``Session.send`` pre-computes ``Response.next`` even with
+        ``allow_redirects=False``, which reads a redirect response's whole body
+        without any ceiling.  The request and environment settings here are
+        exactly those ``Session.request`` derives for ``requests.get``; only
+        that redirect bookkeeping is skipped, so every body this page reads
+        passes through the bounded reader in :meth:`_fetch_page`.
+        """
+        import requests
+
+        limits = self.limits
+        prepared = session.prepare_request(requests.Request("GET", url, params=params or {}))
+        settings = session.merge_environment_settings(prepared.url, {}, True, None, None)
+        return session.get_adapter(prepared.url).send(
+            prepared, stream=True, verify=settings["verify"], cert=settings["cert"],
+            proxies=settings["proxies"],
+            timeout=(limits.connect_timeout_seconds, limits.read_timeout_seconds))
+
     def _fetch_page(self, url, params, iterator_budget, cancelled):
         limits = self.limits
         budget = min(limits.max_page_bytes, iterator_budget)
@@ -2559,9 +2588,7 @@ class _GuardedListing:
         session = self._session_factory()
         try:
             for _hop in range(limits.max_redirects + 1):
-                response = session.get(
-                    url, params=params, allow_redirects=False, stream=True,
-                    timeout=(limits.connect_timeout_seconds, limits.read_timeout_seconds))
+                response = self._send(session, url, params)
                 try:
                     status = int(response.status_code)
                     if status in _P2_REDIRECT_STATUSES:
@@ -2634,17 +2661,29 @@ def _load_p2_client(provider):
     return listing.search, get_by_id, get_available_tags
 
 
+# SHA-256 of the canonical ``as_dict()`` JSON of the frozen canary profile and
+# of its transport limits.  The transport digest is also the client identity's
+# ``transport_sha256``; the profile digest is every P2 event's ``profile_sha256``.
+G663_CANARY_P2_PROFILE_SHA256 = "d1dfee3b066e2a5f90f1b4842d1184c9e6bd32d4a1b772d3819f082b4b189684"
+G663_CANARY_TRANSPORT_SHA256 = "41ad48a1c82a585498ce7838672962dfc5583bc91b4e49c497d9a62240dd0650"
+
+
 def g663_canary_p2_profile() -> P2ProofProfile:
     """The one frozen G6.6.3A Jul07/Jul13 canary profile.
 
     Explicit opt-in only: no default path selects it and no source or
     artifact registry trusts it.  Any change is a new Control qualification
-    identity (see ``G663_CANARY_P2_PROFILE_SHA256``).
+    identity, so the profile refuses to exist unless its canonical bytes still
+    hash to ``G663_CANARY_P2_PROFILE_SHA256``.
     """
-    return P2ProofProfile(
+    profile = P2ProofProfile(
         max_depth=18, max_nodes_per_root=511, max_nodes_per_night=4095,
         max_search_attempts=250_000, crash_reserve=4, max_event_bytes=33_554_432,
         transport=P2TransportLimits(
             max_pages=64, max_consecutive_empty_pages=2, max_page_bytes=16_777_216,
             max_iterator_bytes=67_108_864, iterator_deadline_seconds=600,
             connect_timeout_seconds=60, read_timeout_seconds=60, max_redirects=2))
+    if (_sha256_json(profile.as_dict()) != G663_CANARY_P2_PROFILE_SHA256
+            or _sha256_json(profile.transport.as_dict()) != G663_CANARY_TRANSPORT_SHA256):
+        raise RuntimeError("The frozen G6.6.3A canary profile identity changed.")
+    return profile

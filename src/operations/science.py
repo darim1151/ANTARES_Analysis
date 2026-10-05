@@ -1645,6 +1645,15 @@ def _validate_phase6_manifest_evidence(
             "pagination_contract": "mocked-jsonapi-links-next-until-null",
         },
     }.get(capability_environment)
+    # G6.6.3A: a trusted guarded-transport P2 profile searched Arnor only through
+    # its bounded paginator; validate_p2_query_result above already proved that
+    # exact identity, including the transport limits' digest.  P1 is unaffected.
+    if (expected_profile is not None and capability_environment == "arnor-commissioning"
+            and getattr(expected_profile, "transport", None) is not None):
+        expected_client_identity = {
+            "distribution": "antares-client",
+            "pagination_contract": "p2-guarded-jsonapi-links-next-v1",
+        }
     if not isinstance(client, dict) or (
         expected_client_identity is None
         or client.get("distribution") != expected_client_identity["distribution"]
