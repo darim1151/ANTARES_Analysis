@@ -1466,6 +1466,7 @@ class FailClosedMatrixTests(OfflineTestCase):
         guard, retry, malformed = "p2_transport_guard", "p2_retry_exhausted", "p2_malformed"
         return [
             # name, pages, exception type, reason, validated rows, attempts, HTTP requests
+            # G6.6.4-R3: retryable failures now use all 4 attempts; guard/malformed stay at 1.
             ("self-loop", {None: lambda s, r, i: page(f[:10], next=r.url)},
              GUARD + "P2ContinuationCycleError", guard, 10, 1, 1),
             ("two-page-cycle", {None: page(f[:10], next=link("a")), "a": page(f[10:20], next=link("b")),
@@ -1481,15 +1482,15 @@ class FailClosedMatrixTests(OfflineTestCase):
                                                                        for n in range(1, 5)}},
              GUARD + "P2IteratorBytesError", guard, 4, 1, 5),
             ("read-timeout", {None: raising(requests.exceptions.ReadTimeout("read timed out"))},
-             "requests.exceptions.ReadTimeout", retry, 0, 2, 2),
+             "requests.exceptions.ReadTimeout", retry, 0, 4, 4),
             ("connect-timeout", {None: raising(requests.exceptions.ConnectTimeout("connect timed out"))},
-             "requests.exceptions.ConnectTimeout", retry, 0, 2, 2),
+             "requests.exceptions.ConnectTimeout", retry, 0, 4, 4),
             ("malformed-json", {None: {"body": b"<html>gateway</html>"}},
-             "requests.exceptions.JSONDecodeError", retry, 0, 2, 2),
+             "requests.exceptions.JSONDecodeError", retry, 0, 4, 4),
             ("malformed-jsonapi-type", {None: {"json_body": {"data": [{"type": "wrong", "id": "x", "attributes": {}}]}}},
              "marshmallow_jsonapi.exceptions.IncorrectTypeError", malformed, 0, 1, 1),
             ("malformed-jsonapi-null-data", {None: {"json_body": {"data": None}}},
-             "marshmallow.exceptions.ValidationError", retry, 0, 2, 2),
+             "marshmallow.exceptions.ValidationError", retry, 0, 4, 4),
             ("malformed-continuation", {None: page(f[:10], next=7)},
              GUARD + "P2MalformedContinuationError", guard, 10, 1, 1),
             ("relative-continuation", {None: page(f[:10], next="/v1/loci?p=2")},
@@ -1505,10 +1506,10 @@ class FailClosedMatrixTests(OfflineTestCase):
              GUARD + "P2RedirectLimitError", guard, 0, 1, 3),
             ("http-503-after-valid-pages", {**pages_of([f[:10], f[10:20]], [None, "2"]), "2": page(f[10:20], next=link(3)),
                                             "3": {"status": 503, "body": b"busy"}},
-             GUARD + "P2TransportHTTPError", retry, 20, 2, 6),
+             GUARD + "P2TransportHTTPError", retry, 20, 4, 12),
             ("reset-after-valid-pages", {None: page(f[:10], next=link(2)), "2": page(f[10:20], next=link(3)),
                                          "3": raising(requests.exceptions.ConnectionError("reset"))},
-             "requests.exceptions.ConnectionError", retry, 20, 2, 6),
+             "requests.exceptions.ConnectionError", retry, 20, 4, 12),
             ("unexpected-status-after-valid-pages", {None: page(f[:10], next=link(2)), "2": page(f[10:20], next=link(3)),
                                                      "3": {"status": 206, "body": b"{}"}},
              GUARD + "P2UnexpectedStatusError", guard, 20, 1, 3),
@@ -1908,11 +1909,10 @@ class G663FirewallTests(unittest.TestCase):
         self.assertEqual(new["=_P2_MAX_QUERY_ATTEMPTS"], "_P2_MAX_QUERY_ATTEMPTS = 4")
         self.assertEqual(new["_p2_replay_events"].replace("<= _P2_MAX_QUERY_ATTEMPTS:", "<= 2:"), old["_p2_replay_events"])
         self.assertEqual(new["validate_p2_query_result"].count("_P2_MAX_QUERY_ATTEMPTS"), 1)
-        new["validate_p2_query_result"] = new["validate_p2_query_result"].replace(
-            'profile, _P2_MAX_QUERY_ATTEMPTS)', 'profile, details["execution_policy"]["max_query_attempts"])')
         new["_validate_phase6_manifest_evidence"] = new["_validate_phase6_manifest_evidence"].replace(
             "expected_profile, _P2_MAX_QUERY_ATTEMPTS)", "expected_profile, max_query_attempts)")
-        self.assertEqual(new["validate_p2_query_result"], old["validate_p2_query_result"])
+        self.assertIn("    replay = _p2_replay_events(details.get(\"p2_events\"), request.mjd_min, request.mjd_max,\n"
+                      "                               profile, _P2_MAX_QUERY_ATTEMPTS)", new["validate_p2_query_result"])
         block = re.search(r"\n    # G6\.6\.3A: a trusted guarded-transport P2 profile.*?\n        \}\n", new["_validate_phase6_manifest_evidence"], re.S)
         self.assertIsNotNone(block)
         self.assertIn("if (expected_profile is not None", block.group(0))
