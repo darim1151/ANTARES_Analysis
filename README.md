@@ -6,6 +6,18 @@ This project still uses ANTARES as the broker/source. The workflows can run on
 Middle Earth or Rubin Science Platform (RSP); neither environment is a direct
 Rubin Butler/TAP replacement.
 
+## Release 0.4.8 — G6.6.3D canary
+
+This immutable canary release preserves every runtime source file from
+accepted commit `af27d66a583287acb19ba32f796a975a00fc1486` and changes the
+package version to 0.4.8. It retains the frozen P2 profile and process
+transport, with production P2 trust absent.
+
+The G6.6.4 Jul07 live canary failed closed on an insecure pagination
+continuation (`P2InsecureContinuationError`). Jul13 and production
+qualification did not proceed. Exact release and operational evidence is
+recorded in [the G6.6.4 packet](docs/operations/G6.6.4_ONEPASS_FINALIZATION.md).
+
 ## Release 0.4.7
 
 This patch release freezes the accepted V3-G6.4B saved-acquisition adoption
