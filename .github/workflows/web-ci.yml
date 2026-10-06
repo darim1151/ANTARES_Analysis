@@ -64,6 +64,18 @@ jobs:
       - name: Validate bundled public data
         run: pnpm run validate:data
 
+      - name: Test Observatory kernel and scientific state
+        run: pnpm run test:observatory
+
+      - name: Test Observatory bundle validator
+        run: pnpm run validate:observatory:test
+
+      - name: Validate Observatory First-Light bundle
+        run: pnpm run validate:observatory
+
+      - name: Verify Observatory bundle is reproducible from its inputs
+        run: pnpm run observatory:check
+
       - name: Type-check
         run: pnpm run typecheck
 
@@ -96,6 +108,12 @@ jobs:
           grep -q "SkyPulse" "${{ runner.temp }}/skypulse-home.html"
           curl --fail --silent --show-error http://127.0.0.1:3000/glossary >/dev/null
           curl --fail --silent --show-error http://127.0.0.1:3000/methodology >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:3000/observatory \
+            > "${{ runner.temp }}/observatory.html"
+          grep -q "Unified Scientific Observatory" "${{ runner.temp }}/observatory.html"
+          curl --fail --silent --show-error \
+            http://127.0.0.1:3000/observatory/first-light/manifest.json \
+            | grep -q '"bundle_class": "FIRST_LIGHT_FIXTURE"'
           kill "$server_pid"
           wait "$server_pid" || true
           trap - EXIT

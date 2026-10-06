@@ -45,3 +45,41 @@ current Next.js 14 line must be migrated to a supported release and pass a
 dedicated UI/accessibility regression phase before public hosting. CI still
 builds and starts the current application so its declared `start` command and
 all static routes cannot silently regress while that migration remains pending.
+
+## Unified Scientific Observatory (First Light)
+
+`/observatory` is a research workspace over broker-native ANTARES and Fink
+domains: one shared scientific state (basis + selection + focus + lens +
+presentation), no shared ontology. It reads one integrity-sealed bundle from
+`public/observatory/first-light/` and never queries a broker at runtime.
+
+The First-Light bundle is a **fixture basis** (`bundle_class:
+FIRST_LIGHT_FIXTURE`, `science_ready: false`):
+
+- ANTARES: an adapter over the SkyPulse legacy demo above. Positions, tags and
+  measurement counts are `LEGACY_SAMPLE`; dates and light curves are
+  `SYNTHETIC_DEMO`; magnitudes the demo exporter clipped are null.
+- Fink: committed acquisition evidence extracted read-only at
+  `darim1151/Fink_Alerts-Analysis-LSST@fd02c8e` plus a `SYNTHETIC_FIXTURE`
+  population confined to the admitted Month-1 window. Month-2 is
+  `UNQUALIFIED` (delivery-validated, uncharacterized, not admitted, no counts,
+  no rate comparison). Month-3 is `UNAVAILABLE` (`PRODUCER_COMPLETE`,
+  `NOT_DELIVERY_VALIDATED`, `NOT_ADMITTED`), never `MISSING`.
+- No cross-broker relation exists in this basis.
+
+```bash
+pnpm run test:observatory            # kernel + scientific-state tests
+pnpm run validate:observatory        # contract, evidence and integrity gate
+pnpm run validate:observatory:test   # validator mutation tests
+pnpm run observatory:check           # bundle == deterministic generator output
+pnpm run observatory:build           # regenerate after an input changes
+```
+
+Contract: `types/observatory.ts`. Each domain ships `time`, `sky`,
+`entities`, `features` and lazily loaded `detail/NN.json` shards; `basis`,
+`capabilities` and `provenance` are shared. Every file is listed with its
+sha256 in `manifest.json`, and the reader refuses any payload whose digest
+does not match. A real adapter replaces one domain's payloads and its basis
+pin, and must keep native identifiers (int64 as decimal strings), declare
+time scales, separate coverage from density and label evidence per field;
+the validator enforces these rules.

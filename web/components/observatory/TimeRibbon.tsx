@@ -153,9 +153,8 @@ export default function TimeRibbon() {
               <span className="uso-lanelabel-q">
                 {ENTITY_NOUN[model.domains[lane.d].bundle.entities.entity_kind].many} / date · max {fmtInt(lane.max)}
               </span>
-              <span className="uso-lanelabel-t">
+              <span className="uso-lanelabel-t" title={`${lane.time.semantics.scale_basis} ${lane.time.semantics.date_binning}`}>
                 {lane.time.semantics.stored_field} · MJD {lane.time.semantics.scale}
-                {lane.d === "antares" ? " (treated)" : ""}
               </span>
             </div>
           ))}
