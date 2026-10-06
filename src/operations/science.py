@@ -1457,7 +1457,7 @@ def _validate_phase6_manifest_evidence(
     if (
         not isinstance(execution_policy, dict)
         or type(max_query_attempts) is not int
-        or not 1 <= max_query_attempts <= 2
+        or not 1 <= max_query_attempts <= (2 if expected_profile is None else 4)
         or type(max_fetch_attempts_policy) is not int
         or not 1 <= max_fetch_attempts_policy <= 3
         or type(max_fetch_workers_policy) is not int
@@ -1823,7 +1823,7 @@ def _p2_replay_events(events, mjd_min, mjd_max, profile, attempt_limit):
         except (KeyError, ValueError, TypeError):
             return False
 
-    if not isinstance(events, list) or type(attempt_limit) is not int or not 1 <= attempt_limit <= 2:
+    if not isinstance(events, list) or type(attempt_limit) is not int or not 1 <= attempt_limit <= 4:
         refuse("P2 event list/attempt policy is invalid.")
     initial = _phase6_initial_tiles(mjd_min, mjd_max)
     frontier = deque(node(tile, f"i{index:05d}") for index, tile in enumerate(initial))
@@ -2062,7 +2062,7 @@ def validate_p2_query_result(request, result, profile):
     if (not isinstance(policy, dict) or set(policy) != set(fixed_policy) | variable_keys
             or _phase6_json_hash({key: policy.get(key) for key in fixed_policy}) != _phase6_json_hash(fixed_policy)
             or any(type(policy.get(key)) is not int or not 1 <= policy[key] <= upper for key, upper in
-                   (("max_query_attempts", 2), ("max_fetch_attempts_per_object", 3), ("max_fetch_workers", 4)))
+                   (("max_query_attempts", 4), ("max_fetch_attempts_per_object", 3), ("max_fetch_workers", 4)))
             or type(policy.get("retry_delay_seconds")) not in (int, float)
             or not math.isfinite(policy["retry_delay_seconds"]) or not 0 <= policy["retry_delay_seconds"] <= 5):
         _raise_artifact("p2_policy_invalid", "P2 execution policy is outside exact bounded qualification.")

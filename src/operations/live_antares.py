@@ -60,6 +60,11 @@ PHASE6_TARGET_DATE_UTC = "2026-06-27"
 PHASE6_MJD_MIN = 61218.0
 PHASE6_MJD_MAX = 61219.0
 MAX_QUERY_ATTEMPTS = 2
+# G6.6.4-R3: P2 (explicit proof profile) tolerates longer transient network
+# interruptions.  P1 and every profile-less caller keep the frozen 2-attempt,
+# 0.5-second policy.  Backoff is deterministic: delay * attempt, no jitter.
+P2_MAX_QUERY_ATTEMPTS = 4
+P2_RETRY_DELAY_SECONDS = 5.0
 MAX_FETCH_ATTEMPTS = 3
 MAX_FETCH_WORKERS = 4
 CLIENT_TIMEOUT_SECONDS = 60
@@ -497,6 +502,13 @@ def _retryable_query_error(error: BaseException) -> bool:
     return isinstance(error, JSONDecodeError)
 
 
+def default_query_policy(proof_profile: Any) -> Tuple[int, float]:
+    """Frozen (max_query_attempts, retry_delay_seconds) for a provider profile."""
+    if proof_profile is None:
+        return MAX_QUERY_ATTEMPTS, 0.5
+    return P2_MAX_QUERY_ATTEMPTS, P2_RETRY_DELAY_SECONDS
+
+
 def _validated_base_url(value: str) -> str:
     parsed = urlsplit(str(value))
     if (
@@ -560,10 +572,10 @@ class LiveAntaresProvider:
         initial_tiles_fn: Optional[
             Callable[[float, float], Iterable[Mapping[str, float]]]
         ] = None,
-        max_query_attempts: int = 2,
+        max_query_attempts: Optional[int] = None,
         max_fetch_attempts: int = 3,
         max_fetch_workers: int = 4,
-        retry_delay_seconds: float = 0.5,
+        retry_delay_seconds: Optional[float] = None,
         clock: Callable[[], datetime] = _utc_now,
         monotonic: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
@@ -571,6 +583,14 @@ class LiveAntaresProvider:
     ) -> None:
         if type(capability) is not LiveAntaresReadCapability:
             raise LiveCapabilityError("A sealed live-read capability is required.")
+        default_attempts, default_delay = default_query_policy(proof_profile)
+        if max_query_attempts is None:
+            max_query_attempts = default_attempts
+        if retry_delay_seconds is None:
+            retry_delay_seconds = default_delay
+        query_attempt_ceiling = (
+            MAX_QUERY_ATTEMPTS if proof_profile is None else P2_MAX_QUERY_ATTEMPTS
+        )
         for name, value in (
             ("max_query_attempts", max_query_attempts),
             ("max_fetch_attempts", max_fetch_attempts),
@@ -578,8 +598,8 @@ class LiveAntaresProvider:
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer.")
-        if max_query_attempts > MAX_QUERY_ATTEMPTS:
-            raise ValueError(f"max_query_attempts may not exceed {MAX_QUERY_ATTEMPTS}.")
+        if max_query_attempts > query_attempt_ceiling:
+            raise ValueError(f"max_query_attempts may not exceed {query_attempt_ceiling}.")
         if max_fetch_attempts > MAX_FETCH_ATTEMPTS:
             raise ValueError(f"max_fetch_attempts may not exceed {MAX_FETCH_ATTEMPTS}.")
         if max_fetch_workers > MAX_FETCH_WORKERS:

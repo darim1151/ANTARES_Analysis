@@ -26,7 +26,7 @@ from .backfill import (
     RANGE_PRIOR_FREE_ACQUISITION_ATTESTATIONS,
 )
 from .live_antares import (
-    LIVE_ANTARES_READ, LiveAntaresReadCapability, LiveAntaresProvider,
+    LIVE_ANTARES_READ, LiveAntaresReadCapability, LiveAntaresProvider, default_query_policy,
     _LIVE_READ_TOKEN, _make_initial_tiles, _real_directory, _scientific_query_contract, night_mjd_interval,
 )
 from .publication import (
@@ -262,10 +262,9 @@ class LiveRangeAdapter:
     def execution_policy(self):
         # Same bounded defaults as the existing live provider, without issuing a read.
         provider = object.__new__(LiveAntaresProvider)
-        provider.max_query_attempts = 2
+        provider.max_query_attempts, provider.retry_delay_seconds = default_query_policy(self.proof_profile)
         provider.max_fetch_attempts = 3
         provider.max_fetch_workers = 4
-        provider.retry_delay_seconds = 0.5
         provider.proof_profile = self.proof_profile
         return provider.execution_policy()
 
@@ -300,8 +299,9 @@ class LiveRangeAdapter:
         provider.capability = types.SimpleNamespace(target_date_utc=request.date_utc, environment="journal-replay")
         provider._search_fn = provider._get_by_id_fn = provider._connectivity_fn = refuse
         provider._initial_tiles_fn, provider._initial_tiles_overridden = _make_initial_tiles, False
-        provider.max_query_attempts, provider.max_fetch_attempts, provider.max_fetch_workers = 2, 3, 4
-        provider.retry_delay_seconds, provider.sleeper = 0.5, refuse
+        provider.max_query_attempts, provider.retry_delay_seconds = default_query_policy(self.proof_profile)
+        provider.max_fetch_attempts, provider.max_fetch_workers = 3, 4
+        provider.sleeper = refuse
         provider.clock, provider.monotonic = _utc_now, time.monotonic
         provider._client_identity_cache = None
         provider.proof_profile = self.proof_profile

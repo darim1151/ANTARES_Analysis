@@ -455,10 +455,11 @@ class SourceProfile:
             raise BackfillRefused("Source profile requires exact finite provider identities and a trusted proof profile.")
 
     def execution_policy(self):
-        from .live_antares import LiveAntaresProvider
+        from .live_antares import LiveAntaresProvider, default_query_policy
         provider = object.__new__(LiveAntaresProvider)
-        provider.max_query_attempts, provider.max_fetch_attempts, provider.max_fetch_workers = 2, 3, 4
-        provider.retry_delay_seconds, provider.proof_profile = 0.5, self.proof_profile
+        provider.max_query_attempts, provider.retry_delay_seconds = default_query_policy(self.proof_profile)
+        provider.max_fetch_attempts, provider.max_fetch_workers = 3, 4
+        provider.proof_profile = self.proof_profile
         return provider.execution_policy()
 
     def scientific_contract(self, request):

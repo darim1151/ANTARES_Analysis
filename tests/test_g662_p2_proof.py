@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import pandas as pd
+from requests import exceptions as requests_exceptions
 
 import v3_fixtures as fixtures
 from test_operations_phase6 import FakeLocus, _body_matches_locus
@@ -184,6 +185,84 @@ class P2ProofTests(unittest.TestCase):
         self.assertEqual(result.evidence.details["retry_count"], 1)
         self.assertEqual(result.evidence.details["partial_rows_discarded"], 1)
         self.assertTrue(result.loci.empty)
+
+    def _first_tile_partial(self, name):
+        first = L._make_initial_tiles(self.request.mjd_min, self.request.mjd_max)[0]
+        return FakeLocus(name, mjd=(first["mjd_min"] + first["mjd_max"]) / 2,
+                         ra=(first["ra_min"] + first["ra_max"]) / 2,
+                         dec=(first["dec_min"] + first["dec_max"]) / 2)
+
+    def test_r3_policy_is_four_attempts_for_p2_and_unchanged_for_p1(self):
+        capability = fixtures.mock_read_capability(self.root, self.root.name, NIGHT, RELEASE)
+        callables = dict(search_fn=lambda _: [], get_by_id_fn=lambda _: None, connectivity_fn=lambda: [])
+        p1 = L.LiveAntaresProvider(capability, **callables)
+        p2 = L.LiveAntaresProvider(capability, proof_profile=test_profile(), **callables)
+        self.assertEqual((p1.max_query_attempts, p1.retry_delay_seconds), (2, 0.5))
+        self.assertEqual((p2.max_query_attempts, p2.retry_delay_seconds), (4, 5.0))
+        self.assertEqual(R.LiveRangeAdapter(self.root, RELEASE, None).execution_policy(), p1.execution_policy())
+        self.assertEqual(R.LiveRangeAdapter(self.root, RELEASE, None, proof_profile=test_profile()).execution_policy(),
+                         p2.execution_policy())
+        with self.assertRaises(ValueError):
+            L.LiveAntaresProvider(capability, max_query_attempts=3, **callables)
+        with self.assertRaises(ValueError):
+            L.LiveAntaresProvider(capability, proof_profile=test_profile(), max_query_attempts=5, **callables)
+
+    def test_r3_two_transient_failures_then_success_discards_every_partial(self):
+        calls, sleeps = 0, []
+        def transient(body):
+            nonlocal calls
+            calls += 1
+            if calls <= 2:
+                yield self._first_tile_partial(f"partial-{calls}")
+                raise ConnectionError("transient")
+            return
+        provider = provider_for(self.root, [], test_profile(), search=transient)
+        provider.sleeper = sleeps.append
+        result = provider.query(self.request)
+        S.validate_p2_query_result(self.request, result, test_profile())
+        self.assertTrue(result.clean)
+        self.assertEqual(sleeps, [5.0, 10.0])
+        self.assertEqual(result.evidence.details["retry_count"], 2)
+        self.assertEqual(result.evidence.details["partial_rows_discarded"], 2)
+        self.assertTrue(result.loci.empty)
+        self.assertEqual(result.evidence.details["terminal_evidence"], "natural-exhaustion-below-50")
+
+    def test_r3_retry_budget_exhaustion_is_exactly_four_attempts_and_fails_closed(self):
+        calls, sleeps = 0, []
+        def outage(body):
+            nonlocal calls
+            calls += 1
+            yield self._first_tile_partial(f"partial-{calls}")
+            raise requests_exceptions.ConnectTimeout("never retain")
+        provider = provider_for(self.root, [], test_profile(), search=outage)
+        provider.sleeper = sleeps.append
+        result = provider.query(self.request)
+        self.assertFalse(result.clean)
+        self.assertEqual(calls, 4)
+        self.assertEqual(sleeps, [5.0, 10.0, 15.0])
+        self.assertEqual(result.evidence.errors[0].code, "p2_retry_exhausted")
+        self.assertEqual(result.evidence.details["completion_classification"], "INCOMPLETE")
+        self.assertTrue(result.loci.empty)
+        self.assertNotIn("never retain", json.dumps(result.evidence.details["p2_events"]))
+
+    def test_r3_malformed_and_validation_failures_gain_no_retries(self):
+        calls = 0
+        def malformed(_body):
+            nonlocal calls
+            calls += 1
+            yield FakeLocus("out-of-domain", mjd=0.)
+        _, result = self.run_query(search=malformed)
+        self.assertEqual(calls, 1)
+        self.assertEqual(result.evidence.errors[0].code, "p2_malformed")
+        calls = 0
+        def value_error(_body):
+            nonlocal calls
+            calls += 1
+            raise ValueError("semantic failure")
+            yield
+        _, result = self.run_query(search=value_error)
+        self.assertEqual(calls, 1)
+        self.assertEqual(result.evidence.errors[0].code, "p2_malformed")
 
     def test_exact_split_boundaries_and_midpoint_collapse(self):
         import math
