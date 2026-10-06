@@ -1457,7 +1457,7 @@ def _validate_phase6_manifest_evidence(
     if (
         not isinstance(execution_policy, dict)
         or type(max_query_attempts) is not int
-        or not 1 <= max_query_attempts <= (2 if expected_profile is None else 4)
+        or not 1 <= max_query_attempts <= 2
         or type(max_fetch_attempts_policy) is not int
         or not 1 <= max_fetch_attempts_policy <= 3
         or type(max_fetch_workers_policy) is not int
@@ -1498,7 +1498,7 @@ def _validate_phase6_manifest_evidence(
     p2_replay = None
     if expected_profile is not None:
         p2_replay = _p2_replay_events(query_details.get("p2_events"), mjd_min, mjd_max,
-                                     expected_profile, max_query_attempts)
+                                     expected_profile, _P2_MAX_QUERY_ATTEMPTS)
         _validate_p2_details(query_details, p2_replay)
         # Artifact validation enforces the same complete, typed identity proof
         # as strict saved-source verification, in addition to final-frame proof.
@@ -1789,6 +1789,10 @@ def _validate_phase6_manifest_evidence(
 QUALIFIED_P2_PROFILES = ()  # Test qualification injects exact profiles; none are production-approved.
 
 
+# G6.6.4-R3: the independently frozen P2 per-tile attempt ceiling (v0.4.9: 2).
+_P2_MAX_QUERY_ATTEMPTS = 4
+
+
 def _p2_replay_events(events, mjd_min, mjd_max, profile, attempt_limit):
     """Independent verifier: never calls the provider reducer or split oracle."""
     from .query_progress import decode_records
@@ -1823,7 +1827,7 @@ def _p2_replay_events(events, mjd_min, mjd_max, profile, attempt_limit):
         except (KeyError, ValueError, TypeError):
             return False
 
-    if not isinstance(events, list) or type(attempt_limit) is not int or not 1 <= attempt_limit <= 4:
+    if not isinstance(events, list) or type(attempt_limit) is not int or not 1 <= attempt_limit <= _P2_MAX_QUERY_ATTEMPTS:
         refuse("P2 event list/attempt policy is invalid.")
     initial = _phase6_initial_tiles(mjd_min, mjd_max)
     frontier = deque(node(tile, f"i{index:05d}") for index, tile in enumerate(initial))
@@ -2062,7 +2066,7 @@ def validate_p2_query_result(request, result, profile):
     if (not isinstance(policy, dict) or set(policy) != set(fixed_policy) | variable_keys
             or _phase6_json_hash({key: policy.get(key) for key in fixed_policy}) != _phase6_json_hash(fixed_policy)
             or any(type(policy.get(key)) is not int or not 1 <= policy[key] <= upper for key, upper in
-                   (("max_query_attempts", 4), ("max_fetch_attempts_per_object", 3), ("max_fetch_workers", 4)))
+                   (("max_query_attempts", 2), ("max_fetch_attempts_per_object", 3), ("max_fetch_workers", 4)))
             or type(policy.get("retry_delay_seconds")) not in (int, float)
             or not math.isfinite(policy["retry_delay_seconds"]) or not 0 <= policy["retry_delay_seconds"] <= 5):
         _raise_artifact("p2_policy_invalid", "P2 execution policy is outside exact bounded qualification.")
@@ -2093,7 +2097,7 @@ def validate_p2_query_result(request, result, profile):
     except (KeyError, TypeError, ValueError) as exc:
         raise ArtifactValidationError(_artifact_issue("p2_timing_invalid", "P2 timing evidence is invalid.")) from exc
     replay = _p2_replay_events(details.get("p2_events"), request.mjd_min, request.mjd_max,
-                               profile, details["execution_policy"]["max_query_attempts"])
+                               profile, _P2_MAX_QUERY_ATTEMPTS)
     _validate_p2_details(details, replay)
     if list(replay["frame"].columns) != list(result.loci.columns) or not replay["frame"].equals(result.loci):
         _raise_artifact("p2_query_frame_invalid", "P2 ordered keep-last frame differs from independent replay.")

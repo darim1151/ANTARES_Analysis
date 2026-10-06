@@ -1857,7 +1857,18 @@ class G663FirewallTests(unittest.TestCase):
         body_end = reverted.index("\n\n    raw = pd.DataFrame(")
         body = reverted[body_start + len("    try:\n"):body_end]
         dedented = "\n".join(line[4:] if line.strip() else line for line in body.splitlines())
-        self.assertEqual(reverted[:body_start] + dedented + reverted[body_end:], old["_run_p2_query"])
+        # G6.6.4-R3: exactly three P2-only edits (frozen 4-attempt/5 s policy and its evidence record).
+        r3_edits = (
+            ("P2_MAX_QUERY_ATTEMPTS)\n    events = list(", "provider.max_query_attempts)\n    events = list("),
+            ("provider.sleeper(P2_RETRY_DELAY_SECONDS * state", "provider.sleeper(provider.retry_delay_seconds * state"),
+            ('        "p2_retry_policy": {"max_attempts_per_tile": P2_MAX_QUERY_ATTEMPTS, '
+             '"backoff_seconds_per_attempt": P2_RETRY_DELAY_SECONDS},\n', ""),
+        )
+        r3_body = reverted[:body_start] + dedented + reverted[body_end:]
+        for edited, original in r3_edits:
+            self.assertEqual(r3_body.count(edited), 1, edited)
+            r3_body = r3_body.replace(edited, original)
+        self.assertEqual(r3_body, old["_run_p2_query"])
         self.assertTrue(all(name[1:].startswith(("P2_", "_P2_", "G663_")) for name in added if name.startswith("=")))
         # Inside the provider class only _load_client differs, and only by its P2 branch.
         def methods(source):
@@ -1889,9 +1900,19 @@ class G663FirewallTests(unittest.TestCase):
         old_source, new_source = self.baseline("src/operations/science.py"), (ROOT / "src/operations/science.py").read_text()
         _t, old = self.definitions(old_source)
         _t, new = self.definitions(new_source)
-        self.assertEqual(set(old), set(new))
+        # G6.6.4-R3: one new P2-only constant; its use changes the P2 replay and its two callers.
+        self.assertEqual(set(new) - set(old), {"=_P2_MAX_QUERY_ATTEMPTS"})
+        self.assertEqual(set(old), set(new) - {"=_P2_MAX_QUERY_ATTEMPTS"})
         self.assertEqual({name for name in old if old[name] != new[name]},
-                         {"validate_p2_query_result", "_validate_phase6_manifest_evidence"})
+                         {"validate_p2_query_result", "_validate_phase6_manifest_evidence", "_p2_replay_events"})
+        self.assertEqual(new["=_P2_MAX_QUERY_ATTEMPTS"], "_P2_MAX_QUERY_ATTEMPTS = 4")
+        self.assertEqual(new["_p2_replay_events"].replace("<= _P2_MAX_QUERY_ATTEMPTS:", "<= 2:"), old["_p2_replay_events"])
+        self.assertEqual(new["validate_p2_query_result"].count("_P2_MAX_QUERY_ATTEMPTS"), 1)
+        new["validate_p2_query_result"] = new["validate_p2_query_result"].replace(
+            'profile, _P2_MAX_QUERY_ATTEMPTS)', 'profile, details["execution_policy"]["max_query_attempts"])')
+        new["_validate_phase6_manifest_evidence"] = new["_validate_phase6_manifest_evidence"].replace(
+            "expected_profile, _P2_MAX_QUERY_ATTEMPTS)", "expected_profile, max_query_attempts)")
+        self.assertEqual(new["validate_p2_query_result"], old["validate_p2_query_result"])
         block = re.search(r"\n    # G6\.6\.3A: a trusted guarded-transport P2 profile.*?\n        \}\n", new["_validate_phase6_manifest_evidence"], re.S)
         self.assertIsNotNone(block)
         self.assertIn("if (expected_profile is not None", block.group(0))

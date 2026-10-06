@@ -60,11 +60,6 @@ PHASE6_TARGET_DATE_UTC = "2026-06-27"
 PHASE6_MJD_MIN = 61218.0
 PHASE6_MJD_MAX = 61219.0
 MAX_QUERY_ATTEMPTS = 2
-# G6.6.4-R3: P2 (explicit proof profile) tolerates longer transient network
-# interruptions.  P1 and every profile-less caller keep the frozen 2-attempt,
-# 0.5-second policy.  Backoff is deterministic: delay * attempt, no jitter.
-P2_MAX_QUERY_ATTEMPTS = 4
-P2_RETRY_DELAY_SECONDS = 5.0
 MAX_FETCH_ATTEMPTS = 3
 MAX_FETCH_WORKERS = 4
 CLIENT_TIMEOUT_SECONDS = 60
@@ -502,13 +497,6 @@ def _retryable_query_error(error: BaseException) -> bool:
     return isinstance(error, JSONDecodeError)
 
 
-def default_query_policy(proof_profile: Any) -> Tuple[int, float]:
-    """Frozen (max_query_attempts, retry_delay_seconds) for a provider profile."""
-    if proof_profile is None:
-        return MAX_QUERY_ATTEMPTS, 0.5
-    return P2_MAX_QUERY_ATTEMPTS, P2_RETRY_DELAY_SECONDS
-
-
 def _validated_base_url(value: str) -> str:
     parsed = urlsplit(str(value))
     if (
@@ -572,10 +560,10 @@ class LiveAntaresProvider:
         initial_tiles_fn: Optional[
             Callable[[float, float], Iterable[Mapping[str, float]]]
         ] = None,
-        max_query_attempts: Optional[int] = None,
+        max_query_attempts: int = 2,
         max_fetch_attempts: int = 3,
         max_fetch_workers: int = 4,
-        retry_delay_seconds: Optional[float] = None,
+        retry_delay_seconds: float = 0.5,
         clock: Callable[[], datetime] = _utc_now,
         monotonic: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
@@ -583,14 +571,6 @@ class LiveAntaresProvider:
     ) -> None:
         if type(capability) is not LiveAntaresReadCapability:
             raise LiveCapabilityError("A sealed live-read capability is required.")
-        default_attempts, default_delay = default_query_policy(proof_profile)
-        if max_query_attempts is None:
-            max_query_attempts = default_attempts
-        if retry_delay_seconds is None:
-            retry_delay_seconds = default_delay
-        query_attempt_ceiling = (
-            MAX_QUERY_ATTEMPTS if proof_profile is None else P2_MAX_QUERY_ATTEMPTS
-        )
         for name, value in (
             ("max_query_attempts", max_query_attempts),
             ("max_fetch_attempts", max_fetch_attempts),
@@ -598,8 +578,8 @@ class LiveAntaresProvider:
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer.")
-        if max_query_attempts > query_attempt_ceiling:
-            raise ValueError(f"max_query_attempts may not exceed {query_attempt_ceiling}.")
+        if max_query_attempts > MAX_QUERY_ATTEMPTS:
+            raise ValueError(f"max_query_attempts may not exceed {MAX_QUERY_ATTEMPTS}.")
         if max_fetch_attempts > MAX_FETCH_ATTEMPTS:
             raise ValueError(f"max_fetch_attempts may not exceed {MAX_FETCH_ATTEMPTS}.")
         if max_fetch_workers > MAX_FETCH_WORKERS:
@@ -2167,7 +2147,7 @@ def _run_p2_query(provider, request, progress, event_hook):
                for tile in provider._initial_tiles_fn(request.mjd_min, request.mjd_max)]
     if initial != _make_initial_tiles(request.mjd_min, request.mjd_max):
         raise QueryCheckpointError("P2 requires the frozen canonical P1 initial grid.")
-    state = _P2State(request, profile, initial, provider.max_query_attempts)
+    state = _P2State(request, profile, initial, P2_MAX_QUERY_ATTEMPTS)
     events = list(progress.events) if progress is not None else []
     for event in events:
         if len(_canonical_json_bytes(event)) > profile.max_event_bytes:
@@ -2246,7 +2226,7 @@ def _run_p2_query(provider, request, progress, event_hook):
                                     retryable=retryable, records=records if exhausted and error is None else ())
             commit(outcome)
             if error and not state.failed:
-                provider.sleeper(provider.retry_delay_seconds * state.outcomes[state.frontier[0]["id"]])
+                provider.sleeper(P2_RETRY_DELAY_SECONDS * state.outcomes[state.frontier[0]["id"]])
     finally:
         # G6.6.3D: the night's one transport child ends with its query.  A child
         # that cannot be proven dead raises here; nothing continues past it.
@@ -2271,6 +2251,7 @@ def _run_p2_query(provider, request, progress, event_hook):
         "sort_requested": None, "service_ordering": "ANTARES client/API default",
         "pagination_mode": "antares-client-jsonapi-links-next", "terminal_evidence": "natural-exhaustion-below-50" if complete else state.failed,
         "extraction_method": profile.extraction_method(), "execution_policy": provider.execution_policy(),
+        "p2_retry_policy": {"max_attempts_per_tile": P2_MAX_QUERY_ATTEMPTS, "backoff_seconds_per_attempt": P2_RETRY_DELAY_SECONDS},
         "cache_used": False, "capability_environment": provider.capability.environment,
         "initial_tile_override": False, "initial_tile_count": len(initial),
         "search_request_count": state.starts, "processed_tile_count": len(state.accepted) + state.splits,
@@ -2741,6 +2722,12 @@ def _load_p2_client(provider):
 # ``transport_sha256``; the profile digest is every P2 event's ``profile_sha256``.
 # G6.6.4-R2: canonical HTTPS continuation destinations bind a new contract.
 # The G6.6.3D process implementation and all numerical/scientific limits remain fixed.
+# G6.6.4-R3: P2-only transient-query resilience.  Operational policy, not part
+# of the profile/transport digests: at most 4 attempts per tile with
+# deterministic linear backoff (delay * attempt: 5, 10, 15 s; no jitter).
+# P1, the provider constructor and the range adapters keep their frozen 2/0.5.
+P2_MAX_QUERY_ATTEMPTS = 4
+P2_RETRY_DELAY_SECONDS = 5.0
 G663_CANARY_P2_PROFILE_SHA256 = "39b0ff54bcbb5be3d9c627365dcb3cf5b6ef59cd266842575ab7febd9441dec3"
 G663_CANARY_TRANSPORT_SHA256 = "85f278a495a455fbb652561ce9a147f092f7f58510e980322350afa2f6c0e716"
 

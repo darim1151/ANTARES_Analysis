@@ -337,9 +337,9 @@ failed v0.4.8/v1 root remain preserved at `c1dd68a`. The release must carry
 exactly these runtime bytes:
 
 ```text
-src/operations/live_antares.py  sha256 434df703a4f8fd3b5332e35af1c0be06bf010456953cff980e8320ff7d693402
+src/operations/live_antares.py  sha256 0a15fcf8c24ab7ee791464a2ffffa9bc75f8d1e33c7ada5a0dfceaa446577534
 src/operations/p2_transport.py  sha256 2e661e528899c6a6ac02eb6af38efbcc23ad9e5cad2e083963c9f9a24cea5bee
-src/operations/science.py       sha256 be1eea9402d427e3a62fdada197236f3571df186d42e3818fc46b632e11bf2e0
+src/operations/science.py       sha256 ed28a3ca967a5f81cf25a351e6ce39a6be9fb6d90954bebe27de4bcb871162cd
 ```
 
 Run Jul07 first. Run Jul13 immediately after Jul07 passes verification, as authorized by R2. Both nights use the identical profile and the same procedure.
@@ -369,9 +369,9 @@ export RELEASE_SHA=<Control-approved release SHA carrying the G6.6.4-R2 bytes>
 export WHEEL_SHA256=<that release's wheel SHA-256>
 export RELEASE_ROOT=/astro/users/mdarim/opt/antares-analysis/releases/$RELEASE_SHA
 export PY=$RELEASE_ROOT/venv/bin/python
-export PROVIDER_SHA256=434df703a4f8fd3b5332e35af1c0be06bf010456953cff980e8320ff7d693402
+export PROVIDER_SHA256=0a15fcf8c24ab7ee791464a2ffffa9bc75f8d1e33c7ada5a0dfceaa446577534
 export P2_TRANSPORT_SHA256=2e661e528899c6a6ac02eb6af38efbcc23ad9e5cad2e083963c9f9a24cea5bee
-export SCIENCE_SHA256=be1eea9402d427e3a62fdada197236f3571df186d42e3818fc46b632e11bf2e0
+export SCIENCE_SHA256=ed28a3ca967a5f81cf25a351e6ce39a6be9fb6d90954bebe27de4bcb871162cd
 export PROFILE_SHA256=39b0ff54bcbb5be3d9c627365dcb3cf5b6ef59cd266842575ab7febd9441dec3
 export TRANSPORT_SHA256=85f278a495a455fbb652561ce9a147f092f7f58510e980322350afa2f6c0e716
 export NIGHT=2026-07-07            # 2026-07-13 after verified Jul07

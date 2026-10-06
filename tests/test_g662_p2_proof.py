@@ -192,20 +192,21 @@ class P2ProofTests(unittest.TestCase):
                          ra=(first["ra_min"] + first["ra_max"]) / 2,
                          dec=(first["dec_min"] + first["dec_max"]) / 2)
 
-    def test_r3_policy_is_four_attempts_for_p2_and_unchanged_for_p1(self):
+    def test_r3_p1_provider_and_adapter_policy_unchanged_and_p2_policy_is_recorded(self):
         capability = fixtures.mock_read_capability(self.root, self.root.name, NIGHT, RELEASE)
         callables = dict(search_fn=lambda _: [], get_by_id_fn=lambda _: None, connectivity_fn=lambda: [])
-        p1 = L.LiveAntaresProvider(capability, **callables)
-        p2 = L.LiveAntaresProvider(capability, proof_profile=test_profile(), **callables)
-        self.assertEqual((p1.max_query_attempts, p1.retry_delay_seconds), (2, 0.5))
-        self.assertEqual((p2.max_query_attempts, p2.retry_delay_seconds), (4, 5.0))
-        self.assertEqual(R.LiveRangeAdapter(self.root, RELEASE, None).execution_policy(), p1.execution_policy())
-        self.assertEqual(R.LiveRangeAdapter(self.root, RELEASE, None, proof_profile=test_profile()).execution_policy(),
-                         p2.execution_policy())
+        for profile in (None, test_profile()):
+            provider = L.LiveAntaresProvider(capability, proof_profile=profile, **callables)
+            policy = provider.execution_policy()
+            self.assertEqual((policy["max_query_attempts"], policy["retry_delay_seconds"]), (2, 0.5))
+            self.assertEqual(R.LiveRangeAdapter(self.root, RELEASE, None, proof_profile=profile).execution_policy(), policy)
         with self.assertRaises(ValueError):
             L.LiveAntaresProvider(capability, max_query_attempts=3, **callables)
-        with self.assertRaises(ValueError):
-            L.LiveAntaresProvider(capability, proof_profile=test_profile(), max_query_attempts=5, **callables)
+        self.assertEqual((L.P2_MAX_QUERY_ATTEMPTS, L.P2_RETRY_DELAY_SECONDS), (4, 5.0))
+        self.assertEqual(S._P2_MAX_QUERY_ATTEMPTS, L.P2_MAX_QUERY_ATTEMPTS)
+        _, result = self.run_query()
+        self.assertEqual(result.evidence.details["p2_retry_policy"],
+                         {"max_attempts_per_tile": 4, "backoff_seconds_per_attempt": 5.0})
 
     def test_r3_two_transient_failures_then_success_discards_every_partial(self):
         calls, sleeps = 0, []
