@@ -17,7 +17,7 @@
     "validate:data": "node scripts/validate-public-data.mjs",
     "validate:data:test": "node scripts/test-public-data-validator.mjs",
     "validate:data:production": "node scripts/validate-public-data.mjs --production",
-    "test:observatory": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test scripts/observatory/kernel.test.mjs",
+    "test:observatory": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test scripts/observatory/kernel.test.mjs scripts/observatory/state.test.mjs",
     "observatory:build": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/observatory/build-first-light-bundle.mjs",
     "observatory:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/observatory/build-first-light-bundle.mjs --check",
     "validate:observatory": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/observatory/validate-observatory-bundle.mjs",
