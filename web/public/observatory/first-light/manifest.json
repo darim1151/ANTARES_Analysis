@@ -1,0 +1,242 @@
+{
+  "contract": "uso.observatory-bundle",
+  "contract_version": "1.0.0",
+  "bundle_id": "uso-first-light-0001",
+  "bundle_class": "FIRST_LIGHT_FIXTURE",
+  "science_ready": false,
+  "as_of_utc": "2026-10-06T07:31:14Z",
+  "evidence_policy": "Fixture and demo values are labelled per payload and per field and must never be presented as accepted science. Only committed Fink acquisition evidence is real, and it is transport/operational evidence only.",
+  "generator": {
+    "name": "web/scripts/observatory/build-first-light-bundle.mjs",
+    "version": "1.0.0",
+    "deterministic": true,
+    "seed": "uso-first-light/fink-fixture/v1",
+    "inputs": [
+      {
+        "path": "web/public/data/sky_points.json",
+        "sha256": "eccf0b467837ef7cf8e2f4d08a81eb593c8a3d5c4f1c6d10f7728729170a269f",
+        "role": "antares-legacy-demo"
+      },
+      {
+        "path": "web/public/data/lightcurve_samples.json",
+        "sha256": "a1bb5d54683c42c00102843dba97715e98efc7393abe5be2363fbdbf22e8fe29",
+        "role": "antares-legacy-demo"
+      },
+      {
+        "path": "web/public/data/public_manifest.json",
+        "sha256": "bfdda46f821e21e1c7799ad1e916a2564474654c1036b66b7edd52150023b2f1",
+        "role": "antares-legacy-demo"
+      },
+      {
+        "path": "web/scripts/observatory/inputs/fink-evidence.fd02c8e.json",
+        "sha256": "8ee7bbd5be6dd52379d0fdcd6d119142d8e2c817c44e0fa7a6cfecce5d89f06a",
+        "role": "fink-evidence"
+      }
+    ]
+  },
+  "basis": "basis.json",
+  "capabilities": "capabilities.json",
+  "provenance": "provenance.json",
+  "domains": {
+    "antares": {
+      "time": "domains/antares/time.json",
+      "sky": "domains/antares/sky.json",
+      "entities": "domains/antares/entities.json",
+      "features": "domains/antares/features.json"
+    },
+    "fink": {
+      "time": "domains/fink/time.json",
+      "sky": "domains/fink/sky.json",
+      "entities": "domains/fink/entities.json",
+      "features": "domains/fink/features.json"
+    }
+  },
+  "files": [
+    {
+      "path": "basis.json",
+      "bytes": 4966,
+      "sha256": "5aac15c62c7c01ebde61693ae0e45883cb88b32d379a0979363c624ecf009bf1",
+      "role": "basis"
+    },
+    {
+      "path": "capabilities.json",
+      "bytes": 13370,
+      "sha256": "0f77437ee3f3eda4516e393fc1cda41f74597435999a41a18a8fcf908c36cc60",
+      "role": "capabilities"
+    },
+    {
+      "path": "domains/antares/detail/00.json",
+      "bytes": 123573,
+      "sha256": "f9bbbadbec5a072e4c9f8cbcbfd774206b4a2b9bc4d35d90aac5982f5001aee9",
+      "role": "antares.detail"
+    },
+    {
+      "path": "domains/antares/detail/01.json",
+      "bytes": 126788,
+      "sha256": "61ed31ab50e56e3c93c1cffc4e76b86125b2c3b05b86cea6d44de114e2beccc3",
+      "role": "antares.detail"
+    },
+    {
+      "path": "domains/antares/detail/02.json",
+      "bytes": 110074,
+      "sha256": "4331a66707ea35d2d103b573ec744157566c8c73d7261e4dddeae72000673af8",
+      "role": "antares.detail"
+    },
+    {
+      "path": "domains/antares/detail/03.json",
+      "bytes": 119060,
+      "sha256": "f9787d5bd8658856e12fac75aa8331357d0a5c74ac8e6e80622737b2c0f11e14",
+      "role": "antares.detail"
+    },
+    {
+      "path": "domains/antares/entities.json",
+      "bytes": 503640,
+      "sha256": "41612262d90ec997d47e0d09b184e6c6095778184b83b8c37c108c114fb463e8",
+      "role": "antares.entities"
+    },
+    {
+      "path": "domains/antares/features.json",
+      "bytes": 75233,
+      "sha256": "21d85978b08c41c714e158f9cc4a8ffd521f346230fc620ac5dd7d98476fb571",
+      "role": "antares.features"
+    },
+    {
+      "path": "domains/antares/sky.json",
+      "bytes": 13314,
+      "sha256": "1e40d51e53ee34836eca5dfd79235dd6c2ba42ce3081cd91b5c01642f2adce68",
+      "role": "antares.sky"
+    },
+    {
+      "path": "domains/antares/time.json",
+      "bytes": 4052,
+      "sha256": "ac2c949fd4928e222c7c119b18ba91d812ac476b69325f0cd7fcb744d0bcef5e",
+      "role": "antares.time"
+    },
+    {
+      "path": "domains/fink/detail/00.json",
+      "bytes": 287866,
+      "sha256": "8536799b3821c3982856d07856584e8e41e2641a405a9ac8bad2b9b131afea82",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/01.json",
+      "bytes": 312815,
+      "sha256": "11edc2d2cbbecbaebc88cb0291c2264cac8a27024dde2ec07244a60f1211e69b",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/02.json",
+      "bytes": 324380,
+      "sha256": "e3637f38f7d1b1326c60493dc210586d812e5f63ce2210713ad6185adcf42b94",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/03.json",
+      "bytes": 310073,
+      "sha256": "952ccc3c46406aaf02eef38a78c04b0bc5db0e8c83c37706be49619ace1a3bd3",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/04.json",
+      "bytes": 304919,
+      "sha256": "a3e423fb33840c6a791e1d6f3c2cd0ea449dcacf78b25c07ecc13fa3cadedd5c",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/05.json",
+      "bytes": 308648,
+      "sha256": "05683f60630b0684a697dc584810d3395c0b56426f702661f3024a0f3a9ab64f",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/06.json",
+      "bytes": 308688,
+      "sha256": "66081ba61fc3e9100649cca9eac017384230b241d667be2b9e177c482ce9f4d6",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/07.json",
+      "bytes": 258858,
+      "sha256": "13e23fe392734c41a277f0f086ff322af95744b0a7418f42fbcd55784422f1e9",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/08.json",
+      "bytes": 285635,
+      "sha256": "3f1ae52e5d448240860c8c3e914a1d93c89a266b30fd1d71c672afc51b388abf",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/09.json",
+      "bytes": 311352,
+      "sha256": "2f9255d8f9fdc4183d2ad9732bda97ab44b9d7cfb7d810c9dbc503f1b75034c0",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/10.json",
+      "bytes": 259608,
+      "sha256": "eac766b683db083fe7b8642cb59d7d2524ce4cfef95edcff452d0c9a96b03af5",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/11.json",
+      "bytes": 269803,
+      "sha256": "d297b8bc798b8b2b7d508abb07e2ad0255c8032c85a01670908b74dd30b42ead",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/12.json",
+      "bytes": 312965,
+      "sha256": "af45e7c8c6016001778397bc41c31b62aa3629a772409184b6eecb6bd1e5e327",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/13.json",
+      "bytes": 264934,
+      "sha256": "b4443fdff80b5b8afe74a4c875da745b630e64e68b470e05c5535d51b515a84a",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/14.json",
+      "bytes": 317752,
+      "sha256": "fbca40334e07798ba16d284891bbee6ed1b5772b32dfbead631faa2a02e3a1ef",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/15.json",
+      "bytes": 307205,
+      "sha256": "822903e7dcca3c3992c79385960a9e0cf793b06d671cfaa8dd2d698574b638b6",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/entities.json",
+      "bytes": 405008,
+      "sha256": "9eeecc18b56fe6267bcb63e9ea79a06134ceb028c20351b5b21cb966078ea8e3",
+      "role": "fink.entities"
+    },
+    {
+      "path": "domains/fink/features.json",
+      "bytes": 170310,
+      "sha256": "5eeebb6d0e7a6b086d8c04a071533ca5dc0f1f4da9c8c6d049cd59ffb7039b94",
+      "role": "fink.features"
+    },
+    {
+      "path": "domains/fink/sky.json",
+      "bytes": 17546,
+      "sha256": "132b6d73b1d90386859f852221bf44b55c90917a19378f23d9b2d617bd51421c",
+      "role": "fink.sky"
+    },
+    {
+      "path": "domains/fink/time.json",
+      "bytes": 28979,
+      "sha256": "60f8cec52dbdb266e297137fc9f149ff79105b679357e07d80f504445d8333a8",
+      "role": "fink.time"
+    },
+    {
+      "path": "provenance.json",
+      "bytes": 14835,
+      "sha256": "97f5ae5f538024c757d6816334908b3b2e00f8311cc06d20ce4f650ccca8250c",
+      "role": "provenance"
+    }
+  ]
+}

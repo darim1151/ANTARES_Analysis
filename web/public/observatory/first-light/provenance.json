@@ -1,0 +1,360 @@
+{
+  "contract": "uso.observatory-bundle",
+  "basis_id": "basis.uso.first-light.0001",
+  "sources": [
+    {
+      "id": "antares.sky_points",
+      "label": "SkyPulse demo sky points",
+      "repository": "darim1151/ANTARES_Analysis",
+      "revision": "812c545e14693cdce7ff7458f1d2b50b0804dcd8",
+      "path": "web/public/data/sky_points.json",
+      "sha256": "eccf0b467837ef7cf8e2f4d08a81eb593c8a3d5c4f1c6d10f7728729170a269f",
+      "role": "ANTARES legacy demo loci",
+      "evidence": "LEGACY_SAMPLE"
+    },
+    {
+      "id": "antares.lightcurve_samples",
+      "label": "SkyPulse demo lightcurves",
+      "repository": "darim1151/ANTARES_Analysis",
+      "revision": "812c545e14693cdce7ff7458f1d2b50b0804dcd8",
+      "path": "web/public/data/lightcurve_samples.json",
+      "sha256": "a1bb5d54683c42c00102843dba97715e98efc7393abe5be2363fbdbf22e8fe29",
+      "role": "Synthetic demo brightness stories",
+      "evidence": "SYNTHETIC_DEMO"
+    },
+    {
+      "id": "antares.public_manifest",
+      "label": "SkyPulse demo manifest",
+      "repository": "darim1151/ANTARES_Analysis",
+      "revision": "812c545e14693cdce7ff7458f1d2b50b0804dcd8",
+      "path": "web/public/data/public_manifest.json",
+      "sha256": "bfdda46f821e21e1c7799ad1e916a2564474654c1036b66b7edd52150023b2f1",
+      "role": "Demo export identity",
+      "evidence": "SYNTHETIC_DEMO"
+    },
+    {
+      "id": "fink.evidence_excerpt",
+      "label": "Fink evidence excerpt",
+      "repository": "darim1151/ANTARES_Analysis",
+      "revision": null,
+      "path": "web/scripts/observatory/inputs/fink-evidence.fd02c8e.json",
+      "sha256": "8ee7bbd5be6dd52379d0fdcd6d119142d8e2c817c44e0fa7a6cfecce5d89f06a",
+      "role": "Extracted at the pinned Fink revision",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    },
+    {
+      "id": "fink.configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/evidence/delivery_1.json",
+      "label": "delivery_1.json",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/evidence/delivery_1.json",
+      "sha256": "a6948f7e5cc20c380c8d8077786109f243483d2783354f3a7dbb96c229dfbb46",
+      "role": "Committed Fink evidence",
+      "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+    },
+    {
+      "id": "fink.configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/request.json",
+      "label": "request.json",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/request.json",
+      "sha256": "700435dc55fdfab3f01e6383794ec2e3b040ee2611b70cc266da783c6b6144f3",
+      "role": "Committed Fink evidence",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    },
+    {
+      "id": "fink.configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/state_log.jsonl",
+      "label": "state_log.jsonl",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/state_log.jsonl",
+      "sha256": "569ec943ce86bed2dcced9ac57090428e0c29b1f8b2f01e6885a80f9cb1d1d0a",
+      "role": "Committed Fink evidence",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    },
+    {
+      "id": "fink.configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/evidence/delivery_1.json",
+      "label": "delivery_1.json",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/evidence/delivery_1.json",
+      "sha256": "098bdb49b57c8bddad5e4986df615f5670f9912de9cdcd8b01b42ef5432817a5",
+      "role": "Committed Fink evidence",
+      "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+    },
+    {
+      "id": "fink.configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/request.json",
+      "label": "request.json",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/request.json",
+      "sha256": "58cdb3f428a1bc7332d4a46b1e02957a9b7ac8e672c272b1cb7681aa63daecc0",
+      "role": "Committed Fink evidence",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    },
+    {
+      "id": "fink.configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/state_log.jsonl",
+      "label": "state_log.jsonl",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/state_log.jsonl",
+      "sha256": "d58de935b12b39b64bf126897b13a5db94a0973d5b625674bcc90b74865c62f3",
+      "role": "Committed Fink evidence",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    },
+    {
+      "id": "fink.configs/acquisitions/acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f/request.json",
+      "label": "request.json",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f/request.json",
+      "sha256": "741a7146f563214aec5899ddf7f0ff62d2048b7aed550680e394f920f798d7dd",
+      "role": "Committed Fink evidence",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    },
+    {
+      "id": "fink.configs/acquisitions/acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f/state_log.jsonl",
+      "label": "state_log.jsonl",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f/state_log.jsonl",
+      "sha256": "0bd3cc7ba03b0c47aff7e30bb7c1b04c7a700bc01d8637551d7a1321dbab7439",
+      "role": "Committed Fink evidence",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    },
+    {
+      "id": "fink.configs/analysis_cohorts/month1.json",
+      "label": "month1.json",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "configs/analysis_cohorts/month1.json",
+      "sha256": "cb5922e12dff7700384e0fd55ed9f6a7cdb25aca464681188ab0a857618f443a",
+      "role": "Committed Fink evidence",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    },
+    {
+      "id": "fink.configs/delivery_evidence/ftransfer_lsst_2026-10-04_177446/avro_schema_ftransfer_lsst_2026-10-04_177446.json",
+      "label": "avro_schema_ftransfer_lsst_2026-10-04_177446.json",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "configs/delivery_evidence/ftransfer_lsst_2026-10-04_177446/avro_schema_ftransfer_lsst_2026-10-04_177446.json",
+      "sha256": "1e86033fcb48f69880dc0ffe88f9cefcb6e53971b3a8e8b9a3a583c0adf822f7",
+      "role": "Committed Fink evidence",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    },
+    {
+      "id": "fink.configs/delivery_evidence/ftransfer_lsst_2026-10-04_177446/delivery_evidence.json",
+      "label": "delivery_evidence.json",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "configs/delivery_evidence/ftransfer_lsst_2026-10-04_177446/delivery_evidence.json",
+      "sha256": "10118b8a4c2719668b466f63b7ab027381341499ed38e34c41cb29149ae7f2e4",
+      "role": "Committed Fink evidence",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    },
+    {
+      "id": "fink.src/fink_lsst/analytics/contract.py",
+      "label": "contract.py",
+      "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+      "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+      "path": "src/fink_lsst/analytics/contract.py",
+      "sha256": "560c194c60803d0076191ef857ff9224994a4d7de2c138af56138c729d11d5d1",
+      "role": "Committed Fink evidence",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    }
+  ],
+  "acquisitions": [
+    {
+      "acquisition_id": "acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b",
+      "label": "Month-1",
+      "window": {
+        "start": "2026-02-25",
+        "stop": "2026-03-25",
+        "semantics": "half_open_utc_dates"
+      },
+      "science_profile": "lsst_light_static_all_alerts_v1",
+      "state": "DELIVERY_VALIDATED",
+      "state_at_utc": "2026-10-05T23:42:35Z",
+      "delivery": {
+        "topic": "ftransfer_lsst_2026-10-05_555200",
+        "readable_rows": 1658642,
+        "parquet_files": 16591,
+        "total_bytes": 1460135494,
+        "reconciliation_passed": true,
+        "terminal_lag": 0,
+        "meaning": "transport reconciliation of the delivered topic; not Rubin scientific completeness"
+      },
+      "characterization": {
+        "run_id": "g4a-month1-20260225_20260325-v1",
+        "summary_sha256": "47a7adf35689cc409a90f6de739a05d1b510dde7f416dbffb95073bd67c9e540",
+        "code_sha": "d34f6c244a2cc0c6ec6840d63e274b7c79fd7424"
+      },
+      "delivery_validation": "DELIVERY_VALIDATED",
+      "admission": "ADMITTED",
+      "scientific_status": "CHARACTERIZED",
+      "cohort": "accepted_month1"
+    },
+    {
+      "acquisition_id": "acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa",
+      "label": "Month-2",
+      "window": {
+        "start": "2026-03-25",
+        "stop": "2026-04-25",
+        "semantics": "half_open_utc_dates"
+      },
+      "science_profile": "lsst_light_static_all_alerts_v1",
+      "state": "DELIVERY_VALIDATED",
+      "state_at_utc": "2026-10-06T07:21:14Z",
+      "delivery": {
+        "topic": "ftransfer_lsst_2026-10-06_270011",
+        "readable_rows": 76133,
+        "parquet_files": 767,
+        "total_bytes": 72730564,
+        "reconciliation_passed": true,
+        "terminal_lag": 0,
+        "meaning": "transport reconciliation of the delivered topic; not Rubin scientific completeness"
+      },
+      "characterization": null,
+      "delivery_validation": "DELIVERY_VALIDATED",
+      "admission": "NOT_ADMITTED",
+      "scientific_status": "UNCHARACTERIZED",
+      "cohort": null
+    },
+    {
+      "acquisition_id": "acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f",
+      "label": "Month-3",
+      "window": {
+        "start": "2026-04-25",
+        "stop": "2026-05-25",
+        "semantics": "half_open_utc_dates"
+      },
+      "science_profile": "lsst_light_static_all_alerts_v1",
+      "state": "PRODUCER_COMPLETE",
+      "state_at_utc": "2026-10-06T07:31:14Z",
+      "delivery": null,
+      "characterization": null,
+      "delivery_validation": "NOT_DELIVERY_VALIDATED",
+      "admission": "NOT_ADMITTED",
+      "scientific_status": "NOT_DELIVERY_VALIDATED",
+      "cohort": null
+    }
+  ],
+  "derivations": [
+    {
+      "id": "healpix.nested",
+      "description": "Entity positions indexed on HEALPix NESTED; density maps at order 6.",
+      "kernel": "uso.analysis-kernel/ak-0.1.0"
+    },
+    {
+      "id": "coords.galactic",
+      "description": "ICRS -> Galactic with the Astropy/Hipparcos rotation matrix.",
+      "kernel": "uso.analysis-kernel/ak-0.1.0"
+    },
+    {
+      "id": "coords.ecliptic",
+      "description": "ICRS -> mean ecliptic of J2000.0 (obliquity 23.4392911°).",
+      "kernel": "uso.analysis-kernel/ak-0.1.0"
+    },
+    {
+      "id": "fink.object_position",
+      "description": "DiaObject position = mean of delivered DiaSource positions.",
+      "kernel": "uso.analysis-kernel/ak-0.1.0"
+    },
+    {
+      "id": "fink.fixture_time_scale",
+      "description": "Fixture UTC→TAI with a fixed 37 s offset (real adapters use ERFA/Astropy).",
+      "kernel": "uso.analysis-kernel/ak-0.1.0"
+    },
+    {
+      "id": "antares.clipped_magnitudes",
+      "description": "106 demo magnitudes at the exporter clip bounds were nulled.",
+      "kernel": "uso.analysis-kernel/ak-0.1.0"
+    }
+  ],
+  "field_evidence": {
+    "antares": [
+      {
+        "field": "locus_id",
+        "evidence": "LEGACY_SAMPLE",
+        "note": "ANTARES locus identifier."
+      },
+      {
+        "field": "ra",
+        "evidence": "LEGACY_SAMPLE",
+        "note": "Locus right ascension."
+      },
+      {
+        "field": "dec",
+        "evidence": "LEGACY_SAMPLE",
+        "note": "Locus declination."
+      },
+      {
+        "field": "newest_alert_observation_time",
+        "evidence": "SYNTHETIC_DEMO",
+        "note": "Synthesized by the legacy demo exporter; not the ANTARES value."
+      },
+      {
+        "field": "brightest_alert_magnitude",
+        "evidence": "LEGACY_SAMPLE",
+        "note": "Legacy sample value; null where the demo exporter clipped to [13.5, 25.5]."
+      },
+      {
+        "field": "num_mag_values",
+        "evidence": "LEGACY_SAMPLE",
+        "note": "Number of magnitude values recorded on the locus."
+      },
+      {
+        "field": "tags",
+        "evidence": "LEGACY_SAMPLE",
+        "note": "Filter-pipeline memberships; not astrophysical classes."
+      }
+    ],
+    "fink": [
+      {
+        "field": "diaObjectId",
+        "evidence": "SYNTHETIC_FIXTURE",
+        "note": "Derived DIA grouping key (pred.is_sso false AND diaObjectId > 0); int64 carried as a decimal string. Fixture ids use the reserved 990… prefix."
+      },
+      {
+        "field": "ra",
+        "evidence": "SYNTHETIC_FIXTURE",
+        "note": "Mean of delivered DiaSource positions."
+      },
+      {
+        "field": "dec",
+        "evidence": "SYNTHETIC_FIXTURE",
+        "note": "Mean of delivered DiaSource positions."
+      },
+      {
+        "field": "n_dia_sources",
+        "evidence": "SYNTHETIC_FIXTURE",
+        "note": "Delivered DiaSource rows in this basis; not lifetime detections."
+      },
+      {
+        "field": "first_midpoint_mjd_tai",
+        "evidence": "SYNTHETIC_FIXTURE",
+        "note": "Earliest delivered DiaSource midpoint, TAI."
+      },
+      {
+        "field": "last_midpoint_mjd_tai",
+        "evidence": "SYNTHETIC_FIXTURE",
+        "note": "Latest delivered DiaSource midpoint, TAI."
+      },
+      {
+        "field": "bands",
+        "evidence": "SYNTHETIC_FIXTURE",
+        "note": "LSST bands among delivered DiaSources."
+      },
+      {
+        "field": "acquisition windows",
+        "evidence": "COMMITTED_OPERATIONAL_RECORD",
+        "note": "Requests and state logs at the pinned Fink revision."
+      },
+      {
+        "field": "delivery totals",
+        "evidence": "VALIDATED_TRANSPORT_EVIDENCE",
+        "note": "Three-way reconciliation; transport evidence only."
+      }
+    ]
+  }
+}

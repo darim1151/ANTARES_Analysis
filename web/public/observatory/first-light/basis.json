@@ -1,0 +1,103 @@
+{
+  "contract": "uso.observatory-bundle",
+  "contract_version": "1.0.0",
+  "basis_id": "basis.uso.first-light.0001",
+  "label": "First Light · fixture basis",
+  "status": "FIRST_LIGHT_FIXTURE",
+  "science_ready": false,
+  "domains": {
+    "antares": {
+      "domain": "antares",
+      "build_id": "antares.skypulse-demo.2026-08-22T18:04:07Z",
+      "build_kind": "LEGACY_DEMO_EXPORT",
+      "label": "ANTARES · SkyPulse legacy demo export",
+      "evidence": [
+        "LEGACY_SAMPLE",
+        "SYNTHETIC_DEMO"
+      ],
+      "science_ready": false,
+      "native_ontology": "ANTARES locus: an alert-aggregated sky position. ANTARES tags are filter-pipeline memberships, not astrophysical classes.",
+      "source": {
+        "repository": "darim1151/ANTARES_Analysis",
+        "revision": "812c545e14693cdce7ff7458f1d2b50b0804dcd8",
+        "paths": [
+          "public/data/sky_points.json",
+          "public/data/lightcurve_samples.json",
+          "public/data/public_manifest.json"
+        ]
+      },
+      "time": {
+        "stored_field": "newest_alert_observation_time",
+        "format": "MJD",
+        "scale": "UTC",
+        "scale_basis": "The historical ANTARES exporter treats MJD as UTC. In this legacy demo the stored value was synthesized by the demo exporter.",
+        "date_binning": "UTC date of the UTC-treated MJD, half-open [00:00, 24:00) UTC.",
+        "entity_date_rule": "UTC date of newest_alert_observation_time (demo date_utc; synthetic assignment)."
+      }
+    },
+    "fink": {
+      "domain": "fink",
+      "build_id": "fink.first-light-fixture.fd02c8e",
+      "build_kind": "SYNTHETIC_FIXTURE_WITH_COMMITTED_EVIDENCE",
+      "label": "Fink · committed acquisition evidence + synthetic fixture population",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD",
+        "SYNTHETIC_FIXTURE"
+      ],
+      "science_ready": false,
+      "native_ontology": "Rubin DiaSource rows delivered by Fink (Light Static packet). DiaObject is a derived grouping key; broker fields are source-time snapshots.",
+      "source": {
+        "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+        "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+        "paths": [
+          "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/evidence/delivery_1.json",
+          "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/request.json",
+          "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/state_log.jsonl",
+          "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/evidence/delivery_1.json",
+          "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/request.json",
+          "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/state_log.jsonl",
+          "configs/acquisitions/acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f/request.json",
+          "configs/acquisitions/acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f/state_log.jsonl",
+          "configs/analysis_cohorts/month1.json",
+          "configs/delivery_evidence/ftransfer_lsst_2026-10-04_177446/avro_schema_ftransfer_lsst_2026-10-04_177446.json",
+          "configs/delivery_evidence/ftransfer_lsst_2026-10-04_177446/delivery_evidence.json",
+          "src/fink_lsst/analytics/contract.py"
+        ]
+      },
+      "time": {
+        "stored_field": "midpointMjdTai",
+        "format": "MJD",
+        "scale": "TAI",
+        "scale_basis": "Fink analysis_contract_v1: midpointMjdTai is the authoritative observation time, MJD on the TAI scale.",
+        "date_binning": "UTC date of the TAI time converted with a leap-second table, half-open [00:00, 24:00) UTC. Fixture conversion: TAI − UTC = 37 s (valid since 2017-01-01); a real adapter must use ERFA/Astropy.",
+        "entity_date_rule": "UTC date of the first delivered DiaSource of the DiaObject in this basis."
+      }
+    }
+  },
+  "relation": null,
+  "semantic_contract": {
+    "id": "uso.semantic-contract",
+    "version": "0.1.0-first-light"
+  },
+  "feature_registry": {
+    "id": "uso.feature-registry",
+    "version": "fr-0.1.0"
+  },
+  "analysis_kernel": {
+    "id": "uso.analysis-kernel",
+    "version": "ak-0.1.0"
+  },
+  "invariants": [
+    "An ANTARES locus is not a Fink DiaObject.",
+    "An ANTARES tag is not an astrophysical class.",
+    "A Fink classification is a source-time snapshot, not a timeless object classification.",
+    "A model score is not a calibrated probability.",
+    "Fink lag-zero transport is not Rubin scientific completeness.",
+    "Readable Parquet is not science readiness.",
+    "A missing ANTARES night is not a zero-row night.",
+    "Source density is not survey coverage.",
+    "Fink midpointMjdTai is TAI; the historical ANTARES exporter treats MJD as UTC. They are never silently aligned.",
+    "No cross-broker identity matching is performed in this basis."
+  ]
+}

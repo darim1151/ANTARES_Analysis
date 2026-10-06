@@ -1,0 +1,152 @@
+{
+  "contract": "uso.observatory-bundle",
+  "domain": "antares",
+  "build_id": "antares.skypulse-demo.2026-08-22T18:04:07Z",
+  "semantics": {
+    "stored_field": "newest_alert_observation_time",
+    "format": "MJD",
+    "scale": "UTC",
+    "scale_basis": "The historical ANTARES exporter treats MJD as UTC. In this legacy demo the stored value was synthesized by the demo exporter.",
+    "date_binning": "UTC date of the UTC-treated MJD, half-open [00:00, 24:00) UTC.",
+    "entity_date_rule": "UTC date of newest_alert_observation_time (demo date_utc; synthetic assignment)."
+  },
+  "range": {
+    "start": "2026-02-24",
+    "stop": "2026-03-04"
+  },
+  "nights": [
+    {
+      "date": "2026-02-24",
+      "state": "AVAILABLE",
+      "reason": "LEGACY_DEMO_EXPORT",
+      "window_id": "antares.legacy-demo-export",
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ]
+    },
+    {
+      "date": "2026-02-25",
+      "state": "AVAILABLE",
+      "reason": "LEGACY_DEMO_EXPORT",
+      "window_id": "antares.legacy-demo-export",
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ]
+    },
+    {
+      "date": "2026-02-26",
+      "state": "AVAILABLE",
+      "reason": "LEGACY_DEMO_EXPORT",
+      "window_id": "antares.legacy-demo-export",
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ]
+    },
+    {
+      "date": "2026-02-27",
+      "state": "AVAILABLE",
+      "reason": "LEGACY_DEMO_EXPORT",
+      "window_id": "antares.legacy-demo-export",
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ]
+    },
+    {
+      "date": "2026-02-28",
+      "state": "AVAILABLE",
+      "reason": "LEGACY_DEMO_EXPORT",
+      "window_id": "antares.legacy-demo-export",
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ]
+    },
+    {
+      "date": "2026-03-01",
+      "state": "AVAILABLE",
+      "reason": "LEGACY_DEMO_EXPORT",
+      "window_id": "antares.legacy-demo-export",
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ]
+    },
+    {
+      "date": "2026-03-02",
+      "state": "AVAILABLE",
+      "reason": "LEGACY_DEMO_EXPORT",
+      "window_id": "antares.legacy-demo-export",
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ]
+    },
+    {
+      "date": "2026-03-03",
+      "state": "AVAILABLE",
+      "reason": "LEGACY_DEMO_EXPORT",
+      "window_id": "antares.legacy-demo-export",
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ]
+    }
+  ],
+  "windows": [
+    {
+      "id": "antares.legacy-demo-export",
+      "label": "SkyPulse legacy demo export",
+      "start": "2026-02-24",
+      "stop": "2026-03-04",
+      "state": "AVAILABLE",
+      "source_state": "export_mode=demo",
+      "delivery_validation": "NOT_APPLICABLE",
+      "admission": "ADMITTED",
+      "status_codes": [
+        "LEGACY_DEMO_EXPORT",
+        "SYNTHETIC_DATE_ASSIGNMENT"
+      ],
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ],
+      "facts": [
+        {
+          "label": "Export mode",
+          "value": "demo",
+          "evidence": "SYNTHETIC_DEMO"
+        },
+        {
+          "label": "Exported at (UTC)",
+          "value": "2026-08-22T18:04:07+00:00",
+          "evidence": "SYNTHETIC_DEMO"
+        },
+        {
+          "label": "Loci in demo sample",
+          "value": 1800,
+          "unit": "loci",
+          "evidence": "LEGACY_SAMPLE"
+        },
+        {
+          "label": "Selected demo date",
+          "value": "2026-03-03",
+          "evidence": "SYNTHETIC_DEMO"
+        }
+      ],
+      "rate_comparison": "PROHIBITED",
+      "caveat": "Positions, tags and measurement counts come from a legacy repository sample; the date of every locus was assigned synthetically by the demo exporter. Per-date counts are sample allocations, not ANTARES nightly totals."
+    }
+  ],
+  "counts": {
+    "quantity": "Legacy demo-sample loci by synthetic entity date",
+    "unit": "loci",
+    "evidence": [
+      "SYNTHETIC_DEMO"
+    ],
+    "values": {
+      "2026-02-24": 202,
+      "2026-02-25": 168,
+      "2026-02-26": 220,
+      "2026-02-27": 186,
+      "2026-02-28": 175,
+      "2026-03-01": 171,
+      "2026-03-02": 190,
+      "2026-03-03": 488
+    }
+  }
+}

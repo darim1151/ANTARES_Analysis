@@ -9,14 +9,19 @@
   },
   "scripts": {
     "dev": "next dev",
-    "prebuild": "pnpm run validate:data",
+    "prebuild": "pnpm run validate:data && pnpm run validate:observatory",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "validate:data": "node scripts/validate-public-data.mjs",
     "validate:data:test": "node scripts/test-public-data-validator.mjs",
-    "validate:data:production": "node scripts/validate-public-data.mjs --production"
+    "validate:data:production": "node scripts/validate-public-data.mjs --production",
+    "test:observatory": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test scripts/observatory/kernel.test.mjs",
+    "observatory:build": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/observatory/build-first-light-bundle.mjs",
+    "observatory:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/observatory/build-first-light-bundle.mjs --check",
+    "validate:observatory": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/observatory/validate-observatory-bundle.mjs",
+    "validate:observatory:test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/observatory/test-observatory-bundle-validator.mjs"
   },
   "dependencies": {
     "d3": "^7.9.0",

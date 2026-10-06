@@ -1,0 +1,331 @@
+{
+  "kind": "uso.fink-evidence-excerpt",
+  "version": 1,
+  "repository": "darim1151/Fink_Alerts-Analysis-LSST",
+  "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+  "extractor": "web/scripts/observatory/extract-fink-evidence.mjs",
+  "statement": "Committed, non-secret acquisition and schema evidence read at the pinned revision. Delivery reconciliation is transport evidence, not Rubin scientific completeness.",
+  "cohort": {
+    "cohort_name": "accepted_month1",
+    "contract_id": "analysis_contract_v1",
+    "acquisitions": [
+      "acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b"
+    ]
+  },
+  "acquisitions": [
+    {
+      "acquisition_id": "acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b",
+      "label": "Month-1",
+      "fingerprint": "b1c7b482b56bc1452effe5966e8716806c739f8d18c6d9fd41ac3cc835da3ffc",
+      "science_profile": "lsst_light_static_all_alerts_v1",
+      "survey": "lsst",
+      "window": {
+        "start": "2026-02-25",
+        "stop": "2026-03-25",
+        "semantics": "half_open_utc_dates"
+      },
+      "portal_dates_inclusive": {
+        "startdate": "2026-02-25",
+        "stopdate": "2026-03-24"
+      },
+      "expected_dates": 28,
+      "state": "DELIVERY_VALIDATED",
+      "state_at_utc": "2026-10-05T23:42:35Z",
+      "state_sequence": [
+        "PLANNED",
+        "PORTAL_PREPARED",
+        "BLOCKED",
+        "PORTAL_PREPARED",
+        "PORTAL_VERIFIED",
+        "PORTAL_VERIFIED",
+        "PORTAL_VERIFIED",
+        "APPROVED",
+        "SUBMITTING",
+        "SUBMITTED",
+        "TOPIC_IDENTIFIED",
+        "PRODUCER_RUNNING",
+        "PRODUCER_COMPLETE",
+        "TOPIC_VERIFIED",
+        "TRANSFER_RUNNING",
+        "TRANSFER_COMPLETE",
+        "DELIVERY_VALIDATED"
+      ],
+      "delivery": {
+        "topic": "ftransfer_lsst_2026-10-05_555200",
+        "readable_rows": 1658642,
+        "parquet_files": 16591,
+        "readable_parquet_files": 16591,
+        "unreadable_files": 0,
+        "total_bytes": 1460135494,
+        "schema_groups": [
+          "94e24bb1455f3bc2"
+        ],
+        "reconciliation_passed": true,
+        "terminal_lag": 0,
+        "meaning": "transport reconciliation of the delivered topic; not Rubin scientific completeness"
+      },
+      "characterization": {
+        "run_id": "g4a-month1-20260225_20260325-v1",
+        "summary_sha256": "47a7adf35689cc409a90f6de739a05d1b510dde7f416dbffb95073bd67c9e540",
+        "code_sha": "d34f6c244a2cc0c6ec6840d63e274b7c79fd7424"
+      }
+    },
+    {
+      "acquisition_id": "acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa",
+      "label": "Month-2",
+      "fingerprint": "0c852cd059fa7fe8add53854df288898959074f3111d55c3b7b6a78fa8108b8f",
+      "science_profile": "lsst_light_static_all_alerts_v1",
+      "survey": "lsst",
+      "window": {
+        "start": "2026-03-25",
+        "stop": "2026-04-25",
+        "semantics": "half_open_utc_dates"
+      },
+      "portal_dates_inclusive": {
+        "startdate": "2026-03-25",
+        "stopdate": "2026-04-24"
+      },
+      "expected_dates": 31,
+      "state": "DELIVERY_VALIDATED",
+      "state_at_utc": "2026-10-06T07:21:14Z",
+      "state_sequence": [
+        "PLANNED",
+        "PORTAL_PREPARED",
+        "PORTAL_VERIFIED",
+        "APPROVED",
+        "SUBMITTING",
+        "SUBMITTED",
+        "TOPIC_IDENTIFIED",
+        "PRODUCER_RUNNING",
+        "PRODUCER_COMPLETE",
+        "TOPIC_VERIFIED",
+        "TRANSFER_RUNNING",
+        "TRANSFER_COMPLETE",
+        "DELIVERY_VALIDATED"
+      ],
+      "delivery": {
+        "topic": "ftransfer_lsst_2026-10-06_270011",
+        "readable_rows": 76133,
+        "parquet_files": 767,
+        "readable_parquet_files": 767,
+        "unreadable_files": 0,
+        "total_bytes": 72730564,
+        "schema_groups": [
+          "94e24bb1455f3bc2"
+        ],
+        "reconciliation_passed": true,
+        "terminal_lag": 0,
+        "meaning": "transport reconciliation of the delivered topic; not Rubin scientific completeness"
+      },
+      "characterization": null
+    },
+    {
+      "acquisition_id": "acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f",
+      "label": "Month-3",
+      "fingerprint": "1ccf601aa29faf580708dff2a6dc4e5e6ea727e2b284525cd4c2330977a54d40",
+      "science_profile": "lsst_light_static_all_alerts_v1",
+      "survey": "lsst",
+      "window": {
+        "start": "2026-04-25",
+        "stop": "2026-05-25",
+        "semantics": "half_open_utc_dates"
+      },
+      "portal_dates_inclusive": {
+        "startdate": "2026-04-25",
+        "stopdate": "2026-05-24"
+      },
+      "expected_dates": 30,
+      "state": "PRODUCER_COMPLETE",
+      "state_at_utc": "2026-10-06T07:31:14Z",
+      "state_sequence": [
+        "PLANNED",
+        "PORTAL_PREPARED",
+        "PORTAL_VERIFIED",
+        "APPROVED",
+        "SUBMITTING",
+        "SUBMITTED",
+        "TOPIC_IDENTIFIED",
+        "PRODUCER_RUNNING",
+        "PRODUCER_COMPLETE"
+      ],
+      "delivery": null,
+      "characterization": null
+    }
+  ],
+  "analysis_contract": {
+    "contract_id": "analysis_contract_v1",
+    "time": {
+      "authoritative_field": "midpointMjdTai",
+      "format": "MJD",
+      "scale": "TAI"
+    },
+    "identity": {
+      "dia": "pred.is_sso false AND diaObjectId > 0",
+      "object": "derived grouping key for DIA; broker values remain source-time snapshots"
+    },
+    "known_absent_capabilities": [
+      "complete historical detections",
+      "forced photometry / upper limits",
+      "canonical DiaObject record",
+      "SSO identity / orbits"
+    ]
+  },
+  "light_static_schema": {
+    "source_topic": "ftransfer_lsst_2026-10-04_177446",
+    "schema_groups": [
+      "94e24bb1455f3bc2=dumped"
+    ],
+    "top_level_fields": [
+      "diaObjectId",
+      "snr",
+      "psfFlux",
+      "psfFluxErr",
+      "scienceFlux",
+      "scienceFluxErr",
+      "templateFlux",
+      "templateFluxErr",
+      "band",
+      "midpointMjdTai",
+      "ra",
+      "dec",
+      "reliability",
+      "diaSourceId",
+      "observation_reason",
+      "target_name",
+      "brokerIngestMjd",
+      "lsst_schema_version",
+      "brokerStartProcessTimestamp",
+      "fink_broker_version",
+      "fink_science_version",
+      "publisher",
+      "lc_features",
+      "clf",
+      "xm",
+      "pred",
+      "misc",
+      "brokerEndProcessTimestamp",
+      "timestamp",
+      "tns_type_recomputed"
+    ],
+    "pred_fields": [
+      "is_sso",
+      "is_first",
+      "is_cataloged",
+      "main_label_classifier",
+      "main_label_crossmatch"
+    ],
+    "clf_fields": [
+      "snnSnVsOthers_score",
+      "cats_class",
+      "cats_score",
+      "earlySNIa_score",
+      "elephant_kstest_science",
+      "elephant_kstest_template"
+    ],
+    "xm_fields": [
+      "simbad_otype",
+      "gaiadr3_DR3Name",
+      "gaiadr3_Plx",
+      "gaiadr3_e_Plx",
+      "gaiadr3_VarFlag",
+      "legacydr8_zphot",
+      "legacydr8_e_zphot",
+      "legacydr8_pstar",
+      "legacydr8_fqual",
+      "tns_fullname",
+      "tns_type",
+      "tns_redshift",
+      "gcvs_type",
+      "x3hsp_type",
+      "x4lac_type",
+      "vsx_Type",
+      "spicy_class",
+      "mangrove_HyperLEDA_name",
+      "mangrove_2MASS_name",
+      "mangrove_lum_dist",
+      "mangrove_ang_dist"
+    ],
+    "misc_fields": [
+      "firstDiaSourceMjdTaiFink"
+    ],
+    "lc_features_map": "map<band, struct>",
+    "lc_features_fields": [
+      "mean",
+      "weighted_mean",
+      "standard_deviation",
+      "median",
+      "amplitude",
+      "beyond_1_std",
+      "cusum",
+      "inter_percentile_range_10",
+      "kurtosis",
+      "linear_trend",
+      "linear_trend_sigma",
+      "linear_trend_noise",
+      "linear_fit_slope",
+      "linear_fit_slope_sigma",
+      "linear_fit_reduced_chi2",
+      "magnitude_percentage_ratio_40_5",
+      "magnitude_percentage_ratio_20_10",
+      "maximum_slope",
+      "median_absolute_deviation",
+      "median_buffer_range_percentage_10",
+      "percent_amplitude",
+      "mean_variance",
+      "anderson_darling_normal",
+      "chi2",
+      "skew",
+      "stetson_K"
+    ]
+  },
+  "extracted_files": [
+    {
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/evidence/delivery_1.json",
+      "sha256": "a6948f7e5cc20c380c8d8077786109f243483d2783354f3a7dbb96c229dfbb46"
+    },
+    {
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/request.json",
+      "sha256": "700435dc55fdfab3f01e6383794ec2e3b040ee2611b70cc266da783c6b6144f3"
+    },
+    {
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/state_log.jsonl",
+      "sha256": "569ec943ce86bed2dcced9ac57090428e0c29b1f8b2f01e6885a80f9cb1d1d0a"
+    },
+    {
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/evidence/delivery_1.json",
+      "sha256": "098bdb49b57c8bddad5e4986df615f5670f9912de9cdcd8b01b42ef5432817a5"
+    },
+    {
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/request.json",
+      "sha256": "58cdb3f428a1bc7332d4a46b1e02957a9b7ac8e672c272b1cb7681aa63daecc0"
+    },
+    {
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/state_log.jsonl",
+      "sha256": "d58de935b12b39b64bf126897b13a5db94a0973d5b625674bcc90b74865c62f3"
+    },
+    {
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f/request.json",
+      "sha256": "741a7146f563214aec5899ddf7f0ff62d2048b7aed550680e394f920f798d7dd"
+    },
+    {
+      "path": "configs/acquisitions/acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f/state_log.jsonl",
+      "sha256": "0bd3cc7ba03b0c47aff7e30bb7c1b04c7a700bc01d8637551d7a1321dbab7439"
+    },
+    {
+      "path": "configs/analysis_cohorts/month1.json",
+      "sha256": "cb5922e12dff7700384e0fd55ed9f6a7cdb25aca464681188ab0a857618f443a"
+    },
+    {
+      "path": "configs/delivery_evidence/ftransfer_lsst_2026-10-04_177446/avro_schema_ftransfer_lsst_2026-10-04_177446.json",
+      "sha256": "1e86033fcb48f69880dc0ffe88f9cefcb6e53971b3a8e8b9a3a583c0adf822f7"
+    },
+    {
+      "path": "configs/delivery_evidence/ftransfer_lsst_2026-10-04_177446/delivery_evidence.json",
+      "sha256": "10118b8a4c2719668b466f63b7ab027381341499ed38e34c41cb29149ae7f2e4"
+    },
+    {
+      "path": "src/fink_lsst/analytics/contract.py",
+      "sha256": "560c194c60803d0076191ef857ff9224994a4d7de2c138af56138c729d11d5d1"
+    }
+  ]
+}

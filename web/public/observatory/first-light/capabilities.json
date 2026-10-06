@@ -1,0 +1,432 @@
+{
+  "contract": "uso.observatory-bundle",
+  "contract_version": "1.0.0",
+  "basis_id": "basis.uso.first-light.0001",
+  "capabilities": [
+    {
+      "id": "antares:time.date_states",
+      "scope": "antares",
+      "area": "time",
+      "name": "date_states",
+      "state": "AVAILABLE",
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ],
+      "summary": "Per-date states of the legacy demo export",
+      "reason": "Every demo date carries a state; the date assignment itself is synthetic.",
+      "codes": [
+        "SYNTHETIC_DATE_ASSIGNMENT"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "antares:time.date_counts",
+      "scope": "antares",
+      "area": "time",
+      "name": "date_counts",
+      "state": "PARTIALLY_QUALIFIED",
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ],
+      "summary": "Demo-sample loci per synthetic date",
+      "reason": "Counts are allocations of a legacy sample to synthetic dates, not ANTARES nightly totals.",
+      "codes": [
+        "SAMPLE_ALLOCATION"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "antares:time.transport_totals",
+      "scope": "antares",
+      "area": "time",
+      "name": "transport_totals",
+      "state": "UNAVAILABLE",
+      "evidence": [],
+      "summary": "Published nightly totals",
+      "reason": "No published ANTARES nightly manifests are pinned in this basis.",
+      "codes": [
+        "NOT_IN_BASIS"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "fink:time.date_states",
+      "scope": "fink",
+      "area": "time",
+      "name": "date_states",
+      "state": "AVAILABLE",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ],
+      "summary": "Per-date states from committed acquisition windows",
+      "reason": "Each date inherits the state of its acquisition window at the pinned Fink revision.",
+      "codes": [],
+      "qualifications": [
+        "Per-date delivered counts (G4A daily coverage) are data-plane artifacts and are not in this basis."
+      ]
+    },
+    {
+      "id": "fink:time.date_counts",
+      "scope": "fink",
+      "area": "time",
+      "name": "date_counts",
+      "state": "PARTIALLY_QUALIFIED",
+      "evidence": [
+        "SYNTHETIC_FIXTURE"
+      ],
+      "summary": "Fixture DiaObjects per date (Month-1 only)",
+      "reason": "Synthetic fixture counts inside the admitted Month-1 window; no counts exist for Month-2 or Month-3 by design.",
+      "codes": [
+        "SYNTHETIC_FIXTURE"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "fink:time.transport_totals",
+      "scope": "fink",
+      "area": "time",
+      "name": "transport_totals",
+      "state": "AVAILABLE",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE"
+      ],
+      "summary": "Delivered row totals per acquisition",
+      "reason": "Three-way reconciled transport totals per validated delivery.",
+      "codes": [
+        "TRANSPORT_ONLY"
+      ],
+      "qualifications": [
+        "Transport totals are not Rubin completeness and must never be compared across windows as rates."
+      ]
+    },
+    {
+      "id": "fink:time.acquisition.month-1",
+      "scope": "fink",
+      "area": "time",
+      "name": "acquisition.month-1",
+      "state": "AVAILABLE",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ],
+      "summary": "Month-1 · 2026-02-25 → 2026-03-25",
+      "reason": "Delivery reconciled three ways (expected topic messages = terminal committed = local readable rows, lag 0) and characterized (G4A). Transport reconciliation is not Rubin scientific completeness. Per-date delivered counts are not committed evidence and are not shown.",
+      "codes": [
+        "DELIVERY_VALIDATED",
+        "ADMITTED",
+        "CHARACTERIZED"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "fink:time.acquisition.month-2",
+      "scope": "fink",
+      "area": "time",
+      "name": "acquisition.month-2",
+      "state": "PARTIALLY_QUALIFIED",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ],
+      "summary": "Month-2 · 2026-03-25 → 2026-04-25",
+      "reason": "Transport-validated but scientifically uncharacterized and not admitted to the analytical cohort. Its delivered row total must not be read as an alert rate or compared with other windows.",
+      "codes": [
+        "DELIVERY_VALIDATED",
+        "NOT_ADMITTED",
+        "UNCHARACTERIZED"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "fink:time.acquisition.month-3",
+      "scope": "fink",
+      "area": "time",
+      "name": "acquisition.month-3",
+      "state": "UNAVAILABLE",
+      "evidence": [],
+      "summary": "Month-3 · 2026-04-25 → 2026-05-25",
+      "reason": "Upstream state PRODUCER_COMPLETE: not delivery-validated and not admitted to this basis. This is not missing data; it is not yet available.",
+      "codes": [
+        "NOT_DELIVERY_VALIDATED",
+        "NOT_ADMITTED"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "antares:sky.density",
+      "scope": "antares",
+      "area": "sky",
+      "name": "density",
+      "state": "AVAILABLE",
+      "evidence": [
+        "LEGACY_SAMPLE"
+      ],
+      "summary": "Locus density on HEALPix",
+      "reason": "Counts of demo-sample loci per equal-area cell.",
+      "codes": [],
+      "qualifications": []
+    },
+    {
+      "id": "antares:sky.coverage",
+      "scope": "antares",
+      "area": "sky",
+      "name": "coverage",
+      "state": "UNAVAILABLE",
+      "evidence": [],
+      "summary": "Footprint / coverage",
+      "reason": "No survey footprint or exposure product is pinned for ANTARES in this basis. Locus density is not coverage, and empty cells are not zero-coverage cells.",
+      "codes": [
+        "NOT_IN_BASIS"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "antares:sky.filtered_density",
+      "scope": "antares",
+      "area": "sky",
+      "name": "filtered_density",
+      "state": "AVAILABLE",
+      "evidence": [
+        "LEGACY_SAMPLE"
+      ],
+      "summary": "Cross-filtered density",
+      "reason": "The entity table is the complete population of this basis.",
+      "codes": [],
+      "qualifications": []
+    },
+    {
+      "id": "fink:sky.density",
+      "scope": "fink",
+      "area": "sky",
+      "name": "density",
+      "state": "AVAILABLE",
+      "evidence": [
+        "SYNTHETIC_FIXTURE"
+      ],
+      "summary": "DiaObject density on HEALPix",
+      "reason": "Counts of fixture DiaObjects per equal-area cell.",
+      "codes": [],
+      "qualifications": []
+    },
+    {
+      "id": "fink:sky.coverage",
+      "scope": "fink",
+      "area": "sky",
+      "name": "coverage",
+      "state": "PARTIALLY_QUALIFIED",
+      "evidence": [
+        "SYNTHETIC_FIXTURE"
+      ],
+      "summary": "Fixture footprint",
+      "reason": "Synthetic fixture footprint (-72° ≤ Dec ≤ +8° cell centers) used to generate the fixture population. NOT the Rubin footprint and not Fink delivery coverage.",
+      "codes": [
+        "SYNTHETIC_FIXTURE"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "fink:sky.filtered_density",
+      "scope": "fink",
+      "area": "sky",
+      "name": "filtered_density",
+      "state": "AVAILABLE",
+      "evidence": [
+        "SYNTHETIC_FIXTURE"
+      ],
+      "summary": "Cross-filtered density",
+      "reason": "The entity table is the complete population of this basis.",
+      "codes": [],
+      "qualifications": []
+    },
+    {
+      "id": "antares:entity.inspector",
+      "scope": "antares",
+      "area": "entity",
+      "name": "inspector",
+      "state": "AVAILABLE",
+      "evidence": [
+        "LEGACY_SAMPLE",
+        "SYNTHETIC_DEMO"
+      ],
+      "summary": "Native ANTARES locus record",
+      "reason": "Supported locus fields with per-field evidence.",
+      "codes": [],
+      "qualifications": []
+    },
+    {
+      "id": "antares:entity.lightcurve",
+      "scope": "antares",
+      "area": "entity",
+      "name": "lightcurve",
+      "state": "PARTIALLY_QUALIFIED",
+      "evidence": [
+        "SYNTHETIC_DEMO"
+      ],
+      "summary": "Brightness history",
+      "reason": "Only synthetic demo stories exist (10 loci); they are not ANTARES alert photometry.",
+      "codes": [
+        "SYNTHETIC_DEMO"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "antares:entity.broker_inference",
+      "scope": "antares",
+      "area": "entity",
+      "name": "broker_inference",
+      "state": "PARTIALLY_QUALIFIED",
+      "evidence": [
+        "LEGACY_SAMPLE"
+      ],
+      "summary": "ANTARES tags",
+      "reason": "Filter-pipeline memberships only; not astrophysical classes and not scores.",
+      "codes": [
+        "TAGS_ARE_NOT_CLASSES"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "fink:entity.inspector",
+      "scope": "fink",
+      "area": "entity",
+      "name": "inspector",
+      "state": "AVAILABLE",
+      "evidence": [
+        "SYNTHETIC_FIXTURE"
+      ],
+      "summary": "Native Fink DiaObject / DiaSource record",
+      "reason": "Delivered DiaSources and source-time broker snapshots.",
+      "codes": [],
+      "qualifications": []
+    },
+    {
+      "id": "fink:entity.lightcurve",
+      "scope": "fink",
+      "area": "entity",
+      "name": "lightcurve",
+      "state": "AVAILABLE",
+      "evidence": [
+        "SYNTHETIC_FIXTURE"
+      ],
+      "summary": "Delivered psfFlux history",
+      "reason": "Difference-image psfFlux of delivered DiaSources per band.",
+      "codes": [],
+      "qualifications": [
+        "No forced photometry or upper limits (Light Static)."
+      ]
+    },
+    {
+      "id": "fink:entity.broker_inference",
+      "scope": "fink",
+      "area": "entity",
+      "name": "broker_inference",
+      "state": "AVAILABLE",
+      "evidence": [
+        "SYNTHETIC_FIXTURE"
+      ],
+      "summary": "Source-time classifier snapshots",
+      "reason": "clf/pred/xm/lc_features as delivered with each DiaSource.",
+      "codes": [],
+      "qualifications": [
+        "Model scores are not calibrated probabilities.",
+        "Snapshots are not timeless classifications."
+      ]
+    },
+    {
+      "id": "antares:features.population",
+      "scope": "antares",
+      "area": "features",
+      "name": "population",
+      "state": "AVAILABLE",
+      "evidence": [
+        "LEGACY_SAMPLE",
+        "SYNTHETIC_DEMO"
+      ],
+      "summary": "Parameter-space population",
+      "reason": "5 of 9 registered dimensions are selectable; the rest are declared unavailable with reasons.",
+      "codes": [],
+      "qualifications": []
+    },
+    {
+      "id": "fink:features.population",
+      "scope": "fink",
+      "area": "features",
+      "name": "population",
+      "state": "AVAILABLE",
+      "evidence": [
+        "SYNTHETIC_FIXTURE"
+      ],
+      "summary": "Parameter-space population",
+      "reason": "15 of 17 registered dimensions are selectable; the rest are declared unavailable with reasons.",
+      "codes": [],
+      "qualifications": []
+    },
+    {
+      "id": "relation:relation.cross_broker_association",
+      "scope": "relation",
+      "area": "relation",
+      "name": "cross_broker_association",
+      "state": "UNAVAILABLE",
+      "evidence": [],
+      "summary": "Cross-broker association",
+      "reason": "Cross-broker association is a future versioned scientific relation product. No ANTARES locus is matched to any Fink DiaObject in this basis.",
+      "codes": [
+        "NOT_IMPLEMENTED_IN_GATE"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "workspace:compare.side_by_side",
+      "scope": "workspace",
+      "area": "compare",
+      "name": "side_by_side",
+      "state": "AVAILABLE",
+      "evidence": [],
+      "summary": "Independent side-by-side lenses",
+      "reason": "Each domain is drawn on its own normalization over synchronized geometry.",
+      "codes": [],
+      "qualifications": []
+    },
+    {
+      "id": "workspace:compare.difference_map",
+      "scope": "workspace",
+      "area": "compare",
+      "name": "difference_map",
+      "state": "UNAVAILABLE",
+      "evidence": [],
+      "summary": "Count difference map",
+      "reason": "Raw ANTARES-minus-Fink counts are not meaningful: different entity ontologies, selection functions, time scales and evidence classes.",
+      "codes": [
+        "SCIENTIFICALLY_INVALID"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "workspace:compare.shared_axes",
+      "scope": "workspace",
+      "area": "compare",
+      "name": "shared_axes",
+      "state": "PARTIALLY_QUALIFIED",
+      "evidence": [],
+      "summary": "Shared Lab axes",
+      "reason": "Only dimensions with an identical definition_id (kernel-derived Galactic/ecliptic latitude) may share axes across domains.",
+      "codes": [],
+      "qualifications": []
+    },
+    {
+      "id": "workspace:time.shared_utc_date_axis",
+      "scope": "workspace",
+      "area": "time",
+      "name": "shared_utc_date_axis",
+      "state": "AVAILABLE",
+      "evidence": [],
+      "summary": "Shared UTC-date axis",
+      "reason": "Lanes share UTC-date bins only. Each domain maps its own time scale to UTC dates; MJDs are never aligned across domains.",
+      "codes": [],
+      "qualifications": [
+        "ANTARES MJD is treated as UTC by the historical exporter; Fink midpointMjdTai is TAI."
+      ]
+    }
+  ]
+}
