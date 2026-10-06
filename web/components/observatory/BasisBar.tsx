@@ -39,24 +39,38 @@ export default function BasisBar() {
         {DOMAIN_IDS.map((d) => (
           <span key={d} className="uso-basis-pin">
             <DomainBadge domain={d} quiet />
-            <code>{basis.domains[d].build_id.split(".").slice(1).join(".")}</code>
+            {/* Compact display; the full build id is in the tooltip and the provenance drawer. */}
+            <code title={basis.domains[d].build_id}>
+              {basis.domains[d].build_id
+                .split(".")
+                .slice(1)
+                .join(".")
+                .replace(/T\d{2}:\d{2}:\d{2}Z/, "")}
+            </code>
             <EvidenceChips list={basis.domains[d].evidence} compact />
           </span>
         ))}
         <span className="uso-basis-pin">
           <span className="uso-domain is-quiet">
-            <i aria-hidden="true" className="is-none" />
+            <i aria-hidden="true" className={basis.relation ? undefined : "is-none"} />
             Relation
           </span>
-          <code>none</code>
+          <code>{basis.relation ? `${basis.relation.relation_id} ${basis.relation.version}` : "none"}</code>
         </span>
       </button>
 
       <div className="uso-basisbar-end">
-        <span className="uso-status uso-status-warning" title={manifest.evidence_policy}>
-          <AlertTriangle aria-hidden="true" />
-          Fixture basis · not science-ready
-        </span>
+        {basis.science_ready ? (
+          <span className="uso-status" title={manifest.evidence_policy}>
+            <ShieldCheck aria-hidden="true" />
+            {basis.status.replace(/_/g, " ").toLowerCase()} basis
+          </span>
+        ) : (
+          <span className="uso-status uso-status-warning" title={manifest.evidence_policy}>
+            <AlertTriangle aria-hidden="true" />
+            {basis.status === "FIRST_LIGHT_FIXTURE" ? "Fixture basis" : `${basis.status.replace(/_/g, " ").toLowerCase()} basis`} · not science-ready
+          </span>
+        )}
         <button
           type="button"
           className={`uso-integrity${allVerified ? "" : " is-warn"}`}
@@ -64,7 +78,7 @@ export default function BasisBar() {
           title={allVerified ? "Every loaded payload matched its manifest sha256" : "Some payloads could not be verified"}
         >
           {allVerified ? <ShieldCheck aria-hidden="true" /> : <ShieldAlert aria-hidden="true" />}
-          {integrity.method === "sha256" ? `${verified}/${integrity.files.length} payloads verified` : "integrity unverified"}
+          {integrity.method === "sha256" ? `${verified}/${integrity.files.length} sha256 ✓` : "integrity unverified"}
         </button>
         <button type="button" className="uso-btn uso-btn-quiet" onClick={() => setProvenanceOpen(true)}>
           <FileJson aria-hidden="true" />

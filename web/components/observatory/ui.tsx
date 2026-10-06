@@ -1,8 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
-import type { Capability, CapabilityState, DomainId, EvidenceClass } from "@/types/observatory";
-import { DOMAIN_LABEL, EVIDENCE_LABEL, EVIDENCE_TONE } from "@/lib/observatory/theme";
+import type { Capability, CapabilityState, DomainId, EvidenceClass, NightState } from "@/types/observatory";
+import type { TimeAdmission } from "@/lib/observatory/model";
+import { DOMAIN_LABEL, EVIDENCE_LABEL, EVIDENCE_TONE, NIGHT_STATE_LABEL } from "@/lib/observatory/theme";
 
 export function DomainBadge({ domain, quiet = false }: { domain: DomainId; quiet?: boolean }) {
   return (
@@ -156,4 +157,37 @@ export function KeyValue({ k, v, mono = false, note }: { k: ReactNode; v: ReactN
       </dd>
     </div>
   );
+}
+
+/** "30 Unavailable · not admitted, 2 Outside coverage" for the non-admitted part of a time selection. */
+export function admissionSummary(admission: TimeAdmission): string {
+  return (Object.entries(admission.byState) as Array<[NightState, number]>)
+    .filter(([state]) => state !== "AVAILABLE" && state !== "ZERO")
+    .map(([state, n]) => `${n} ${NIGHT_STATE_LABEL[state].toLowerCase()}`)
+    .join(", ");
+}
+
+/**
+ * Statement shown wherever a count would otherwise appear for dates that are
+ * not admitted: those dates have no counts, which is different from zero.
+ */
+export function AdmissionNote({ domain, admission, block = false }: { domain: DomainId; admission: TimeAdmission | null; block?: boolean }) {
+  if (!admission || admission.status === "FULL") return null;
+  const text =
+    admission.status === "NONE"
+      ? `${DOMAIN_LABEL[domain]}: ${admissionSummary(admission)} in the selection. No count exists for these dates, which is not zero.`
+      : `${admission.admitted} of ${admission.total} selected dates admitted for ${DOMAIN_LABEL[domain]}; ${admissionSummary(admission)} carry no counts.`;
+  return <p className={`uso-admission${block ? " is-block" : ""}${admission.status === "NONE" ? " is-none" : ""}`}>{text}</p>;
+}
+
+/** One phrase for why a time selection has no counts in a domain. */
+export function admissionLabel(admission: TimeAdmission): string {
+  const states = (Object.keys(admission.byState) as NightState[]).filter((st) => st !== "AVAILABLE" && st !== "ZERO");
+  if (states.length === 1) {
+    if (states[0] === "OUTSIDE_COVERAGE") return "outside coverage on these dates";
+    if (states[0] === "UNAVAILABLE") return "unavailable · not admitted";
+    if (states[0] === "UNQUALIFIED") return "unqualified · not admitted";
+    if (states[0] === "MISSING") return "missing on these dates";
+  }
+  return "not admitted on these dates";
 }

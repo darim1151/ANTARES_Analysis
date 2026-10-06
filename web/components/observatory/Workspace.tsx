@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import BasisBar from "./BasisBar";
 import Inspector from "./Inspector";
 import PopulationLab from "./PopulationLab";
@@ -13,6 +13,14 @@ import { useObservatory } from "./ObservatoryContext";
 export default function Workspace() {
   const { state, dispatch, provenanceOpen, setProvenanceOpen } = useObservatory();
   const primary = state.lens.primary;
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  // While the provenance dialog is open the workspace behind it is inert.
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) return;
+    if (provenanceOpen) shell.setAttribute("inert", "");
+    else shell.removeAttribute("inert");
+  }, [provenanceOpen]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -26,7 +34,7 @@ export default function Workspace() {
 
   return (
     <main className="uso" data-mode={state.mode}>
-      <div className="uso-shell">
+      <div className="uso-shell" ref={shellRef}>
         <BasisBar />
         <SelectionBar />
         <TimeRibbon />
@@ -54,7 +62,7 @@ export default function Workspace() {
         ) : (
           <div className={`uso-stage is-${primary}-primary`}>
             <div className="uso-primary">{primary === "sky" ? <SkyLens placement="primary" /> : <PopulationLab placement="primary" />}</div>
-            <div className="uso-side">
+            <div className={`uso-side${state.focus ? " has-focus" : ""}`}>
               <Inspector />
               {primary === "sky" ? <PopulationLab placement="dock" /> : <SkyLens placement="dock" />}
             </div>

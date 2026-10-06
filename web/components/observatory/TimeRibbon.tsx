@@ -32,7 +32,7 @@ function windowText(w: TimeWindow): string {
   const head = w.label.split(" · ")[0];
   const words = w.status_codes.map((c) => CODE_WORDS[c] ?? c.toLowerCase()).filter(Boolean);
   if (w.state === "UNAVAILABLE") words.unshift(w.source_state.toLowerCase().replace(/_/g, " "));
-  if (w.state === "UNQUALIFIED") words.push("no rate comparison");
+  if (w.rate_comparison === "PROHIBITED" && w.state !== "UNAVAILABLE") words.push("no rate comparison");
   return [head, ...words].join(" · ");
 }
 
@@ -77,7 +77,9 @@ export default function TimeRibbon() {
           for (let i = 0; i < dm.cols.n; i += 1) if (m[i]) selected[dm.cols.dates[i]] = (selected[dm.cols.dates[i]] ?? 0) + 1;
         }
         const max = Math.max(1, ...Object.values(base));
-        return { d, time, nights, base, selected, subsetActive, max, countsCap: capability(model, d, "time.date_counts") };
+        // Synthetic count series are hatched so they never read as delivered counts.
+        const synthetic = Boolean(time.counts?.evidence.some((e) => e === "SYNTHETIC_DEMO" || e === "SYNTHETIC_FIXTURE"));
+        return { d, time, nights, base, selected, subsetActive, max, synthetic, countsCap: capability(model, d, "time.date_counts") };
       }),
     [masks, model, state.selection.sky]
   );
@@ -116,11 +118,12 @@ export default function TimeRibbon() {
   }
 
   // Month starts always get a tick; day ticks are thinned and never crowd a month label.
-  const monthStarts = axis.map((date, i) => (date.endsWith("-01") ? i : -1)).filter((i) => i >= 0);
+  // The first date carries a month label too, so it anchors the thinning like a month start.
+  const monthStarts = [0, ...axis.map((date, i) => (date.endsWith("-01") && i > 0 ? i : -1)).filter((i) => i >= 0)];
   const clearOfMonth = (i: number) => monthStarts.every((m) => Math.abs(m - i) * dayW >= 34);
   const ticks = axis
     .map((date, i) => ({ date, i }))
-    .filter(({ date, i }) => date.endsWith("-01") || (clearOfMonth(i) && (dayW >= 20 || (dayW >= 9 ? i % 7 === 0 : i % 14 === 0))));
+    .filter(({ date, i }) => i === 0 || date.endsWith("-01") || (clearOfMonth(i) && (dayW >= 20 || (dayW >= 9 ? i % 7 === 0 : i % 14 === 0))));
 
   const hovered = hoverIndex !== null ? axis[hoverIndex] : null;
 
@@ -136,6 +139,10 @@ export default function TimeRibbon() {
               {NIGHT_STATE_LABEL[s]}
             </li>
           ))}
+          <li title="Count series whose evidence is synthetic (demo or fixture): never delivered counts">
+            <i className="uso-night uso-night-synthetic" aria-hidden="true" />
+            Synthetic counts
+          </li>
           <li title="Shared UTC-date selection">
             <i className="uso-night uso-night-selected" aria-hidden="true" />
             Selected
@@ -154,7 +161,7 @@ export default function TimeRibbon() {
                 {ENTITY_NOUN[model.domains[lane.d].bundle.entities.entity_kind].many} / date · max {fmtInt(lane.max)}
               </span>
               <span className="uso-lanelabel-t" title={`${lane.time.semantics.scale_basis} ${lane.time.semantics.date_binning}`}>
-                {lane.time.semantics.stored_field} · MJD {lane.time.semantics.scale}
+                {lane.time.semantics.stored_field} · MJD {lane.time.semantics.scale_label}
               </span>
             </div>
           ))}
@@ -189,13 +196,14 @@ export default function TimeRibbon() {
           }}
         >
           <svg width={width} height={svgH} role="img" aria-label="Per-domain date lanes with counts and evidence states">
-            {sel && selFrom !== null && selTo !== null && (
-              <g className="uso-ribbon-sel">
-                <rect x={x(selFrom)} y={0} width={x(selTo + 1) - x(selFrom)} height={svgH - AXIS_H} fill="rgba(255,255,255,0.075)" />
-                <line x1={x(selFrom)} x2={x(selFrom)} y1={0} y2={svgH - AXIS_H} stroke={TOKENS.select} strokeOpacity={0.7} />
-                <line x1={x(selTo + 1)} x2={x(selTo + 1)} y1={0} y2={svgH - AXIS_H} stroke={TOKENS.select} strokeOpacity={0.7} />
-              </g>
-            )}
+            <defs>
+              {DOMAIN_IDS.map((d) => (
+                <pattern key={d} id={`uso-hatch-${d}`} width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                  <rect width="4" height="4" fill={withAlpha(DOMAIN_COLOR[d], 0.55)} />
+                  <line x1="0" y1="0" x2="0" y2="4" stroke={DOMAIN_COLOR[d]} strokeWidth="2.2" />
+                </pattern>
+              ))}
+            </defs>
             {lanes.map((lane, li) => {
               const top = li * (LANE_H + LANE_GAP);
               const barTop = top + WIN_H;
@@ -239,13 +247,23 @@ export default function TimeRibbon() {
                     if (n !== undefined && n > 0) {
                       const h = Math.max(1.5, (n / lane.max) * BAR_H);
                       bars.push(
-                        <rect key="b" x={bx} y={barTop + BAR_H - h} width={bw} height={h} rx={Math.min(2, bw / 3)} fill={lane.subsetActive ? withAlpha(color, 0.28) : color} />
+                        <rect
+                          key="b"
+                          x={bx}
+                          y={barTop + BAR_H - h}
+                          width={bw}
+                          height={h}
+                          rx={Math.min(2, bw / 3)}
+                          fill={lane.subsetActive ? withAlpha(color, 0.28) : lane.synthetic ? `url(#uso-hatch-${lane.d})` : color}
+                        />
                       );
                       if (lane.subsetActive) {
                         const s = lane.selected[date] ?? 0;
                         if (s > 0) {
                           const hs = Math.max(1.5, (s / lane.max) * BAR_H);
-                          bars.push(<rect key="s" x={bx} y={barTop + BAR_H - hs} width={bw} height={hs} rx={Math.min(2, bw / 3)} fill={color} />);
+                          bars.push(
+                            <rect key="s" x={bx} y={barTop + BAR_H - hs} width={bw} height={hs} rx={Math.min(2, bw / 3)} fill={lane.synthetic ? `url(#uso-hatch-${lane.d})` : color} />
+                          );
                         }
                       }
                     }
@@ -267,6 +285,16 @@ export default function TimeRibbon() {
                 </g>
               );
             })}
+            {sel && selFrom !== null && selTo !== null && (
+              <g className="uso-ribbon-sel">
+                {/* Recede dates outside the selection; brighten the selected band. */}
+                <rect x={0} y={0} width={x(selFrom)} height={svgH - AXIS_H} fill="rgba(11,11,10,0.5)" />
+                <rect x={x(selTo + 1)} y={0} width={Math.max(0, width - x(selTo + 1))} height={svgH - AXIS_H} fill="rgba(11,11,10,0.5)" />
+                <rect x={x(selFrom)} y={0} width={x(selTo + 1) - x(selFrom)} height={svgH - AXIS_H} fill="rgba(255,255,255,0.11)" />
+                <line x1={x(selFrom)} x2={x(selFrom)} y1={0} y2={svgH - AXIS_H} stroke={TOKENS.select} strokeOpacity={0.7} />
+                <line x1={x(selTo + 1)} x2={x(selTo + 1)} y1={0} y2={svgH - AXIS_H} stroke={TOKENS.select} strokeOpacity={0.7} />
+              </g>
+            )}
             {drag && drag.from !== drag.to && (
               <rect
                 x={x(Math.min(drag.from, drag.to))}

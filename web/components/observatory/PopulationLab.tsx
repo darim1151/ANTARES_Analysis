@@ -66,6 +66,7 @@ export default function PopulationLab({ placement }: { placement: "primary" | "s
             domain={model.domains[d]}
             compact={compact}
             definitions={!compact && shown.length === 1 ? "side" : "collapsed"}
+            narrow={placement === "dock"}
             sharedExtents={extents[d]}
           />
         ))}

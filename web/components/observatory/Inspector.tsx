@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Info, X } from "lucide-react";
 import type {
   AntaresLocusDetail,
@@ -15,12 +15,12 @@ import type {
 import { icrsToEcliptic, icrsToGalactic } from "@/lib/observatory/kernel/astro";
 import { radecToPix } from "@/lib/observatory/kernel/healpix";
 import { decDms, fmtFixed, fmtInt, fmtNum, raHms, shortHash } from "@/lib/observatory/format";
-import { capability, entityRef, type DomainModel } from "@/lib/observatory/model";
+import { capability, entityRef, evidenceUnion, type DomainModel } from "@/lib/observatory/model";
 import { displayedDomains } from "@/lib/observatory/state";
 import { ENTITY_NOUN } from "@/lib/observatory/theme";
 import { useObservatory } from "./ObservatoryContext";
-import { DiaSourceFluxPlot, SyntheticMagnitudePlot } from "./LightcurvePlot";
-import { CapabilityMark, CapabilityNote, DomainBadge, EvidenceChip, EvidenceChips, KeyValue } from "./ui";
+import { DiaSourceFluxPlot, MagnitudePlot } from "./LightcurvePlot";
+import { admissionLabel, AdmissionNote, CapabilityMark, CapabilityNote, DomainBadge, EvidenceChip, EvidenceChips, KeyValue } from "./ui";
 
 type DetailState =
   | { status: "idle" }
@@ -111,7 +111,7 @@ function AntaresRecord({ domain, summary, detail }: { domain: DomainModel; summa
       <Section title="Brightness history" aside={<CapabilityMark state={lcCap.state} />}>
         {detail?.lightcurve ? (
           <>
-            <SyntheticMagnitudePlot points={detail.lightcurve.points} />
+            <MagnitudePlot points={detail.lightcurve.points} evidence={detail.lightcurve.evidence} timeScale={detail.lightcurve.time_scale} />
             <p className="uso-insp-note">
               <EvidenceChip evidence={detail.lightcurve.evidence} /> {detail.lightcurve.label}
             </p>
@@ -217,7 +217,8 @@ function FocusView({ focus }: { focus: NativeEntityRef }) {
         <span>{domain.bundle.entities.id_field}</span>
         <code>{summary.id}</code>
       </p>
-      <EvidenceChips list={domain.pin.evidence} />
+      {/* The record's own evidence, not the basis pin (which also carries domain-level transport evidence). */}
+      <EvidenceChips list={evidenceUnion([domain.bundle.entities.fields.map((f) => f.evidence)])} />
       {!shown.includes(focus.domain) && (
         <p className="uso-banner" role="note">
           <Info aria-hidden="true" />
@@ -246,7 +247,7 @@ function memberKey(domain: DomainModel): string | null {
 }
 
 function MembersList({ d }: { d: DomainId }) {
-  const { model, masks, state, dispatch } = useObservatory();
+  const { model, masks, state, dispatch, admission } = useObservatory();
   const domain = model.domains[d];
   const mask = masks[d].all;
   const key = memberKey(domain);
@@ -267,7 +268,7 @@ function MembersList({ d }: { d: DomainId }) {
       <div className="uso-members-head">
         <DomainBadge domain={d} />
         <span>
-          {fmtInt(masks[d].counts.all)} {noun.many} · top {members.length} by {keyDim?.short ?? "id"}
+          {admission[d]?.status === "NONE" ? admissionLabel(admission[d]!) : `${fmtInt(masks[d].counts.all)} ${noun.many} · top ${members.length} by ${keyDim?.short ?? "id"}`}
         </span>
       </div>
       <ol>
@@ -275,7 +276,7 @@ function MembersList({ d }: { d: DomainId }) {
           <li key={i}>
             <button type="button" onClick={() => dispatch({ type: "focus", focus: entityRef(domain, i) })}>
               <code>{domain.records[i].id}</code>
-              <span>{domain.records[i].entity_date.slice(5)}</span>
+              <span>{domain.records[i].entity_date}</span>
               <span>
                 {keyDim?.short} {fmtNum(keyCol ? keyCol[i] : NaN, 3)}
               </span>
@@ -286,13 +287,19 @@ function MembersList({ d }: { d: DomainId }) {
           </li>
         ))}
       </ol>
-      {members.length === 0 && <p className="uso-empty">No {noun.many} satisfy every active predicate.</p>}
+      <AdmissionNote domain={d} admission={admission[d]} block />
+      {members.length === 0 && admission[d]?.status !== "NONE" && <p className="uso-empty">No {noun.many} satisfy every active predicate.</p>}
     </div>
   );
 }
 
 export default function Inspector() {
   const { model, state, dispatch } = useObservatory();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // A newly opened record (or the return to the selection) starts at the top.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [state.focus]);
   const shown = displayedDomains(state.mode);
   const active = Boolean(state.selection.time || state.selection.sky || Object.keys(state.selection.feature).length);
   return (
@@ -308,14 +315,14 @@ export default function Inspector() {
           </div>
         )}
       </header>
-      <div className="uso-panel-scroll">
+      <div className="uso-panel-scroll" ref={scrollRef}>
         {state.focus ? (
           <FocusView focus={state.focus} />
         ) : (
           <div className="uso-insp-selection">
             {!active && (
               <p className="uso-insp-intro">
-                Select UTC dates in Time, cells or a cone on the Sky, or brush the Lab. Members of the shared selection appear here; open one to see its native record.
+                Select UTC dates in Time, cells or a cone on the Sky, or brush the Lab. Members of the shared selection appear here; open one to see its native record. A date selection applies each domain&apos;s own date rule: ANTARES assigns a locus to its newest-alert date, Fink a DiaObject to its first delivered DiaSource.
               </p>
             )}
             {shown.map((d) => (

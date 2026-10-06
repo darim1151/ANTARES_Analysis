@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { DiaSourceRow, LightcurvePoint } from "@/types/observatory";
+import type { DiaSourceRow, EvidenceClass, LightcurvePoint, TimeScale } from "@/types/observatory";
 import { linearTicks } from "@/lib/observatory/axes";
 import { fmtNum } from "@/lib/observatory/format";
 import { BAND_COLOR, TOKENS } from "@/lib/observatory/theme";
@@ -45,7 +45,11 @@ function Plot({ points, xTitle, yTitle, reversedY, watermark }: { points: Point[
   const px = (t: number) => M.left + ((t - x0) / (x1 - x0)) * pw;
   const py = (v: number) => (reversedY ? M.top + ((v - y0) / (y1 - y0)) * ph : M.top + (1 - (v - y0) / (y1 - y0)) * ph);
   const bands = [...new Set(points.map((p) => p.band))].sort((a, b) => "ugrizy".indexOf(a) - "ugrizy".indexOf(b));
-  const xt = linearTicks(x0, x1, Math.max(3, Math.floor(pw / 90)));
+  // Keep only ticks whose centred label (~36 px) stays inside the plot.
+  const xt = linearTicks(x0, x1, Math.max(3, Math.floor(pw / 90))).filter((t) => {
+    const px0 = M.left + ((t - x0) / (x1 - x0)) * pw;
+    return px0 >= M.left + 18 && px0 <= M.left + pw - 18;
+  });
   const yt = linearTicks(y0, y1, 4);
   return (
     <div ref={ref} className="uso-lc-wrap">
@@ -113,14 +117,16 @@ export function DiaSourceFluxPlot({ sources }: { sources: DiaSourceRow[] }) {
   );
 }
 
-export function SyntheticMagnitudePlot({ points }: { points: LightcurvePoint[] }) {
+/** Magnitude light curve; the watermark and time axis follow the payload's own evidence and scale. */
+export function MagnitudePlot({ points, evidence, timeScale }: { points: LightcurvePoint[]; evidence: EvidenceClass; timeScale: TimeScale }) {
+  const synthetic = evidence === "SYNTHETIC_DEMO" || evidence === "SYNTHETIC_FIXTURE";
   return (
     <Plot
       points={points.map((p) => ({ t: p.mjd, v: p.magnitude, e: null, band: p.band }))}
-      xTitle="MJD (UTC-treated)"
+      xTitle={`MJD [${timeScale}]`}
       yTitle="magnitude"
       reversedY
-      watermark="SYNTHETIC DEMO · NOT PHOTOMETRY"
+      watermark={synthetic ? "SYNTHETIC · NOT PHOTOMETRY" : undefined}
     />
   );
 }

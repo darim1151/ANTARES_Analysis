@@ -4,15 +4,16 @@ import { Maximize2 } from "lucide-react";
 import type { DomainId, SkyLayer } from "@/types/observatory";
 import { pixelAreaDeg2 } from "@/lib/observatory/kernel/healpix";
 import { fmtNum } from "@/lib/observatory/format";
-import { capability, SKY_ORDERS, type DomainModel } from "@/lib/observatory/model";
+import { capability, type DomainModel } from "@/lib/observatory/model";
 import { displayedDomains } from "@/lib/observatory/state";
 import { DOMAIN_RAMP, ENTITY_NOUN, rampColor } from "@/lib/observatory/theme";
 import { useObservatory } from "./ObservatoryContext";
 import SkyMap, { densityScale } from "./SkyMap";
-import { CapabilityMark, CapabilityNote, DomainBadge, EvidenceChips, Segmented, SelectField, Toggle } from "./ui";
+import { admissionLabel, AdmissionNote, CapabilityMark, CapabilityNote, DomainBadge, EvidenceChips, Segmented, SelectField, Toggle } from "./ui";
 
 function SkyLegend({ domain }: { domain: DomainModel }) {
-  const { model, state } = useObservatory();
+  const { model, state, masks } = useObservatory();
+  const subsetActive = Boolean(state.selection.time || state.selection.sky || masks[domain.id].featureActive);
   const order = state.presentation.skyOrder;
   const area = pixelAreaDeg2(order);
   const { max } = densityScale(domain, order);
@@ -34,14 +35,23 @@ function SkyLegend({ domain }: { domain: DomainModel }) {
         </div>
       ) : (
         <span className="uso-legend-item">
-          <i className={`uso-dot uso-dot-${domain.id}`} aria-hidden="true" /> {noun.many} in selection
-          <i className="uso-dot uso-dot-context" aria-hidden="true" /> outside selection
+          {subsetActive ? (
+            <>
+              <i className={`uso-dot uso-dot-${domain.id}`} aria-hidden="true" /> {noun.many} in selection
+              <i className="uso-dot uso-dot-context" aria-hidden="true" /> outside selection
+            </>
+          ) : (
+            <>
+              <i className={`uso-dot uso-dot-${domain.id}`} aria-hidden="true" /> {noun.many} · click one to inspect
+            </>
+          )}
         </span>
       )}
       {coverage ? (
         <span className="uso-legend-item" title={coverage.meaning}>
           <i className="uso-swatch uso-swatch-coverage" aria-hidden="true" />
-          Footprint <EvidenceChips list={coverage.evidence} compact /> <em>not Rubin coverage</em>
+          Footprint <EvidenceChips list={coverage.evidence} compact />
+          {coverage.evidence.some((e) => e === "SYNTHETIC_FIXTURE" || e === "SYNTHETIC_DEMO") && <em>synthetic · not survey coverage</em>}
         </span>
       ) : (
         <span className="uso-legend-item" title={coverageCap.reason}>
@@ -63,7 +73,7 @@ function SkyLegend({ domain }: { domain: DomainModel }) {
 }
 
 export default function SkyLens({ placement }: { placement: "primary" | "secondary" | "dock" }) {
-  const { model, state, dispatch, masks } = useObservatory();
+  const { model, state, dispatch, masks, admission } = useObservatory();
   const shown = displayedDomains(state.mode);
   const compact = placement !== "primary";
   const order = state.presentation.skyOrder;
@@ -83,7 +93,7 @@ export default function SkyLens({ placement }: { placement: "primary" | "seconda
               <SelectField
                 label="Order"
                 value={String(order)}
-                options={SKY_ORDERS.map((o) => ({ value: String(o), label: `${o} · ${fmtNum(pixelAreaDeg2(o), 3)} deg²` }))}
+                options={model.skyOrders.map((o) => ({ value: String(o), label: `${o} · ${fmtNum(pixelAreaDeg2(o), 3)} deg²` }))}
                 onChange={(v) => dispatch({ type: "presentation", patch: { skyOrder: Number(v) } })}
               />
               <Segmented<SkyLayer>
@@ -123,17 +133,18 @@ export default function SkyLens({ placement }: { placement: "primary" | "seconda
                 <DomainBadge domain={d} />
                 <span className="uso-skycol-label">{domain.bundle.entities.native_label}</span>
                 <EvidenceChips list={domain.bundle.sky.density.evidence} compact />
+                {admission[d]?.status === "PARTIAL" && <AdmissionNote domain={d} admission={admission[d]} />}
                 <span className="uso-skycol-n">
                   {m.counts.exceptSky === m.counts.total ? `N ${m.counts.total.toLocaleString("en-US")}` : `${m.counts.exceptSky.toLocaleString("en-US")} of ${m.counts.total.toLocaleString("en-US")} in cross-filter`}
                 </span>
               </div>
-              <SkyMap domain={domain} compact={placement === "dock"} />
+              <SkyMap domain={domain} compact={placement === "dock"} unadmitted={admission[d]?.status === "NONE" ? admissionLabel(admission[d]!) : null} />
               {placement !== "dock" && <SkyLegend domain={domain} />}
             </div>
           );
         })}
       </div>
-      {state.mode === "compare" && placement === "primary" && (
+      {state.mode === "compare" && placement !== "dock" && (
         <footer className="uso-panel-foot">
           <span>Synchronized geometry, independent normalizations: each map is scaled to its own population.</span>
           <span title={relation.reason}>

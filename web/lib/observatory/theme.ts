@@ -79,10 +79,11 @@ export const EVIDENCE_LABEL: Record<EvidenceClass, string> = {
   SYNTHETIC_FIXTURE: "Synthetic fixture"
 };
 
-export const EVIDENCE_TONE: Record<EvidenceClass, "real" | "legacy" | "synthetic"> = {
-  ACCEPTED_SCIENCE: "real",
-  VALIDATED_TRANSPORT_EVIDENCE: "real",
-  COMMITTED_OPERATIONAL_RECORD: "real",
+/** Accepted science is the only "science" tone; transport/operational evidence is real but not science. */
+export const EVIDENCE_TONE: Record<EvidenceClass, "science" | "record" | "legacy" | "synthetic"> = {
+  ACCEPTED_SCIENCE: "science",
+  VALIDATED_TRANSPORT_EVIDENCE: "record",
+  COMMITTED_OPERATIONAL_RECORD: "record",
   LEGACY_SAMPLE: "legacy",
   SYNTHETIC_DEMO: "synthetic",
   SYNTHETIC_FIXTURE: "synthetic"

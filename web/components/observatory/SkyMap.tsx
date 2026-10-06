@@ -29,6 +29,7 @@ type Pointer = { x: number; y: number; ra: number; dec: number } | null;
 
 const GALACTIC_PLANE = galacticLatitudeCurve(0, 721);
 const ECLIPTIC = eclipticCurve(721);
+const HALO = "uso-halo";
 const MERIDIANS = [0, 30, 60, 90, 120, 150, 210, 240, 270, 300, 330].map((ra) => meridian(ra));
 const PARALLELS = [-60, -30, 0, 30, 60].map((dec) => ({ dec, curve: parallel(dec) }));
 // 12h sits on the seam at both limb edges, where it would collide with Dec labels.
@@ -42,7 +43,16 @@ export function densityScale(domain: DomainModel, order: number) {
   return { full, max, t };
 }
 
-export default function SkyMap({ domain, compact }: { domain: DomainModel; compact: boolean }) {
+export default function SkyMap({
+  domain,
+  compact,
+  unadmitted = null
+}: {
+  domain: DomainModel;
+  compact: boolean;
+  /** Why the selected dates have no counts for this domain; null when they do. */
+  unadmitted?: string | null;
+}) {
   const { model, state, dispatch, masks } = useObservatory();
   const { hover, setHover } = useSkyHover();
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -123,7 +133,8 @@ export default function SkyMap({ domain, compact }: { domain: DomainModel; compa
       ctx.fillStyle = TOKENS.coverage;
       for (const p of coverage) ctx.fill(cellPath(order, p));
     }
-    if (layer === "density") {
+    // Dates that are not admitted have no counts; draw no density rather than an empty (zero) map.
+    if (layer === "density" && !unadmitted) {
       const ramp = DOMAIN_RAMP[d];
       if (filtered) {
         ctx.fillStyle = "rgba(242, 241, 236, 0.09)";
@@ -140,7 +151,7 @@ export default function SkyMap({ domain, compact }: { domain: DomainModel; compa
       }
     }
     ctx.restore();
-    if (layer === "entities") {
+    if (layer === "entities" && !unadmitted) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       const all = mask.all;
       const subset = Boolean(state.selection.time || state.selection.sky || mask.featureActive);
@@ -156,7 +167,7 @@ export default function SkyMap({ domain, compact }: { domain: DomainModel; compa
         }
       }
     }
-  }, [compact, coverage, d, domain, filtered, frame, layer, mask, order, projected, scale, size, state.selection]);
+  }, [compact, coverage, d, domain, filtered, frame, layer, mask, order, projected, scale, size, state.selection, unadmitted]);
 
   function locate(event: React.PointerEvent): Pointer {
     const rect = wrapRef.current?.getBoundingClientRect();
@@ -245,6 +256,7 @@ export default function SkyMap({ domain, compact }: { domain: DomainModel; compa
       aria-label={`${domain.id.toUpperCase()} sky in Mollweide equal-area projection, HEALPix order ${order}. Click a cell to select it, shift-click to add, drag for a cone.`}
     >
       <canvas ref={canvasRef} style={{ width: size.width, height: size.height }} />
+      {unadmitted && <div className="uso-unadmitted-veil">{`${domain.id.toUpperCase()}: ${unadmitted}. No counts exist, which is not zero.`}</div>}
       <svg width={size.width} height={size.height} className="uso-skysvg" aria-hidden="true">
         <defs>
           <clipPath id={`clip-${clipId}`}>
@@ -262,6 +274,9 @@ export default function SkyMap({ domain, compact }: { domain: DomainModel; compa
               ))}
             </g>
           )}
+          {/* Dark halos keep the reference curves legible over any density ramp. */}
+          {overlays.ecliptic && <path className={HALO} d={curveSvg(ECLIPTIC)} />}
+          {overlays.galacticPlane && <path className={HALO} d={curveSvg(GALACTIC_PLANE)} />}
           {overlays.ecliptic && <path className="uso-ecliptic" d={curveSvg(ECLIPTIC)} />}
           {overlays.galacticPlane && <path className="uso-galactic" d={curveSvg(GALACTIC_PLANE)} />}
           {sky?.kind === "healpix" &&
@@ -359,7 +374,7 @@ export default function SkyMap({ domain, compact }: { domain: DomainModel; compa
               <span>
                 RA {fmtFixed(pointer.ra, 2)}° Dec {fmtFixed(pointer.dec, 2)}° · b {fmtFixed(icrsToGalactic(pointer.ra, pointer.dec)[1], 1)}° · β {fmtFixed(icrsToEcliptic(pointer.ra, pointer.dec)[1], 1)}°
               </span>
-              {layer === "density" && (
+              {layer === "density" && !unadmitted && (
                 <span>
                   {fmtInt(hoverCount)} {hoverCount === 1 ? noun.one : noun.many}
                   {filtered ? " in cross-filter" : ""} · {fmtNum(hoverCount / area, 3)} / deg²

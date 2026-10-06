@@ -9,7 +9,7 @@ import { fmtInt, fmtLogTick, fmtNum, fmtPercent } from "@/lib/observatory/format
 import type { DomainModel } from "@/lib/observatory/model";
 import { DOMAIN_COLOR, DOMAIN_RAMP, ENTITY_NOUN, rampColor, TOKENS, withAlpha } from "@/lib/observatory/theme";
 import { useObservatory } from "./ObservatoryContext";
-import { CapabilityMark, DomainBadge, EvidenceChip, Segmented, SelectField, type SelectOption } from "./ui";
+import { admissionLabel, AdmissionNote, CapabilityMark, DomainBadge, EvidenceChip, Segmented, SelectField, type SelectOption } from "./ui";
 
 const FAMILY_LABEL: Record<FeatureFamily, string> = {
   position: "Position",
@@ -65,16 +65,20 @@ export default function LabPlot({
   domain,
   compact,
   definitions,
+  narrow = false,
   sharedExtents
 }: {
   domain: DomainModel;
   compact: boolean;
+  /** Narrow column (docked): controls take two rows. */
+  narrow?: boolean;
   /** "side": always-open definitions column; "collapsed": a disclosure under the plot. */
   definitions: "side" | "collapsed";
   sharedExtents: { x: [number, number] | null; y: [number, number] | null };
 }) {
-  const { state, dispatch, masks } = useObservatory();
+  const { state, dispatch, masks, admission } = useObservatory();
   const d = domain.id;
+  const unadmitted = admission[d]?.status === "NONE";
   const config = state.lens.lab[d];
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -97,7 +101,7 @@ export default function LabPlot({
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(([entry]) => setSize({ width: Math.max(220, Math.floor(entry.contentRect.width)), height: Math.max(150, Math.floor(entry.contentRect.height)) }));
+    const ro = new ResizeObserver(([entry]) => setSize({ width: Math.max(220, Math.floor(entry.contentRect.width)), height: Math.max(90, Math.floor(entry.contentRect.height)) }));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -127,7 +131,8 @@ export default function LabPlot({
   const h2 = useMemo(() => histogram2d(xs, ys, subsetMask, ax, ay, config.statistic, zs), [ax, ay, config.statistic, subsetMask, xs, ys, zs]);
   const margX = useMemo(() => ({ full: histogram1d(xs, null, ax), sub: histogram1d(xs, subsetMask, ax), brushed: brush ? histogram1d(xs, mask.all, ax) : null }), [ax, brush, mask.all, subsetMask, xs]);
   const margY = useMemo(() => ({ full: histogram1d(ys, null, ay), sub: histogram1d(ys, subsetMask, ay), brushed: brush ? histogram1d(ys, mask.all, ay) : null }), [ay, brush, mask.all, subsetMask, ys]);
-  const zExtent = useMemo(() => (zs && dimZ ? robustExtent(zs, dimZ.scale, dimZ.extent) : null), [dimZ, zs]);
+  // Unpadded so the legend never shows impossible values (e.g. a count below 1).
+  const zExtent = useMemo(() => (zs && dimZ ? robustExtent(zs, dimZ.scale, dimZ.extent, false) : null), [dimZ, zs]);
   const maxCount = Math.max(1, ...full.counts);
 
   useEffect(() => {
@@ -239,7 +244,7 @@ export default function LabPlot({
     });
 
   return (
-    <div className={`uso-lab-plot${compact ? " is-compact" : ""}`}>
+    <div className={`uso-lab-plot${compact ? " is-compact" : ""}${narrow ? " is-narrow" : ""}`}>
       <div className="uso-lab-controls">
         <DomainBadge domain={d} />
         <SelectField label="X" value={config.x} options={options} onChange={(x) => dispatch({ type: "lab", domain: d, patch: { x } })} wide />
@@ -314,6 +319,7 @@ export default function LabPlot({
         aria-label={`${d.toUpperCase()} population: ${dimY.label} versus ${dimX.label}. Drag to brush a region; double-click to clear.`}
       >
         <canvas ref={canvasRef} style={{ width: size.width, height: size.height }} />
+        {unadmitted && <div className="uso-unadmitted-veil">{`${d.toUpperCase()}: ${admissionLabel(admission[d]!)}. No counts exist, which is not zero.`}</div>}
         <svg width={size.width} height={size.height} aria-hidden="true">
           <g className="uso-marginal">
             {marginalBars(margX.full.counts, "x", "rgba(195, 194, 183, 0.18)", Math.max(1, ...margX.full.counts))}
@@ -408,9 +414,10 @@ export default function LabPlot({
           </div>
         )}
       </div>
+      {admission[d]?.status === "PARTIAL" && <AdmissionNote domain={d} admission={admission[d]} />}
       <div className="uso-lab-readout" aria-live="polite">
         <span>
-          <b>N</b> {fmtInt(h2.considered)}
+          <b>N</b> {unadmitted ? "—" : fmtInt(h2.considered)}
           {contextActive ? ` of ${fmtInt(mask.counts.total)} in cross-filter` : ` ${noun.many}`}
         </span>
         <span title="Entities with a defined value on both axes (log axes exclude non-positive values)">

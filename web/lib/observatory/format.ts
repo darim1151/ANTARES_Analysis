@@ -11,7 +11,8 @@ export function fmtNum(value: number | null | undefined, digits = 3): string {
   const abs = Math.abs(value);
   if (abs >= 1e5 || abs < 1e-3) return value.toExponential(Math.max(0, digits - 1)).replace("e+", "e");
   if (Number.isInteger(value) && abs < 1e5) return fmtInt(value);
-  return Number(value.toPrecision(digits)).toString();
+  // Significant digits with digit grouping (41,100 not 41100).
+  return new Intl.NumberFormat("en-US", { maximumSignificantDigits: digits }).format(value);
 }
 
 export function fmtFixed(value: number | null | undefined, decimals: number): string {
@@ -73,11 +74,11 @@ export function decDms(dec: number): string {
 
 const SUPERSCRIPT: Record<string, string> = { "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" };
 
-/** Tick label for log axes: exact decades as 10ⁿ outside [0.01, 1000], otherwise plain. */
+/** Tick label for log axes: decades from 10³ up (and below 0.01) as 10ⁿ, otherwise plain. */
 export function fmtLogTick(value: number): string {
   const exponent = Math.log10(value);
   const isDecade = Math.abs(exponent - Math.round(exponent)) < 1e-9;
-  if (isDecade && (value >= 1e4 || value < 0.01)) {
+  if (isDecade && (value >= 1e3 || value < 0.01)) {
     return `10${String(Math.round(exponent)).replace(/./g, (c) => SUPERSCRIPT[c] ?? c)}`;
   }
   return fmtNum(value, 3);

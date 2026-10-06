@@ -41,15 +41,39 @@ export default function ProvenanceDrawer() {
   const view = useMemo(() => buildViewManifest(model, state), [model, state]);
   const viewText = useMemo(() => JSON.stringify(view, null, 2), [view]);
 
+  const drawerRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    if (provenanceOpen) closeRef.current?.focus();
+    if (!provenanceOpen) return;
+    // Modal behaviour: focus moves in, Tab cycles inside, and focus returns to the trigger.
+    const opener = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || !drawerRef.current) return;
+      const focusable = [...drawerRef.current.querySelectorAll<HTMLElement>("button, [href], select, [tabindex]:not([tabindex='-1'])")].filter((el) => !el.hasAttribute("disabled"));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      // Deferred: the workspace stays inert until its own effect runs in this commit.
+      window.setTimeout(() => opener?.focus?.(), 0);
+    };
   }, [provenanceOpen]);
 
   if (!provenanceOpen) return null;
 
   return (
     <div className="uso-drawer-layer" onClick={() => setProvenanceOpen(false)}>
-      <aside className="uso-drawer" role="dialog" aria-modal="true" aria-label="Basis provenance" onClick={(e) => e.stopPropagation()}>
+      <aside ref={drawerRef} className="uso-drawer" role="dialog" aria-modal="true" aria-label="Basis provenance" onClick={(e) => e.stopPropagation()}>
         <header className="uso-drawer-head">
           <div>
             <p className="uso-eyebrow">Provenance</p>
@@ -89,7 +113,12 @@ export default function ProvenanceDrawer() {
                     }
                   />
                 ))}
-                <KeyValue k="Relation" v="none" mono note="Cross-broker association is a future versioned relation product." />
+                <KeyValue
+                  k="Relation"
+                  v={basis.relation ? `${basis.relation.relation_id} ${basis.relation.version}` : "none"}
+                  mono
+                  note={basis.relation ? basis.relation.method : model.caps.get("relation:relation.cross_broker_association")?.reason}
+                />
                 <KeyValue k="Semantic contract" v={`${basis.semantic_contract.id} ${basis.semantic_contract.version}`} mono />
                 <KeyValue k="Feature registry" v={`${basis.feature_registry.id} ${basis.feature_registry.version}`} mono />
                 <KeyValue k="Analysis kernel" v={`${basis.analysis_kernel.id} ${basis.analysis_kernel.version}`} mono />
@@ -111,43 +140,75 @@ export default function ProvenanceDrawer() {
           )}
           {tab === "evidence" && (
             <>
-              <h3>Fink acquisitions at the pinned revision</h3>
+              <h3>Acquisitions at the pinned revisions</h3>
               <div className="uso-tablewrap">
                 <table className="uso-table">
                   <thead>
                     <tr>
                       <th>Window (UTC dates, half-open)</th>
                       <th>Upstream state</th>
-                      <th>Delivery</th>
-                      <th>Admission</th>
-                      <th>Science</th>
-                      <th>Delivered rows (transport)</th>
+                      <th>Delivery · admission · science</th>
+                      <th>Transport facts</th>
                     </tr>
                   </thead>
                   <tbody>
                     {provenance.acquisitions.map((a) => (
                       <tr key={a.acquisition_id}>
                         <td>
-                          <b>{a.label}</b> {a.window.start} → {a.window.stop}
+                          <DomainBadge domain={a.domain} quiet /> <b>{a.label}</b>
+                          <small>
+                            {a.window.start} → {a.window.stop}
+                          </small>
                         </td>
                         <td>
                           <code>{a.state}</code>
                         </td>
-                        <td>{a.delivery_validation.replace(/_/g, " ").toLowerCase()}</td>
                         <td>
-                          {a.admission === "ADMITTED" ? `admitted (${a.cohort})` : "not admitted"}
+                          {a.delivery_validation.replace(/_/g, " ").toLowerCase()} · {a.admission === "ADMITTED" ? `admitted (${a.cohort})` : "not admitted"} ·{" "}
+                          {a.scientific_status.replace(/_/g, " ").toLowerCase()}
                         </td>
-                        <td>{a.scientific_status.replace(/_/g, " ").toLowerCase()}</td>
-                        <td className="is-num">{a.delivery ? fmtInt(a.delivery.readable_rows) : "—"}</td>
+                        <td>
+                          {/* Deliberately prose, not an aligned numeric column: these totals are not rates. */}
+                          {a.delivery ? `${fmtInt(a.delivery.readable_rows)} readable rows reconciled (lag ${a.delivery.terminal_lag})` : "no validated delivery"}
+                          <small>rate comparison prohibited</small>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
               <p className="uso-insp-note">
-                Delivered rows are transport reconciliation of each topic (expected = committed = readable, lag 0). They are not Rubin scientific completeness and are
-                never compared across windows as alert rates; Month-2 is uncharacterized and Month-3 is not delivery-validated.
+                Delivered rows are transport reconciliation of each topic (expected = committed = readable, lag 0). They are not Rubin scientific completeness and are never
+                compared across windows as alert rates.
               </p>
+              <h3>Time windows and their facts</h3>
+              {DOMAIN_IDS.map((d) =>
+                model.domains[d].bundle.time.windows.map((w) => (
+                  <div key={w.id} className="uso-window-facts">
+                    <div className="uso-def-head">
+                      <DomainBadge domain={d} quiet />
+                      <b>{w.label}</b>
+                      <code>{w.state}</code>
+                      <span className="uso-hint">{w.status_codes.join(" · ")} · rate comparison {w.rate_comparison.toLowerCase()}</span>
+                    </div>
+                    <p>{w.caveat}</p>
+                    <dl className="uso-kvs">
+                      {w.facts.map((f) => (
+                        <KeyValue
+                          key={f.label}
+                          k={
+                            <>
+                              {f.label} <EvidenceChip evidence={f.evidence} compact />
+                            </>
+                          }
+                          v={typeof f.value === "number" ? `${fmtInt(f.value)}${f.unit ? ` ${f.unit}` : ""}` : String(f.value)}
+                          mono
+                        />
+                      ))}
+                    </dl>
+                  </div>
+                ))
+              )}
               <h3>Field-level evidence</h3>
               {DOMAIN_IDS.map((d) => (
                 <div key={d} className="uso-fieldev">

@@ -8,14 +8,14 @@ import { ENTITY_NOUN } from "@/lib/observatory/theme";
 import { pixelAreaDeg2 } from "@/lib/observatory/kernel/healpix";
 import { displayedDomains } from "@/lib/observatory/state";
 import { useObservatory } from "./ObservatoryContext";
-import { DomainBadge } from "./ui";
+import { admissionLabel, admissionSummary, DomainBadge } from "./ui";
 
 function rangeText(range: FeatureRange, short: string, unit: string | null) {
   return `${short} ${fmtNum(range.min, 3)} – ${fmtNum(range.max, 3)}${unit ? ` ${unit}` : ""}`;
 }
 
 export default function SelectionBar() {
-  const { model, state, dispatch, masks, notices, dismissNotice } = useObservatory();
+  const { model, state, dispatch, masks, admission, notices, dismissNotice } = useObservatory();
   const { time, sky, feature } = state.selection;
   const shown = displayedDomains(state.mode);
   const active = Boolean(time || sky || Object.keys(feature).length);
@@ -26,7 +26,10 @@ export default function SelectionBar() {
       <div className="uso-predicates">
         {!active && <span className="uso-hint">None · choose UTC dates, sky cells or a cone, or brush the Lab</span>}
         {time && (
-          <span className="uso-pred">
+          <span
+            className="uso-pred"
+            title={shown.map((d) => `${d.toUpperCase()}: ${model.domains[d].bundle.time.semantics.entity_date_rule}`).join("\n")}
+          >
             <b>Time</b>
             {time.start === lastDate(time.stop) ? time.start : `${time.start} → ${lastDate(time.stop)}`} UTC dates
             <button type="button" aria-label="Clear time selection" onClick={() => dispatch({ type: "time", time: null })}>
@@ -66,13 +69,31 @@ export default function SelectionBar() {
         })}
       </div>
       <div className="uso-counts" aria-live="polite">
-        {shown.map((d) => (
-          <span key={d} className="uso-count">
-            <DomainBadge domain={d} quiet />
-            <b>{fmtInt(masks[d].counts.all)}</b>
-            <span>/ {fmtInt(masks[d].counts.total)} {ENTITY_NOUN[model.domains[d].bundle.entities.entity_kind].many}</span>
-          </span>
-        ))}
+        {shown.map((d) => {
+          const a = admission[d];
+          const noun = ENTITY_NOUN[model.domains[d].bundle.entities.entity_kind].many;
+          const sample = model.domains[d].complete ? "" : " (sample)";
+          if (a?.status === "NONE") {
+            return (
+              <span key={d} className="uso-count is-unadmitted" title={admissionSummary(a)}>
+                <DomainBadge domain={d} quiet />
+                <b>—</b>
+                <span>{admissionLabel(a)}</span>
+              </span>
+            );
+          }
+          return (
+            <span key={d} className="uso-count" title={a?.status === "PARTIAL" ? `${a.admitted}/${a.total} dates admitted; ${admissionSummary(a)}` : undefined}>
+              <DomainBadge domain={d} quiet />
+              <b>{fmtInt(masks[d].counts.all)}</b>
+              <span>
+                / {fmtInt(masks[d].counts.total)} {noun}
+                {sample}
+                {a?.status === "PARTIAL" ? ` · ${a.admitted}/${a.total} dates admitted` : ""}
+              </span>
+            </span>
+          );
+        })}
         {active && (
           <button type="button" className="uso-btn uso-btn-quiet" onClick={() => dispatch({ type: "clearSelection" })}>
             Clear all

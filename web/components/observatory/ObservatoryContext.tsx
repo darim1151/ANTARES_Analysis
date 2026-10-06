@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useReducer,
 import type { Dispatch, ReactNode } from "react";
 import { DOMAIN_IDS, type DomainId, type ScientificState } from "@/types/observatory";
 import { computeMasks, type MaskSet } from "@/lib/observatory/kernel/selection";
-import type { WorkspaceModel } from "@/lib/observatory/model";
+import { timeAdmission, type TimeAdmission, type WorkspaceModel } from "@/lib/observatory/model";
 import type { BundleReader } from "@/lib/observatory/reader";
 import { reduce, stateFromUrl, stateToUrl, type Action } from "@/lib/observatory/state";
 
@@ -14,6 +14,8 @@ type ObservatoryValue = {
   state: ScientificState;
   dispatch: Dispatch<Action>;
   masks: Record<DomainId, MaskSet>;
+  /** What the shared time selection means for each domain (null: no time selection). */
+  admission: Record<DomainId, TimeAdmission | null>;
   notices: string[];
   dismissNotice: (index: number) => void;
   provenanceOpen: boolean;
@@ -59,11 +61,17 @@ export function ObservatoryProvider({
     return out;
   }, [model, state.selection]);
 
+  const admission = useMemo(() => {
+    const out = {} as Record<DomainId, TimeAdmission | null>;
+    for (const d of DOMAIN_IDS) out[d] = timeAdmission(model.domains[d], state.selection.time);
+    return out;
+  }, [model, state.selection.time]);
+
   const dismissNotice = useCallback((index: number) => setNotices((list) => list.filter((_, i) => i !== index)), []);
 
   const value = useMemo(
-    () => ({ model, reader, state, dispatch, masks, notices, dismissNotice, provenanceOpen, setProvenanceOpen }),
-    [model, reader, state, masks, notices, dismissNotice, provenanceOpen]
+    () => ({ model, reader, state, dispatch, masks, admission, notices, dismissNotice, provenanceOpen, setProvenanceOpen }),
+    [model, reader, state, masks, admission, notices, dismissNotice, provenanceOpen]
   );
   const hoverValue = useMemo(() => ({ hover, setHover }), [hover]);
 
