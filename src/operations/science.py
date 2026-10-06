@@ -1652,7 +1652,7 @@ def _validate_phase6_manifest_evidence(
             and getattr(expected_profile, "transport", None) is not None):
         expected_client_identity = {
             "distribution": "antares-client",
-            "pagination_contract": "p2-guarded-jsonapi-links-next-v1",
+            "pagination_contract": expected_profile.transport.as_dict()["pagination"],
         }
     if not isinstance(client, dict) or (
         expected_client_identity is None
@@ -2078,7 +2078,7 @@ def validate_p2_query_result(request, result, profile):
             "distribution": "antares-client", "version": "1.14.0",
             "api_base_url": "https://api.antares.noirlab.edu/v1/", "api_timeout_seconds": 60,
             "authentication": "public-search-no-credentials",
-            "pagination_contract": "p2-guarded-jsonapi-links-next-v1",
+            "pagination_contract": transport.as_dict()["pagination"],
             "transport_sha256": _phase6_json_hash(transport.as_dict())})))
     if (details.get("capability_environment"), _phase6_json_hash(details.get("client"))) not in qualified:
         _raise_artifact("p2_client_invalid", "P2 client/environment is not exactly qualified for this profile.")

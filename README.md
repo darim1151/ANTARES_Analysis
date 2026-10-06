@@ -6,6 +6,17 @@ This project still uses ANTARES as the broker/source. The workflows can run on
 Middle Earth or Rubin Science Platform (RSP); neither environment is a direct
 Rubin Butler/TAP replacement.
 
+## Release 0.4.9 — G6.6.4-R2 canary compatibility
+
+The official service advertises HTTP continuation URLs for its HTTPS listing.
+This patch strictly validates those representations and requests the same
+listing and query over the official HTTPS endpoint. Foreign or ambiguous
+destinations still refuse, and pagination remains bounded and cycle checked.
+Scientific selection, completeness, ordering and the child transport remain
+unchanged. The new frozen profile has no production trust until both live
+canaries pass independent verification. Current execution evidence is in
+[the G6.6.4 packet](docs/operations/G6.6.4_ONEPASS_FINALIZATION.md).
+
 ## Release 0.4.8 — G6.6.3D canary
 
 This immutable canary release preserves every runtime source file from

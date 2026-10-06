@@ -2301,7 +2301,7 @@ def _run_p2_query(provider, request, progress, event_hook):
 # ---------------------------------------------------------------------------
 
 P2_TRANSPORT_SCHEMA = "v3.p2-transport-limits.v2"
-P2_PAGINATION_CONTRACT = "p2-guarded-jsonapi-links-next-v1"
+P2_PAGINATION_CONTRACT = "p2-guarded-jsonapi-links-next-v2"
 _P2_SORT = "-properties.newest_alert_observation_time"
 _P2_TRANSPORT_BOUNDS = {
     "max_pages": (1, 10_000),
@@ -2465,7 +2465,7 @@ class P2TransportLimits:
 
     def as_dict(self):
         return {"schema_version": P2_TRANSPORT_SCHEMA, "pagination": P2_PAGINATION_CONTRACT,
-                "continuation": "absolute-https-same-origin-same-listing-path-never-repeated",
+                "continuation": "absolute-http-default-port-or-https-default-port;canonical-trusted-https-same-listing-raw-query;prepared-page-never-repeated",
                 "redirects": "same-origin-https-api-prefix-validated-before-request",
                 "termination": "complete-page-then-links-next-null-or-missing",
                 "limit_semantics": "refusal-never-completeness",
@@ -2474,6 +2474,36 @@ class P2TransportLimits:
                 "ipc": _p2_transport.PROTOCOL, "ipc_wait": "remaining-iterator-deadline",
                 "child_implementation_sha256": _p2_transport.implementation_sha256(),
                 **{name: getattr(self, name) for name in _P2_TRANSPORT_BOUNDS}}
+
+
+def _canonical_p2_continuation(target, *, host, listing_path):
+    """Validate a service representation and return only its trusted HTTPS destination.
+
+    The official service can advertise HTTP behind its proxy.  Only its exact
+    host, default scheme port and listing path may be upgraded; the raw query
+    is retained without decoding or re-encoding.  The authority allowlist also
+    excludes ambiguous port/hostname spellings before requests prepares it.
+    """
+    if not _p2_transport.plain_url(target):
+        raise P2MalformedContinuationError("P2 links.next is not one plain URL string.")
+    try:
+        parts = urlsplit(target)
+        port, parsed_host = parts.port, parts.hostname
+    except ValueError as exc:
+        raise P2MalformedContinuationError("P2 links.next is not a parseable URL.") from exc
+    if not parts.scheme:
+        raise P2RelativeContinuationError("P2 links.next is relative; it is never resolved.")
+    if parts.scheme not in ("http", "https"):
+        raise P2InsecureContinuationError("P2 links.next cannot designate trusted HTTPS.")
+    if parts.username is not None or parts.password is not None or "#" in target:
+        raise P2MalformedContinuationError("P2 links.next carries credentials or a fragment.")
+    default_port = 80 if parts.scheme == "http" else 443
+    if (parsed_host != host or port not in (None, default_port)
+            or parts.netloc.lower() not in (host, f"{host}:{default_port}")):
+        raise P2CrossOriginContinuationError("P2 links.next leaves the ANTARES API origin.")
+    if parts.path != listing_path:
+        raise P2ContinuationPathError("P2 links.next is not the listing being paged.")
+    return urlunsplit(("https", host, parts.path, parts.query, ""))
 
 
 class _GuardedListing:
@@ -2532,11 +2562,13 @@ class _GuardedListing:
             empty_run = 0 if items else empty_run + 1
             if empty_run > limits.max_consecutive_empty_pages:
                 raise P2EmptyPageLimitError("P2 iterator received too many empty continuing pages.")
-            key = self._validated_continuation(target)
+            canonical = self._validated_continuation(target)
+            prepared = urlsplit(requests.Request("GET", canonical).prepare().url)
+            key = prepared.path, prepared.query
             if key in requested:
                 raise P2ContinuationCycleError("P2 links.next repeats an already requested page.")
             requested.add(key)
-            url, params = target, None
+            url, params = canonical, None
 
     @staticmethod
     def _continuation(payload):
@@ -2548,24 +2580,7 @@ class _GuardedListing:
         return links.get("next")
 
     def _validated_continuation(self, target):
-        if not _p2_transport.plain_url(target):
-            raise P2MalformedContinuationError("P2 links.next is not one plain URL string.")
-        try:
-            parts = urlsplit(target)
-            port, host = parts.port, parts.hostname
-        except ValueError as exc:
-            raise P2MalformedContinuationError("P2 links.next is not a parseable URL.") from exc
-        if not parts.scheme:
-            raise P2RelativeContinuationError("P2 links.next is relative; it is never resolved.")
-        if parts.scheme != "https":
-            raise P2InsecureContinuationError("P2 links.next is not HTTPS.")
-        if parts.username is not None or parts.password is not None or parts.fragment:
-            raise P2MalformedContinuationError("P2 links.next carries credentials or a fragment.")
-        if host != self._host or port not in (None, 443):
-            raise P2CrossOriginContinuationError("P2 links.next leaves the ANTARES API origin.")
-        if parts.path != self._listing_path:
-            raise P2ContinuationPathError("P2 links.next is not the listing being paged.")
-        return parts.path, parts.query
+        return _canonical_p2_continuation(target, host=self._host, listing_path=self._listing_path)
 
     def _request(self, url, params, iterator_budget, remaining):
         """One page through the transport child, mapped to the typed P2 errors."""
@@ -2704,15 +2719,14 @@ def _load_p2_client(provider):
 # SHA-256 of the canonical ``as_dict()`` JSON of the frozen canary profile and
 # of its transport limits.  The transport digest is also the client identity's
 # ``transport_sha256``; the profile digest is every P2 event's ``profile_sha256``.
-# G6.6.3D: the transport contract now includes the process boundary and the
-# SHA-256 of ``p2_transport.py``, so both digests changed from G6.6.3A
-# (d1dfee3b... and 41ad48a1...).
-G663_CANARY_P2_PROFILE_SHA256 = "6ce4b3a29d79154513bfe20213cd956475e20bc224795e54724c6af44c6a105c"
-G663_CANARY_TRANSPORT_SHA256 = "6e0291f3dd203dbccc9a00239072f6501b06dbafc9f1d37c97498be1d7052ddd"
+# G6.6.4-R2: canonical HTTPS continuation destinations bind a new contract.
+# The G6.6.3D process implementation and all numerical/scientific limits remain fixed.
+G663_CANARY_P2_PROFILE_SHA256 = "39b0ff54bcbb5be3d9c627365dcb3cf5b6ef59cd266842575ab7febd9441dec3"
+G663_CANARY_TRANSPORT_SHA256 = "85f278a495a455fbb652561ce9a147f092f7f58510e980322350afa2f6c0e716"
 
 
 def g663_canary_p2_profile() -> P2ProofProfile:
-    """The one frozen Jul07/Jul13 canary profile (G6.6.3A limits, G6.6.3D process boundary).
+    """The frozen Jul07/Jul13 profile with G6.6.4-R2 continuation compatibility.
 
     Explicit opt-in only: no default path selects it and no source or
     artifact registry trusts it.  Any change is a new Control qualification
@@ -2732,5 +2746,5 @@ def g663_canary_p2_profile() -> P2ProofProfile:
             terminate_grace_seconds=2, kill_join_seconds=5))
     if (_sha256_json(profile.as_dict()) != G663_CANARY_P2_PROFILE_SHA256
             or _sha256_json(profile.transport.as_dict()) != G663_CANARY_TRANSPORT_SHA256):
-        raise RuntimeError("The frozen G6.6.3D canary profile identity changed.")
+        raise RuntimeError("The frozen G6.6.4-R2 canary profile identity changed.")
     return profile

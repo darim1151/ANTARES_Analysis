@@ -139,9 +139,10 @@ def transport_children():
                     if int((entry / "stat").read_text().rsplit(")", 1)[1].split()[1]) == me:
                         children.append(int(entry.name))
         return sorted(children)
-    listing = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True).stdout
+    inspector = subprocess.Popen(["ps", "-A", "-o", "pid=,ppid="], stdout=subprocess.PIPE, text=True)
+    listing, _ = inspector.communicate()
     return sorted(int(pid) for pid, ppid in (line.split() for line in listing.splitlines())
-                  if int(ppid) == me and int(pid) != me)
+                  if int(ppid) == me and int(pid) not in (me, inspector.pid))
 
 
 def listing_resource(locus):
@@ -460,7 +461,10 @@ class TransportEquivalenceTests(OfflineTestCase):
         self.assertIsNone(expected_error)
         self.assertIsNone(observed_error)
         self.assertEqual(observed, expected)
-        self.assertEqual([call["url"] for call in guarded_calls], pinned_urls)
+        self.assertEqual(guarded_calls[0]["url"], pinned_urls[0])
+        self.assertEqual([(urlsplit(call["url"]).path, urlsplit(call["url"]).query) for call in guarded_calls],
+                         [(urlsplit(url).path, urlsplit(url).query) for url in pinned_urls])
+        self.assertOfficial([call["url"] for call in guarded_calls])
         self.assertOfficial(pinned_urls)
         for call in guarded_calls:  # the client's scalar 60 s, split exactly; streamed body
             self.assertEqual(call["timeout"], (60, 60))
@@ -819,7 +823,7 @@ class TransportGuardTests(OfflineTestCase):
             (query, L.P2RelativeContinuationError, "relative"),
             (f"//{HOST}/v1/loci" + query, L.P2RelativeContinuationError, "relative"),
             # insecure or foreign: the pinned client would follow these
-            (f"http://{HOST}/v1/loci" + query, L.P2InsecureContinuationError, "followed"),
+            (f"http://{HOST}:8080/v1/loci" + query, L.P2CrossOriginContinuationError, "followed"),
             (f"ftp://{HOST}/v1/loci" + query, L.P2InsecureContinuationError, None),
             ("https://evil.example/v1/loci" + query, L.P2CrossOriginContinuationError, "followed"),
             (f"https://{HOST}.evil.example/v1/loci" + query, L.P2CrossOriginContinuationError, "followed"),
@@ -983,7 +987,7 @@ class TransportGuardTests(OfflineTestCase):
                 ("http-503", {"status": 503, "body": b"busy"}, L.P2TransportHTTPError, True),
                 ("non-json", {"body": b"<html>502</html>"}, requests.exceptions.JSONDecodeError, True),
                 ("connection-reset", raise_reset, requests.exceptions.ConnectionError, True),
-                ("insecure-next", page(loci[20:30], next=f"http://{HOST}/v1/loci?p=4"),
+                ("insecure-next", page(loci[20:30], next=f"ftp://{HOST}/v1/loci?p=4"),
                  L.P2InsecureContinuationError, False),
                 ("unexpected-206", {"status": 206, "body": b"{}"}, L.P2UnexpectedStatusError, False)):
             with self.subTest(name):
@@ -1316,7 +1320,7 @@ def canonical_hash(value):
 def guarded_identity(transport=None):
     return {"distribution": "antares-client", "version": "1.14.0", "api_base_url": BASE,
             "api_timeout_seconds": 60, "authentication": "public-search-no-credentials",
-            "pagination_contract": "p2-guarded-jsonapi-links-next-v1",
+            "pagination_contract": "p2-guarded-jsonapi-links-next-v2",
             "transport_sha256": L._sha256_json((transport or CANARY.transport).as_dict())}
 
 
@@ -1490,7 +1494,7 @@ class FailClosedMatrixTests(OfflineTestCase):
              GUARD + "P2MalformedContinuationError", guard, 10, 1, 1),
             ("relative-continuation", {None: page(f[:10], next="/v1/loci?p=2")},
              GUARD + "P2RelativeContinuationError", guard, 10, 1, 1),
-            ("non-https-continuation", {None: page(f[:10], next=f"http://{HOST}/v1/loci?p=2")},
+            ("unsupported-continuation-scheme", {None: page(f[:10], next=f"ftp://{HOST}/v1/loci?p=2")},
              GUARD + "P2InsecureContinuationError", guard, 10, 1, 1),
             ("wrong-origin", {None: page(f[:10], next="https://evil.example/v1/loci?p=2")},
              GUARD + "P2CrossOriginContinuationError", guard, 10, 1, 1),
@@ -1595,19 +1599,19 @@ CANARY_CANONICAL = (
     '"schema_version":"v3.p2-proof-profile.v2",'
     '"transport":{"child_implementation_sha256":"2e661e528899c6a6ac02eb6af38efbcc23ad9e5cad2e083963c9f9a24cea5bee",'
     '"child_shutdown_seconds":5,"child_startup_seconds":30,"connect_timeout_seconds":60,'
-    '"continuation":"absolute-https-same-origin-same-listing-path-never-repeated",'
+    '"continuation":"absolute-http-default-port-or-https-default-port;canonical-trusted-https-same-listing-raw-query;prepared-page-never-repeated",'
     '"ipc":"g663d.p2-transport-ipc.v1","ipc_max_chunk_bytes":1048576,"ipc_max_header_bytes":65536,'
     '"ipc_wait":"remaining-iterator-deadline",'
     '"isolation":"dedicated-child-process-per-night-query;parent-owned-deadline;sigterm-grace-sigkill-join-reaped;never-restarted-after-failure",'
     '"iterator_deadline_seconds":600,"kill_join_seconds":5,"limit_semantics":"refusal-never-completeness",'
     '"max_consecutive_empty_pages":2,"max_iterator_bytes":67108864,"max_page_bytes":16777216,"max_pages":64,'
-    '"max_redirects":2,"pagination":"p2-guarded-jsonapi-links-next-v1","read_timeout_seconds":60,'
+    '"max_redirects":2,"pagination":"p2-guarded-jsonapi-links-next-v2","read_timeout_seconds":60,'
     '"redirects":"same-origin-https-api-prefix-validated-before-request",'
     '"schema_version":"v3.p2-transport-limits.v2","terminate_grace_seconds":2,'
     '"termination":"complete-page-then-links-next-null-or-missing"},"traversal":"lower-child-first",'
     '"trigger":"saturated_primary_floor"}')
-CANARY_PROFILE_SHA256 = "6ce4b3a29d79154513bfe20213cd956475e20bc224795e54724c6af44c6a105c"
-CANARY_TRANSPORT_SHA256 = "6e0291f3dd203dbccc9a00239072f6501b06dbafc9f1d37c97498be1d7052ddd"
+CANARY_PROFILE_SHA256 = "39b0ff54bcbb5be3d9c627365dcb3cf5b6ef59cd266842575ab7febd9441dec3"
+CANARY_TRANSPORT_SHA256 = "85f278a495a455fbb652561ce9a147f092f7f58510e980322350afa2f6c0e716"
 
 
 def baseline_module(sha, path, alias):
@@ -1662,8 +1666,8 @@ class FrozenProfileTests(OfflineTestCase):
             self.assertNotIn("extraction_method", B.selection_descriptor_for_request(request))
             digests[day] = L._sha256_json(p2)
         self.assertEqual(digests, {
-            "2026-07-07": "f1df451787cc22728fb5bf66ebd124f818b303d27e74f74b01c05aa550fdf036",
-            "2026-07-13": "df812a2ec232e331f33e1f0020ffd46591cae1775335e067eb77f859e1a24b45"})
+            "2026-07-07": "bacf32185b1eff128c705befaba4d34359a60012388a2708b392a18bac0a4e48",
+            "2026-07-13": "aee7ec99d1cc3fc54cf8bf3f270bfebff53a5cacb8e2104f3aca8aa16f1e1891"})
 
     def test_offline_g662b_profile_identity_is_unchanged(self):
         old = baseline_module(G662B, "src/operations/live_antares.py", "src.operations._g663_g662b_provider")
@@ -1790,7 +1794,7 @@ class G663FirewallTests(unittest.TestCase):
         # G6.6.3D process boundary (P2 only)
         "P2TransportProcessError", "P2TransportStartupError", "P2TransportProtocolError",
         "P2TransportUnavailableError", "P2TransportUnkillableError", "_p2_remote_request_errors",
-        "_p2_transport_error", "_p2_child_config"}
+        "_p2_transport_error", "_p2_child_config", "_canonical_p2_continuation"}
 
     @staticmethod
     def definitions(source):
@@ -1939,7 +1943,7 @@ class CanaryRunbookDryRunTests(OfflineTestCase):
         self.addCleanup(patcher.stop)
 
     def environment(self, night):
-        return {"NIGHT": night, "RUN_ID": f"g663-p2-{night}-v1", "RELEASE_SHA": "6" * 40,
+        return {"NIGHT": night, "RUN_ID": f"g664-p2-{night}-v2", "RELEASE_SHA": "6" * 40,
                 "PROVIDER_SHA256": hashlib.sha256((ROOT / "src/operations/live_antares.py").read_bytes()).hexdigest(),
                 "P2_TRANSPORT_SHA256": hashlib.sha256((ROOT / "src/operations/p2_transport.py").read_bytes()).hexdigest(),
                 "PROFILE_SHA256": CANARY_PROFILE_SHA256, "TRANSPORT_SHA256": CANARY_TRANSPORT_SHA256}
@@ -1982,8 +1986,8 @@ class CanaryRunbookDryRunTests(OfflineTestCase):
         self.assertIn(f"child implementation (p2_transport.py) sha256 {T.implementation_sha256()}", text)
         self.assertIn(f"G663_CANARY_P2_PROFILE_SHA256 = {CANARY_PROFILE_SHA256}", text)
         self.assertIn(f"G663_CANARY_TRANSPORT_SHA256 = {CANARY_TRANSPORT_SHA256}", text)
-        for night, digest in (("2026-07-07", "f1df451787cc22728fb5bf66ebd124f818b303d27e74f74b01c05aa550fdf036"),
-                              ("2026-07-13", "df812a2ec232e331f33e1f0020ffd46591cae1775335e067eb77f859e1a24b45")):
+        for night, digest in (("2026-07-07", "bacf32185b1eff128c705befaba4d34359a60012388a2708b392a18bac0a4e48"),
+                              ("2026-07-13", "aee7ec99d1cc3fc54cf8bf3f270bfebff53a5cacb8e2104f3aca8aa16f1e1891")):
             self.assertIn(f"{night} scientific contract sha256 = {digest}", text)
 
     def test_transport_child_preflight_starts_and_stops_one_production_child(self):
@@ -2013,7 +2017,7 @@ class CanaryRunbookDryRunTests(OfflineTestCase):
         self.assertEqual(acquired["terminal_evidence"], "natural-exhaustion-below-50")
         self.assertEqual(acquired["p2_budget"]["secondary_nodes"], 3)
         self.assertEqual((acquired["loci"], acquired["fetch"]["alert_rows"]), (len(loci), 2 * len(loci)))
-        self.assertEqual(acquired["query_contract_sha256"], "f1df451787cc22728fb5bf66ebd124f818b303d27e74f74b01c05aa550fdf036")
+        self.assertEqual(acquired["query_contract_sha256"], "bacf32185b1eff128c705befaba4d34359a60012388a2708b392a18bac0a4e48")
         self.assertOfficial(service.urls)
         # An identical re-run resumes: the sealed query and complete fetch are reused, no requests.
         service.calls.clear()
@@ -2051,7 +2055,7 @@ class CanaryRunbookDryRunTests(OfflineTestCase):
 
         def script(service, request, index):
             if parse_qs(urlsplit(request.url).query).get(ES_KEY, [None])[0] == tile_query:
-                return page(first[:10], next=f"http://{HOST}/v1/loci?p=2")
+                return page(first[:10], next=f"ftp://{HOST}/v1/loci?p=2")
             return None
         service = FakeAntares(night_loci(night) + first, script=script)
         with service.installed(), self.assertRaises(QueryInterruptedError):

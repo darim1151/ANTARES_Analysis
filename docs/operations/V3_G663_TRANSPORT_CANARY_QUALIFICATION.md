@@ -328,45 +328,56 @@ The provider file's SHA-256 changes, but the trusted historical source
 providers (`ADOPTABLE_SOURCE_PROVIDERS`) and the replay code that verifies
 Jul08–12 are unchanged.
 
-## 7. Future Arnor canary runbook (prepared, NOT EXECUTED)
+## 7. Current Arnor canary runbook (G6.6.4-R2)
 
-Execute only after Control accepts G6.6.3A, closes RB1 (G6.6.3D) **and**
-approves an immutable release built from the accepted commit. That release
-must carry exactly these runtime bytes:
+Control accepted the historical transport and authorized G6.6.4-R2 to
+remediate the demonstrated official HTTP continuation. This current procedure
+uses the qualified R2 HTTPS canonicalization; the previous procedure and
+failed v0.4.8/v1 root remain preserved at `c1dd68a`. The release must carry
+exactly these runtime bytes:
 
 ```text
-src/operations/live_antares.py  sha256 c8557ff6b6d80842b0c5f4be4a8be21d66f7f36852c0f57af60507e5827284ba
+src/operations/live_antares.py  sha256 434df703a4f8fd3b5332e35af1c0be06bf010456953cff980e8320ff7d693402
 src/operations/p2_transport.py  sha256 2e661e528899c6a6ac02eb6af38efbcc23ad9e5cad2e083963c9f9a24cea5bee
-src/operations/science.py       sha256 bb3e377bdee1132cc90cb2890b24d31b209a499cac5ee0e77c329705476be106
+src/operations/science.py       sha256 be1eea9402d427e3a62fdada197236f3571df186d42e3818fc46b632e11bf2e0
 ```
 
-Run Jul07 first. Run Jul13 only after Jul07 passes verification and Control
-authorizes it. Both nights use the identical profile and the same procedure.
+Run Jul07 first. Run Jul13 immediately after Jul07 passes verification, as authorized by R2. Both nights use the identical profile and the same procedure.
 The canary roots are non-authoritative.
 
 * Nothing here publishes, adopts or constructs production authority.
 * Nothing creates a cache.
 * Nothing writes outside the canary root and the operator evidence directory.
 
+
+Current R2 frozen identities (historical identities in section 4 are preserved):
+
+```text
+G663_CANARY_P2_PROFILE_SHA256 = 39b0ff54bcbb5be3d9c627365dcb3cf5b6ef59cd266842575ab7febd9441dec3
+G663_CANARY_TRANSPORT_SHA256 = 85f278a495a455fbb652561ce9a147f092f7f58510e980322350afa2f6c0e716
+2026-07-07 scientific contract sha256 = bacf32185b1eff128c705befaba4d34359a60012388a2708b392a18bac0a4e48
+2026-07-13 scientific contract sha256 = aee7ec99d1cc3fc54cf8bf3f270bfebff53a5cacb8e2104f3aca8aa16f1e1891
+```
+
 ### 7.1 Session, identity and preflight (read-only)
 
 ```bash
-tmux new -s g663-p2-canary          # re-attach: tmux attach -t g663-p2-canary
+tmux new -s g664-p2-canary-v2          # re-attach: tmux attach -t g664-p2-canary-v2
 umask 077
 unset ANTARES_API_BASE_URL API_TIMEOUT
-export RELEASE_SHA=<Control-approved release SHA carrying the G6.6.3D bytes>
+export RELEASE_SHA=<Control-approved release SHA carrying the G6.6.4-R2 bytes>
 export WHEEL_SHA256=<that release's wheel SHA-256>
 export RELEASE_ROOT=/astro/users/mdarim/opt/antares-analysis/releases/$RELEASE_SHA
 export PY=$RELEASE_ROOT/venv/bin/python
-export PROVIDER_SHA256=c8557ff6b6d80842b0c5f4be4a8be21d66f7f36852c0f57af60507e5827284ba
+export PROVIDER_SHA256=434df703a4f8fd3b5332e35af1c0be06bf010456953cff980e8320ff7d693402
 export P2_TRANSPORT_SHA256=2e661e528899c6a6ac02eb6af38efbcc23ad9e5cad2e083963c9f9a24cea5bee
-export SCIENCE_SHA256=bb3e377bdee1132cc90cb2890b24d31b209a499cac5ee0e77c329705476be106
-export PROFILE_SHA256=6ce4b3a29d79154513bfe20213cd956475e20bc224795e54724c6af44c6a105c
-export TRANSPORT_SHA256=6e0291f3dd203dbccc9a00239072f6501b06dbafc9f1d37c97498be1d7052ddd
-export NIGHT=2026-07-07            # 2026-07-13 only for the second, separately authorized canary
-export RUN_ID=g663-p2-$NIGHT-v1
+export SCIENCE_SHA256=be1eea9402d427e3a62fdada197236f3571df186d42e3818fc46b632e11bf2e0
+export PROFILE_SHA256=39b0ff54bcbb5be3d9c627365dcb3cf5b6ef59cd266842575ab7febd9441dec3
+export TRANSPORT_SHA256=85f278a495a455fbb652561ce9a147f092f7f58510e980322350afa2f6c0e716
+export NIGHT=2026-07-07            # 2026-07-13 after verified Jul07
+export RUN_ID=g664-p2-$NIGHT-v2
 export CANARY_ROOT=/astro/store/shire/ANTARES/work/canary/$RUN_ID
-export EVIDENCE_DIR=/astro/users/mdarim/antares-control/g663/$RUN_ID
+export EVIDENCE_DIR=/astro/users/mdarim/antares-control/g664-finalize/canaries/$RUN_ID
 
 test "$(hostname -f)" = arnor.astro.washington.edu && test "$(id -u)" = 1533564 || echo "STOP: host/UID"
 test "$(cat "$RELEASE_ROOT/RELEASE_SHA")" = "$RELEASE_SHA" || echo "STOP: release marker"
@@ -410,8 +421,9 @@ declare -px RELEASE_SHA WHEEL_SHA256 RELEASE_ROOT PY PROVIDER_SHA256 P2_TRANSPOR
   PROFILE_SHA256 TRANSPORT_SHA256 NIGHT RUN_ID CANARY_ROOT EVIDENCE_DIR > "$EVIDENCE_DIR/canary.env"
 ```
 
-Any line printing `STOP`, or any unexpected value, stops the procedure. Do
-not improvise; ask Control.
+Any unexpected identity or authority value stops that operation. Under R2,
+classify and resolve ordinary engineering defects autonomously; preserve
+terminal failed roots and stop only for a scientific or authority contradiction.
 
 ### 7.2 Live acquisition of one UTC night (the only live step)
 
@@ -427,7 +439,7 @@ from src.operations.query_checkpoint import load_query_result_checkpoint, seal_q
 
 env = os.environ
 night, run_id, release = env["NIGHT"], env["RUN_ID"], env["RELEASE_SHA"]
-assert night in ("2026-07-07", "2026-07-13") and run_id == f"g663-p2-{night}-v1", (night, run_id)
+assert night in ("2026-07-07", "2026-07-13") and run_id == f"g664-p2-{night}-v2", (night, run_id)
 assert hashlib.sha256(Path(L.__file__).read_bytes()).hexdigest() == env["PROVIDER_SHA256"], "provider bytes"
 assert L._p2_transport.implementation_sha256() == env["P2_TRANSPORT_SHA256"], "transport child bytes"
 profile = L.g663_canary_p2_profile()  # refuses unless its canonical bytes hash to the frozen identity
@@ -572,7 +584,7 @@ All of the following must hold, and all evidence stays in `$EVIDENCE_DIR`.
    `terminal_evidence` = `natural-exhaustion-below-50` and
    `p2_budget.secondary_nodes` > 0 (the floor saturation was actually
    resolved by P2). `client` equals the guarded identity with
-   `transport_sha256` = `6e0291f3…`. The fetch completed every object.
+   `transport_sha256` = `85f278a4…`. The fetch completed every object.
 3. **Verification (7.3)**, run in an empty network namespace, exited 0. It
    re-proved the sealed query, the journal, P2 replay, the fetch
    checkpoint, the selection descriptor and artifact reopen. The canary
@@ -582,8 +594,9 @@ All of the following must hold, and all evidence stays in `$EVIDENCE_DIR`.
 ### 7.5 Canary FAIL criteria (each night)
 
 Any of the following fails the night. On any FAIL: stop, keep everything,
-report the acquisition and verification evidence to Control, and never
-retry in the same root.
+record the acquisition and verification evidence and classify it under R2.
+A terminal failed query root is never reused. A bounded interrupted fetch may
+resume only its already sealed complete query under the exact same identity.
 
 * Any `STOP`, non-zero exit or traceback.
 * Any P2 failure reason:
