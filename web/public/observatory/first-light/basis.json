@@ -1,14 +1,14 @@
 {
   "contract": "uso.observatory-bundle",
   "contract_version": "1.0.0",
-  "basis_id": "basis.uso.first-light.0001",
+  "basis_id": "basis.uso.first-light.e475af0a72c3",
   "label": "First Light · fixture basis",
   "status": "FIRST_LIGHT_FIXTURE",
   "science_ready": false,
   "domains": {
     "antares": {
       "domain": "antares",
-      "build_id": "antares.skypulse-demo.2026-08-22T18:04:07Z",
+      "build_id": "antares.skypulse-demo.2026-08-22T18:04:07Z.g1.1",
       "build_kind": "LEGACY_DEMO_EXPORT",
       "label": "ANTARES · SkyPulse legacy demo export",
       "evidence": [
@@ -30,6 +30,7 @@
         "stored_field": "newest_alert_observation_time",
         "format": "MJD",
         "scale": "UTC",
+        "scale_label": "UTC (exporter-treated)",
         "scale_basis": "The historical ANTARES exporter treats MJD as UTC. In this legacy demo the stored value was synthesized by the demo exporter.",
         "date_binning": "UTC date of the UTC-treated MJD, half-open [00:00, 24:00) UTC.",
         "entity_date_rule": "UTC date of newest_alert_observation_time (demo date_utc; synthetic assignment)."
@@ -37,7 +38,7 @@
     },
     "fink": {
       "domain": "fink",
-      "build_id": "fink.first-light-fixture.fd02c8e",
+      "build_id": "fink.first-light-fixture.fd02c8e.g1.1",
       "build_kind": "SYNTHETIC_FIXTURE_WITH_COMMITTED_EVIDENCE",
       "label": "Fink · committed acquisition evidence + synthetic fixture population",
       "evidence": [
@@ -69,6 +70,7 @@
         "stored_field": "midpointMjdTai",
         "format": "MJD",
         "scale": "TAI",
+        "scale_label": "TAI",
         "scale_basis": "Fink analysis_contract_v1: midpointMjdTai is the authoritative observation time, MJD on the TAI scale.",
         "date_binning": "UTC date of the TAI time converted with a leap-second table, half-open [00:00, 24:00) UTC. Fixture conversion: TAI − UTC = 37 s (valid since 2017-01-01); a real adapter must use ERFA/Astropy.",
         "entity_date_rule": "UTC date of the first delivered DiaSource of the DiaObject in this basis."

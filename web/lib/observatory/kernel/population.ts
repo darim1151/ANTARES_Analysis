@@ -34,7 +34,8 @@ export function usable(value: number, scale: AxisScale): boolean {
 export function robustExtent(
   values: Float64Array,
   scale: AxisScale,
-  fixed: [number, number] | null
+  fixed: [number, number] | null,
+  pad = true
 ): [number, number] {
   if (fixed) return fixed;
   const finite = values.filter((v) => usable(v, scale));
@@ -49,15 +50,15 @@ export function robustExtent(
       a -= 0.5;
       b += 0.5;
     }
-    const pad = (b - a) * 0.04;
-    return [10 ** (a - pad), 10 ** (b + pad)];
+    const margin = pad ? (b - a) * 0.04 : 0;
+    return [10 ** (a - margin), 10 ** (b + margin)];
   }
   if (hi - lo < 1e-12) {
     lo -= 0.5;
     hi += 0.5;
   }
-  const pad = (hi - lo) * 0.04;
-  return [lo - pad, hi + pad];
+  const margin = pad ? (hi - lo) * 0.04 : 0;
+  return [lo - margin, hi + margin];
 }
 
 /** Fractional position in [0, 1] along the axis, NaN if unusable. */

@@ -1,7 +1,7 @@
 {
   "contract": "uso.observatory-bundle",
   "contract_version": "1.0.0",
-  "basis_id": "basis.uso.first-light.0001",
+  "basis_id": "basis.uso.first-light.e475af0a72c3",
   "capabilities": [
     {
       "id": "antares:time.date_states",

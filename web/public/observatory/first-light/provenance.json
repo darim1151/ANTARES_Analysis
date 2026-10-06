@@ -1,6 +1,6 @@
 {
   "contract": "uso.observatory-bundle",
-  "basis_id": "basis.uso.first-light.0001",
+  "basis_id": "basis.uso.first-light.e475af0a72c3",
   "sources": [
     {
       "id": "antares.sky_points",
@@ -165,6 +165,7 @@
   ],
   "acquisitions": [
     {
+      "domain": "fink",
       "acquisition_id": "acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b",
       "label": "Month-1",
       "window": {
@@ -195,6 +196,7 @@
       "cohort": "accepted_month1"
     },
     {
+      "domain": "fink",
       "acquisition_id": "acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa",
       "label": "Month-2",
       "window": {
@@ -221,6 +223,7 @@
       "cohort": null
     },
     {
+      "domain": "fink",
       "acquisition_id": "acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f",
       "label": "Month-3",
       "window": {
@@ -257,7 +260,7 @@
     },
     {
       "id": "fink.object_position",
-      "description": "DiaObject position = mean of delivered DiaSource positions.",
+      "description": "DiaObject position = unit-vector mean of delivered DiaSource positions.",
       "kernel": "uso.analysis-kernel/ak-0.1.0"
     },
     {
@@ -318,12 +321,12 @@
       {
         "field": "ra",
         "evidence": "SYNTHETIC_FIXTURE",
-        "note": "Mean of delivered DiaSource positions."
+        "note": "Unit-vector mean of delivered DiaSource positions."
       },
       {
         "field": "dec",
         "evidence": "SYNTHETIC_FIXTURE",
-        "note": "Mean of delivered DiaSource positions."
+        "note": "Unit-vector mean of delivered DiaSource positions."
       },
       {
         "field": "n_dia_sources",

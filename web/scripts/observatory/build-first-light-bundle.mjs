@@ -30,9 +30,12 @@ import { fnv1a32, shardOf, shardPath } from "../../lib/observatory/kernel/shard.
 
 const CONTRACT = "uso.observatory-bundle";
 const CONTRACT_VERSION = "1.0.0";
-const GENERATOR = { name: "web/scripts/observatory/build-first-light-bundle.mjs", version: "1.0.0" };
+const GENERATOR = { name: "web/scripts/observatory/build-first-light-bundle.mjs", version: "1.1.0" };
+// Adapter tag carried by every build id, so a changed adapter yields a new build identity.
+const ADAPTER_TAG = `g${GENERATOR.version.split(".").slice(0, 2).join(".")}`;
 const BUNDLE_ID = "uso-first-light-0001";
-const BASIS_ID = "basis.uso.first-light.0001";
+// The basis id is derived from what the basis pins (see basisIdFor), never a free constant.
+const BASIS_PREFIX = "basis.uso.first-light";
 const SEED = "uso-first-light/fink-fixture/v1";
 const BASELINE_REVISION = "812c545e14693cdce7ff7458f1d2b50b0804dcd8";
 const DENSITY_ORDER = 6;
@@ -70,6 +73,17 @@ if (unknown.length) {
 /* ------------------------------------------------------------------ utils */
 
 const sha256 = (data) => createHash("sha256").update(data).digest("hex");
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+/** basis_id = prefix + sha256(canonical pins)[:12]; the validator recomputes it. */
+function basisIdFor(pins) {
+  return `${BASIS_PREFIX}.${sha256(canonical(pins)).slice(0, 12)}`;
+}
 const round = (v, d) => (v === null || !Number.isFinite(v) ? null : Number(v.toFixed(d)));
 const sig = (v, n = 4) => (v === null || !Number.isFinite(v) ? null : Number(v.toPrecision(n)));
 function fail(message) {
@@ -207,7 +221,7 @@ const inputs = {
 function buildAntares() {
   const demo = inputs.demoManifest.json;
   if (demo.export_mode !== "demo") fail("the First-Light ANTARES adapter only accepts the legacy demo export");
-  const buildId = `antares.skypulse-demo.${demo.generated_at_utc.replace("+00:00", "Z")}`;
+  const buildId = `antares.skypulse-demo.${demo.generated_at_utc.replace("+00:00", "Z")}.${ADAPTER_TAG}`;
   let clipped = 0;
   const records = inputs.skyPoints.json.points
     .map((p) => {
@@ -260,17 +274,16 @@ function buildAntares() {
   const countValues = {};
   for (const r of records) countValues[r.entity_date] = (countValues[r.entity_date] ?? 0) + 1;
   for (const n of nights) {
-    if (n.state === "AVAILABLE" && !countValues[n.date]) {
-      n.state = "ZERO";
-      n.reason = "ZERO_LOCI_IN_DEMO_SAMPLE";
-      countValues[n.date] = 0;
-    }
+    // An empty date in a *sample* is not a source-level zero (ZERO means the
+    // source delivered zero records), so the adapter refuses rather than mislabel.
+    if (n.state === "AVAILABLE" && !countValues[n.date]) fail(`demo sample has no loci on ${n.date}; a sample cannot express ZERO`);
   }
 
   const timeSemantics = {
     stored_field: "newest_alert_observation_time",
     format: "MJD",
     scale: "UTC",
+    scale_label: "UTC (exporter-treated)",
     scale_basis:
       "The historical ANTARES exporter treats MJD as UTC. In this legacy demo the stored value was synthesized by the demo exporter.",
     date_binning: "UTC date of the UTC-treated MJD, half-open [00:00, 24:00) UTC.",
@@ -584,7 +597,7 @@ function buildFink() {
   if (!m1 || m1.state !== "DELIVERY_VALIDATED" || !m1.characterization || !ev.cohort.acquisitions.includes(m1.acquisition_id)) {
     fail("Month-1 must be delivery-validated, characterized and admitted to the accepted cohort");
   }
-  const buildId = `fink.first-light-fixture.${ev.revision.slice(0, 7)}`;
+  const buildId = `fink.first-light-fixture.${ev.revision.slice(0, 7)}.${ADAPTER_TAG}`;
 
   // Acquisition windows strictly from committed evidence.
   const windows = ev.acquisitions.map((a) => {
@@ -783,8 +796,17 @@ function buildFink() {
       };
     });
 
-    const raMean = sources.reduce((s, x) => s + x.ra, 0) / sources.length;
-    const decMean = sources.reduce((s, x) => s + x.dec, 0) / sources.length;
+    // Unit-vector mean: safe across the RA = 0/360 seam and near the poles.
+    const v = sources.reduce(
+      (acc, x) => {
+        const a = (x.ra * Math.PI) / 180;
+        const b = (x.dec * Math.PI) / 180;
+        return [acc[0] + Math.cos(b) * Math.cos(a), acc[1] + Math.cos(b) * Math.sin(a), acc[2] + Math.sin(b)];
+      },
+      [0, 0, 0]
+    );
+    const raMean = (Math.atan2(v[1], v[0]) * 180) / Math.PI;
+    const decMean = (Math.atan2(v[2], Math.hypot(v[0], v[1])) * 180) / Math.PI;
     objects.push({ archetypeIndex: i, sources, snapshots, ra: ((raMean % 360) + 360) % 360, dec: decMean });
   }
 
@@ -804,6 +826,7 @@ function buildFink() {
     stored_field: "midpointMjdTai",
     format: "MJD",
     scale: "TAI",
+    scale_label: "TAI",
     scale_basis: "Fink analysis_contract_v1: midpointMjdTai is the authoritative observation time, MJD on the TAI scale.",
     date_binning:
       "UTC date of the TAI time converted with a leap-second table, half-open [00:00, 24:00) UTC. Fixture conversion: TAI − UTC = 37 s (valid since 2017-01-01); a real adapter must use ERFA/Astropy.",
@@ -850,8 +873,8 @@ function buildFink() {
 
   const fields = [
     { key: "diaObjectId", label: "diaObjectId", unit: null, evidence: "SYNTHETIC_FIXTURE", description: "Derived DIA grouping key (pred.is_sso false AND diaObjectId > 0); int64 carried as a decimal string. Fixture ids use the reserved 990… prefix." },
-    { key: "ra", label: "RA (ICRS)", unit: "deg", evidence: "SYNTHETIC_FIXTURE", description: "Mean of delivered DiaSource positions." },
-    { key: "dec", label: "Dec (ICRS)", unit: "deg", evidence: "SYNTHETIC_FIXTURE", description: "Mean of delivered DiaSource positions." },
+    { key: "ra", label: "RA (ICRS)", unit: "deg", evidence: "SYNTHETIC_FIXTURE", description: "Unit-vector mean of delivered DiaSource positions." },
+    { key: "dec", label: "Dec (ICRS)", unit: "deg", evidence: "SYNTHETIC_FIXTURE", description: "Unit-vector mean of delivered DiaSource positions." },
     { key: "n_dia_sources", label: "Delivered DiaSources", unit: "rows", evidence: "SYNTHETIC_FIXTURE", description: "Delivered DiaSource rows in this basis; not lifetime detections." },
     { key: "first_midpoint_mjd_tai", label: "First midpointMjdTai", unit: "MJD (TAI)", evidence: "SYNTHETIC_FIXTURE", description: "Earliest delivered DiaSource midpoint, TAI." },
     { key: "last_midpoint_mjd_tai", label: "Last midpointMjdTai", unit: "MJD (TAI)", evidence: "SYNTHETIC_FIXTURE", description: "Latest delivered DiaSource midpoint, TAI." },
@@ -1073,6 +1096,7 @@ function buildFink() {
   const acquisitions = ev.acquisitions.map((a) => {
     const w = windows.find((x) => x.start === a.window.start);
     return {
+      domain: "fink",
       acquisition_id: a.acquisition_id,
       label: a.label,
       window: a.window,
@@ -1185,6 +1209,11 @@ capabilities.push(
     { qualifications: ["ANTARES MJD is treated as UTC by the historical exporter; Fink midpointMjdTai is TAI."] })
 );
 
+const BASIS_ID = basisIdFor({
+  domains: { antares: antares.pin.build_id, fink: fink.pin.build_id },
+  relation: null,
+  ...VERSIONS
+});
 const basis = {
   contract: CONTRACT,
   contract_version: CONTRACT_VERSION,
@@ -1233,7 +1262,7 @@ const provenance = {
     { id: "healpix.nested", description: `Entity positions indexed on HEALPix NESTED; density maps at order ${DENSITY_ORDER}.`, kernel: KERNEL_TAG },
     { id: "coords.galactic", description: "ICRS -> Galactic with the Astropy/Hipparcos rotation matrix.", kernel: KERNEL_TAG },
     { id: "coords.ecliptic", description: "ICRS -> mean ecliptic of J2000.0 (obliquity 23.4392911°).", kernel: KERNEL_TAG },
-    { id: "fink.object_position", description: "DiaObject position = mean of delivered DiaSource positions.", kernel: KERNEL_TAG },
+    { id: "fink.object_position", description: "DiaObject position = unit-vector mean of delivered DiaSource positions.", kernel: KERNEL_TAG },
     { id: "fink.fixture_time_scale", description: `Fixture UTC→TAI with a fixed ${TAI_MINUS_UTC_S} s offset (real adapters use ERFA/Astropy).`, kernel: KERNEL_TAG },
     { id: "antares.clipped_magnitudes", description: `${antares.clipped} demo magnitudes at the exporter clip bounds were nulled.`, kernel: KERNEL_TAG }
   ],

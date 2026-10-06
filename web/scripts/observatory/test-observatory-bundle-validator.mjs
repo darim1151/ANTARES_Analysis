@@ -206,6 +206,26 @@ const cases = [
     (d) => edit(d, FINK_TIME, (t) => (t.windows[0].caveat = "A classified transient stream."))
   ],
   [
+    "basis ids are bound to their pins",
+    "basis_id must end with the pin digest",
+    (d) => edit(d, "basis.json", (b) => (b.domains.fink.build_id = `${b.domains.fink.build_id}-other`))
+  ],
+  [
+    "unsafe integers are rejected anywhere",
+    "exceeds 2^53",
+    (d) => edit(d, "provenance.json", (p) => (p.acquisitions[0].delivery.readable_rows = 9007199254740993))
+  ],
+  [
+    "acquisition evidence is domain-scoped",
+    "must declare its domain",
+    (d) => edit(d, "provenance.json", (p) => delete p.acquisitions[0].domain)
+  ],
+  [
+    "a sample population cannot claim client-side filtered density",
+    "cannot be AVAILABLE for an incomplete population",
+    (d) => edit(d, "domains/antares/entities.json", (e) => (e.population.complete = false))
+  ],
+  [
     "entities cannot fall on unavailable dates",
     "must fall on an AVAILABLE date",
     (d) => edit(d, FINK_ENTITIES, (e) => (e.records[0].entity_date = "2026-05-01"))

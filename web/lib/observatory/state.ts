@@ -6,6 +6,7 @@
 import {
   DOMAIN_IDS,
   type DomainId,
+  type EvidenceClass,
   type FeaturePredicate,
   type LabConfig,
   type NativeEntityRef,
@@ -18,7 +19,7 @@ import {
   type ViewManifest
 } from "../../types/observatory.ts";
 import { decodeState, encodeState, type DecodeContext } from "./kernel/stateCodec.ts";
-import { evidenceUnion, hasEntity, SKY_ORDERS, type WorkspaceModel } from "./model.ts";
+import { evidenceUnion, hasEntity, type WorkspaceModel } from "./model.ts";
 
 export type Action =
   | { type: "mode"; mode: SourceMode }
@@ -41,7 +42,7 @@ export type Action =
  */
 const MIN_PER_CELL = 3;
 export function adaptiveSkyOrder(model: WorkspaceModel): number {
-  for (const order of [...SKY_ORDERS].sort((a, b) => b - a)) {
+  for (const order of [...model.skyOrders].sort((a, b) => b - a)) {
     const ok = DOMAIN_IDS.every((d) => {
       const cells = model.domains[d].densityAt(order);
       let total = 0;
@@ -50,7 +51,7 @@ export function adaptiveSkyOrder(model: WorkspaceModel): number {
     });
     if (ok) return order;
   }
-  return Math.min(...SKY_ORDERS);
+  return Math.min(...model.skyOrders);
 }
 
 export function defaultState(model: WorkspaceModel): ScientificState {
@@ -139,7 +140,7 @@ export function decodeContext(model: WorkspaceModel): DecodeContext {
     basisId: model.bundle.basis.basis_id,
     isSelectableDimension: (domain, dimension) => model.domains[domain]?.selectable.some((d) => d.id === dimension) ?? false,
     hasEntity: (ref) => hasEntity(model, ref),
-    skyOrders: SKY_ORDERS
+    skyOrders: model.skyOrders
   };
 }
 
@@ -158,6 +159,27 @@ export function displayedDomains(mode: SourceMode): DomainId[] {
 export function buildViewManifest(model: WorkspaceModel, state: ScientificState): ViewManifest {
   const { bundle } = model;
   const shown = displayedDomains(state.mode);
+  // Evidence of what is actually drawn: both time lanes (one is context in a
+  // single-domain view), each shown domain's sky layers and Lab axes, and the
+  // focused record's fields.
+  const byLens: Record<string, EvidenceClass[]> = {};
+  for (const d of DOMAIN_IDS) {
+    const t = model.domains[d].bundle.time;
+    byLens[`time.${d}`] = evidenceUnion([t.counts?.evidence ?? [], ...t.windows.map((w) => w.evidence)]);
+  }
+  for (const d of shown) {
+    const dm = model.domains[d];
+    byLens[`sky.${d}.density`] = dm.bundle.sky.density.evidence;
+    if (dm.bundle.sky.coverage) byLens[`sky.${d}.coverage`] = dm.bundle.sky.coverage.evidence;
+    const lab = state.lens.lab[d];
+    for (const [axis, id] of [["x", lab.x], ["y", lab.y], ["z", lab.z]] as const) {
+      const ev = id ? dm.dims.get(id)?.evidence : null;
+      if (ev) byLens[`lab.${d}.${axis}`] = [ev];
+    }
+  }
+  if (state.focus) {
+    byLens[`inspector.${state.focus.domain}`] = evidenceUnion([model.domains[state.focus.domain].bundle.entities.fields.map((f) => f.evidence)]);
+  }
   const domains = Object.fromEntries(
     DOMAIN_IDS.map((d) => [d, { build_id: bundle.basis.domains[d].build_id, evidence: bundle.basis.domains[d].evidence }])
   ) as ViewManifest["basis"]["domains"];
@@ -176,7 +198,8 @@ export function buildViewManifest(model: WorkspaceModel, state: ScientificState)
     },
     bundle: { bundle_id: bundle.manifest.bundle_id, manifest_sha256: bundle.manifestSha256, integrity: bundle.integrity.method },
     state,
-    evidence_in_view: evidenceUnion(shown.map((d) => bundle.basis.domains[d].evidence)),
+    evidence_in_view: evidenceUnion(Object.values(byLens)),
+    evidence_by_lens: byLens,
     caveats: [
       bundle.basis.science_ready ? "" : "This view is drawn from a FIRST_LIGHT_FIXTURE basis and is not science-ready.",
       ...bundle.basis.invariants

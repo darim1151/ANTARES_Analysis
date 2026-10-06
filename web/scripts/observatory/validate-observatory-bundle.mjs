@@ -57,6 +57,14 @@ const REQUIRED_DOMAIN_CAPS = [
   "features.population"
 ];
 
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 const errors = [];
 const err = (where, message) => errors.push(`${where}: ${message}`);
 const check = (condition, where, message) => {
@@ -154,6 +162,11 @@ finish();
 /* ------------------------------------------------------- global scanners */
 
 function scan(value, where) {
+  if (typeof value === "number") {
+    // Any number beyond 2^53 has already lost precision (int64 ids must be strings).
+    if (Math.abs(value) > Number.MAX_SAFE_INTEGER) err(where, "number exceeds 2^53; int64 values must be decimal strings");
+    return;
+  }
   if (typeof value === "string") {
     if (/(?:^|[\s("'=:[])\/(?!\/)[A-Za-z0-9._-]+(?:\/[^\s"'<>\]]*)?/i.test(value) || /file:\/\//i.test(value) || /(?:^|[\s("'=])[a-z]:[\\/]/i.test(value)) {
       err(where, "contains a host-local filesystem path");
@@ -188,6 +201,19 @@ for (const [rel, doc] of docs) {
 const basis = docs.get(manifest.basis);
 const B = manifest.basis;
 check(nonEmpty(basis.basis_id), B, "basis_id required");
+{
+  // A basis id names exactly what it pins: views recorded against it cannot
+  // silently replay against different builds or versions.
+  const pins = {
+    domains: Object.fromEntries(Object.entries(basis.domains ?? {}).map(([d, pin]) => [d, pin.build_id])),
+    relation: basis.relation === null ? null : basis.relation,
+    semantic_contract: basis.semantic_contract,
+    feature_registry: basis.feature_registry,
+    analysis_kernel: basis.analysis_kernel
+  };
+  const digest = sha256(canonical(pins)).slice(0, 12);
+  check(typeof basis.basis_id === "string" && basis.basis_id.endsWith(`.${digest}`), B, `basis_id must end with the pin digest .${digest}`);
+}
 check(basis.status === "FIRST_LIGHT_FIXTURE" && basis.science_ready === false, B, "basis must be a FIRST_LIGHT_FIXTURE with science_ready=false");
 check(basis.relation === null, B, "relation must be null: cross-broker association is not implemented in this gate");
 check(JSON.stringify(Object.keys(basis.domains ?? {}).sort()) === JSON.stringify(DOMAINS), B, "basis must pin exactly the antares and fink domains");
@@ -203,7 +229,7 @@ for (const d of DOMAINS) {
   check(pin.science_ready === false, where, "domain build must not be science_ready in a fixture basis");
   evidenceList(pin.evidence, where);
   check(nonEmpty(pin.native_ontology), where, "native_ontology required");
-  for (const f of ["stored_field", "scale_basis", "date_binning", "entity_date_rule"]) check(nonEmpty(pin.time?.[f]), where, `time.${f} required`);
+  for (const f of ["stored_field", "scale_label", "scale_basis", "date_binning", "entity_date_rule"]) check(nonEmpty(pin.time?.[f]), where, `time.${f} required`);
 }
 check(basis.domains.fink.time.scale === "TAI" && basis.domains.fink.time.stored_field === "midpointMjdTai", B, "Fink time must be midpointMjdTai on the TAI scale");
 check(basis.domains.antares.time.scale === "UTC", B, "ANTARES historical exporter time is declared UTC-treated");
@@ -327,6 +353,10 @@ for (const d of DOMAINS) {
   const records = ents.records ?? [];
   check(ents.population?.represented === records.length, E, "population.represented must equal the record count");
   if (ents.population?.complete) check(ents.population.total === records.length, E, "a complete population has total == represented");
+  else {
+    // Client-side cross-filtering of a sample would present sample counts as the population.
+    check(caps.get(`${d}:sky.filtered_density`)?.state !== "AVAILABLE", C, `${d}:sky.filtered_density cannot be AVAILABLE for an incomplete population`);
+  }
   const ids = new Set();
   const perDate = {};
   for (const [i, r] of records.entries()) {
@@ -533,6 +563,7 @@ for (const a of excerpt.acquisitions) {
   check(capability?.state === capState, C, `fink acquisition capability for ${a.label} must be ${capState}`);
   check(JSON.stringify(capability?.codes) === JSON.stringify(w.status_codes), C, `fink acquisition capability codes for ${a.label} must equal window status codes`);
   const prov = provenance.acquisitions.find((x) => x.acquisition_id === a.acquisition_id);
+  if (prov) check(prov.domain === "fink", P, `${a.label} acquisition evidence must declare its domain (fink)`);
   if (check(prov, P, `acquisition ${a.acquisition_id} missing from provenance`)) {
     check(prov.state === a.state && prov.admission === w.admission && prov.delivery_validation === w.delivery_validation, P, `${a.label} provenance disagrees with its window`);
     check((prov.delivery?.readable_rows ?? null) === (a.delivery?.readable_rows ?? null), P, `${a.label} delivered rows disagree with pinned evidence`);

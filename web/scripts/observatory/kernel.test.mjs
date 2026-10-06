@@ -265,7 +265,7 @@ test("State codec round-trips and refuses foreign bases and unknown dimensions",
   state.selection.feature.fink = { x: { dimension: "fink.a", min: 1.5, max: 3 }, y: { dimension: "fink.b", min: -2, max: 2 } };
   state.focus = { domain: "fink", kind: "fink.diaObject", id: "990000000000000123" };
   state.lens.primary = "population";
-  state.lens.lab.fink = { x: "fink.b", y: "fink.a", statistic: "median", z: "fink.c" };
+  state.lens.lab.fink = { x: "fink.a", y: "fink.b", statistic: "median", z: "fink.c" };
   state.presentation.overlays.ecliptic = false;
   const decoded = decodeState(encodeState(state), defaults, ctx);
   assert.deepEqual(decoded.warnings, []);
@@ -277,6 +277,17 @@ test("State codec round-trips and refuses foreign bases and unknown dimensions",
   const foreign = decodeState(encodeState({ ...state, basis_id: "other" }), defaults, ctx);
   assert.deepEqual(foreign.state, defaults);
   assert.equal(foreign.warnings.length, 1);
+
+  // A brush on axes other than the decoded Lab axes is dropped, never kept invisibly.
+  const mismatched = structuredClone(state);
+  mismatched.lens.lab.fink = { x: "fink.b", y: "fink.a", statistic: "count", z: null };
+  const dropped = decodeState(encodeState(mismatched), defaults, ctx);
+  assert.equal(dropped.state.selection.feature.fink, undefined);
+  assert.ok(dropped.warnings.some((w) => w.includes("does not match its Lab axes")));
+  // Ranges keep significant digits (small-scale dimensions survive the URL).
+  const tiny = structuredClone(state);
+  tiny.selection.feature.fink.x = { dimension: "fink.a", min: 1.234567e-9, max: 9.87654321e-8 };
+  assert.deepEqual(decodeState(encodeState(tiny), defaults, ctx).state.selection.feature.fink.x, tiny.selection.feature.fink.x);
 
   const bad = structuredClone(state);
   bad.selection.feature.fink.x.dimension = "fink.unavailable";
@@ -312,4 +323,26 @@ test("MOC normalization collapses complete siblings and expands losslessly", asy
   // Any-overlap semantics at a coarser display order.
   const coarse = mocCellsAtOrder(moc, 3);
   for (const p of base) assert.ok(coarse.has(Math.floor(p / 16)));
+});
+
+test("HEALPix NESTED matches independent healpy 1.20.1 reference values (orders 3, 8, 12)", () => {
+  // healpy.ang2pix(2**order, ra, dec, nest=True, lonlat=True), computed outside this repository.
+  const reference = [
+    [3, 10.0, -30.0, 257], [3, 266.40499, -28.93617, 450], [3, 359.99, 0.01, 304], [3, 0.0, 89.9, 63],
+    [3, 123.456, -77.7, 578], [3, 200.0, 45.0, 172], [3, 45.0, 41.81, 15], [3, 315.0, -41.81, 752],
+    [8, 10.0, -30.0, 263514], [8, 266.40499, -28.93617, 461282], [8, 359.99, 0.01, 311296], [8, 0.0, 89.9, 65535],
+    [8, 123.456, -77.7, 592328], [8, 200.0, 45.0, 176281], [8, 45.0, 41.81, 16383], [8, 315.0, -41.81, 770048],
+    [12, 10.0, -30.0, 67459733], [12, 266.40499, -28.93617, 118088310], [12, 359.99, 0.01, 79691776], [12, 0.0, 89.9, 16777151],
+    [12, 123.456, -77.7, 151636063], [12, 200.0, 45.0, 45128089], [12, 45.0, 41.81, 4194303], [12, 315.0, -41.81, 197132288]
+  ];
+  for (const [order, ra, dec, pixel] of reference) assert.equal(radecToPix(order, ra, dec), pixel, `order ${order} (${ra}, ${dec})`);
+  // healpy.pix2ang(2**order, pixel, nest=True, lonlat=True)
+  for (const [order, pixel, ra, dec] of [
+    [4, 1234, 8.4375, 14.477512186],
+    [8, 500000, 238.359375, -6.429418463],
+    [12, 123456789, 298.377685547, 3.209645264]
+  ]) {
+    const [r, d] = pixToRaDec(order, pixel);
+    assert.ok(Math.abs(r - ra) < 1e-8 && Math.abs(d - dec) < 1e-8, `center of ${order}/${pixel}`);
+  }
 });

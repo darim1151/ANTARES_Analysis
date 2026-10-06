@@ -1,11 +1,12 @@
 {
   "contract": "uso.observatory-bundle",
   "domain": "fink",
-  "build_id": "fink.first-light-fixture.fd02c8e",
+  "build_id": "fink.first-light-fixture.fd02c8e.g1.1",
   "semantics": {
     "stored_field": "midpointMjdTai",
     "format": "MJD",
     "scale": "TAI",
+    "scale_label": "TAI",
     "scale_basis": "Fink analysis_contract_v1: midpointMjdTai is the authoritative observation time, MJD on the TAI scale.",
     "date_binning": "UTC date of the TAI time converted with a leap-second table, half-open [00:00, 24:00) UTC. Fixture conversion: TAI − UTC = 37 s (valid since 2017-01-01); a real adapter must use ERFA/Astropy.",
     "entity_date_rule": "UTC date of the first delivered DiaSource of the DiaObject in this basis."

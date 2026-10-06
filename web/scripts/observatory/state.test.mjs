@@ -119,10 +119,35 @@ test("view manifest pins the basis, carries the state and declares evidence in v
   assert.equal(vm.basis.relation, null);
   assert.equal(vm.basis.science_ready, false);
   assert.deepEqual(vm.state, s);
-  assert.deepEqual(vm.evidence_in_view, ["SYNTHETIC_DEMO", "LEGACY_SAMPLE"]);
   assert.ok(vm.caveats[0].includes("not science-ready"));
+  // Evidence follows what is drawn: ANTARES sky/lab only, both time lanes (one as context).
+  assert.deepEqual(vm.evidence_by_lens["sky.antares.density"], ["LEGACY_SAMPLE"]);
+  assert.deepEqual(vm.evidence_by_lens["lab.antares.y"], ["LEGACY_SAMPLE"]);
+  assert.equal(vm.evidence_by_lens["sky.fink.density"], undefined);
+  assert.deepEqual(vm.evidence_by_lens["time.fink"], ["SYNTHETIC_FIXTURE", "COMMITTED_OPERATIONAL_RECORD", "VALIDATED_TRANSPORT_EVIDENCE"]);
+  // A focused fixture DiaObject never claims transport evidence for itself.
+  const focused = buildViewManifest(model, reduce(s, { type: "focus", focus: { domain: "fink", kind: "fink.diaObject", id: model.domains.fink.records[0].id } }));
+  assert.deepEqual(focused.evidence_by_lens["inspector.fink"], ["SYNTHETIC_FIXTURE"]);
   const compare = buildViewManifest(model, reduce(s, { type: "mode", mode: "compare" }));
-  assert.ok(compare.evidence_in_view.includes("SYNTHETIC_FIXTURE") && compare.evidence_in_view.includes("VALIDATED_TRANSPORT_EVIDENCE"));
+  assert.deepEqual(compare.evidence_by_lens["sky.fink.density"], ["SYNTHETIC_FIXTURE"]);
+});
+
+test("time admission distinguishes not-admitted dates from zero", async () => {
+  const { timeAdmission } = await import("../../lib/observatory/model.ts");
+  const m2 = timeAdmission(model.domains.fink, { kind: "utc_dates", start: "2026-04-01", stop: "2026-04-11" });
+  assert.deepEqual(m2, { total: 10, admitted: 0, byState: { UNQUALIFIED: 10 }, status: "NONE" });
+  const m3 = timeAdmission(model.domains.fink, { kind: "utc_dates", start: "2026-05-01", stop: "2026-05-03" });
+  assert.deepEqual(m3.byState, { UNAVAILABLE: 2 });
+  const antaresOutside = timeAdmission(model.domains.antares, { kind: "utc_dates", start: "2026-03-02", stop: "2026-03-06" });
+  assert.equal(antaresOutside.status, "PARTIAL");
+  assert.deepEqual(antaresOutside.byState, { AVAILABLE: 2, OUTSIDE_COVERAGE: 2 });
+  assert.equal(timeAdmission(model.domains.fink, null), null);
+});
+
+test("sky orders never exceed the density maps the basis provides", () => {
+  const finest = Math.min(model.bundle.domains.antares.sky.density.order, model.bundle.domains.fink.sky.density.order);
+  assert.ok(model.skyOrders.length > 0 && model.skyOrders.every((o) => o <= finest));
+  assert.throws(() => model.domains.fink.densityAt(finest + 1), RangeError);
 });
 
 test("capability lookups never invent availability", () => {

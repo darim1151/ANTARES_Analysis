@@ -96,6 +96,8 @@ export type TimeSemantics = {
   stored_field: string;
   format: "MJD";
   scale: TimeScale;
+  /** Short display qualifier, e.g. "UTC (exporter-treated)" or "TAI". */
+  scale_label: string;
   /** How the scale was established (e.g. "historical exporter treats MJD as UTC"). */
   scale_basis: string;
   /** UTC-date binning rule, always half-open [00:00, 24:00) UTC. */
@@ -486,6 +488,8 @@ export type ProvenanceSource = {
 };
 
 export type AcquisitionEvidence = {
+  /** Domain whose acquisition this is; acquisitions are never cross-domain. */
+  domain: DomainId;
   acquisition_id: string;
   label: string;
   window: { start: string; stop: string; semantics: string };
@@ -665,6 +669,9 @@ export type ViewManifest = {
   };
   bundle: { bundle_id: string; manifest_sha256: string | null; integrity: BundleIntegrity["method"] };
   state: ScientificState;
+  /** Union of the evidence classes actually drawn in this view. */
   evidence_in_view: EvidenceClass[];
+  /** Evidence per drawn lens element (e.g. `sky.fink.density`, `lab.fink.y`). */
+  evidence_by_lens: Record<string, EvidenceClass[]>;
   caveats: string[];
 };

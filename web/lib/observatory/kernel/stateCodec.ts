@@ -41,7 +41,8 @@ function num(value: number, digits: number): string {
 }
 
 function encodeRange(r: FeatureRange): string {
-  return `${r.dimension}:${num(r.min, 6)}:${num(r.max, 6)}`;
+  // Significant digits, not decimals: small-scale dimensions must survive the URL.
+  return `${r.dimension}:${Number(r.min.toPrecision(10))}:${Number(r.max.toPrecision(10))}`;
 }
 
 function encodeLab(lab: LabConfig): string {
@@ -183,6 +184,16 @@ export function decodeState(
   if (lens === "sky" || lens === "population") state.lens.primary = lens;
   for (const domain of DOMAINS) {
     state.lens.lab[domain] = decodeLab(p.get(`lab${DOMAIN_KEY[domain]}`), domain, defaults.lens.lab[domain], ctx);
+  }
+  // A brush is defined on the Lab axes it was drawn on; one that does not match
+  // the decoded axes could never be seen, so it is not silently kept.
+  for (const domain of DOMAINS) {
+    const f = state.selection.feature[domain];
+    const lab = state.lens.lab[domain];
+    if (f && (!f.y || f.x.dimension !== lab.x || f.y.dimension !== lab.y)) {
+      delete state.selection.feature[domain];
+      warnings.push(`Ignored a ${domain.toUpperCase()} feature selection that does not match its Lab axes.`);
+    }
   }
   const order = Number(p.get("o"));
   if (ctx.skyOrders.includes(order)) state.presentation.skyOrder = order;
