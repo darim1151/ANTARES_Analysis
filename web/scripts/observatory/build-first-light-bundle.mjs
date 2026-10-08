@@ -4,46 +4,48 @@
 //   node scripts/observatory/build-first-light-bundle.mjs           # write
 //   node scripts/observatory/build-first-light-bundle.mjs --check   # verify committed bundle
 //
-// Deterministic: no wall clock, no network, seeded PRNG. Inputs:
+// Deterministic: no wall clock, no network. Inputs:
 //   - public/data/{sky_points,lightcurve_samples,public_manifest}.json
 //     (the existing SkyPulse LEGACY DEMO contract; read only)
 //   - scripts/observatory/inputs/fink-evidence.fd02c8e.json
-//     (committed Fink acquisition evidence at the pinned revision)
+//     (pinned Light Static schema excerpt; used to check broker field names)
+//   - scripts/observatory/inputs/fink-catalog.<run id>.json.gz
+//     (read-only extract of the accepted Fink five-window catalog; produced by
+//     fetch-fink-catalog.mjs + extract-fink-catalog.py)
 //
 // Scientific honesty rules enforced here (and re-checked by the validator):
 //   - ANTARES demo values are labelled LEGACY_SAMPLE or SYNTHETIC_DEMO per field;
 //     values the demo exporter clipped are emitted as null.
-//   - The Fink population is a SYNTHETIC_FIXTURE confined to the Month-1 window.
-//     Month-2 (transport-validated, uncharacterized) and Month-3 (producer
-//     complete, not delivery-validated, not admitted) carry no counts at all.
+//   - Fink values are real catalog values labelled as transport evidence, never
+//     accepted science. Per-date delivered rows and DiaObject sky density are
+//     complete; the Fink entity layer is a labelled simple random sample and is
+//     never aggregated into population counts.
 //   - No cross-broker relation is produced.
 
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { gunzipSync } from "node:zlib";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { normalizeMoc, pixToRaDec, radecToPix } from "../../lib/observatory/kernel/healpix.ts";
+import { radecToPix } from "../../lib/observatory/kernel/healpix.ts";
 import { icrsToEcliptic, icrsToGalactic } from "../../lib/observatory/kernel/astro.ts";
-import { addDays, utcDateRange, utcDateToMs, utcMjdToUtcDate } from "../../lib/observatory/kernel/dates.ts";
-import { fnv1a32, shardOf, shardPath } from "../../lib/observatory/kernel/shard.ts";
+import { addDays, utcDateRange, utcMjdToUtcDate } from "../../lib/observatory/kernel/dates.ts";
+import { shardOf, shardPath } from "../../lib/observatory/kernel/shard.ts";
 
 const CONTRACT = "uso.observatory-bundle";
 const CONTRACT_VERSION = "1.0.0";
-const GENERATOR = { name: "web/scripts/observatory/build-first-light-bundle.mjs", version: "1.1.0" };
+const GENERATOR = { name: "web/scripts/observatory/build-first-light-bundle.mjs", version: "1.2.0" };
 // Adapter tag carried by every build id, so a changed adapter yields a new build identity.
 const ADAPTER_TAG = `g${GENERATOR.version.split(".").slice(0, 2).join(".")}`;
-const BUNDLE_ID = "uso-first-light-0001";
+const BUNDLE_ID = "uso-first-light-0002";
 // The basis id is derived from what the basis pins (see basisIdFor), never a free constant.
 const BASIS_PREFIX = "basis.uso.first-light";
-const SEED = "uso-first-light/fink-fixture/v1";
 const BASELINE_REVISION = "812c545e14693cdce7ff7458f1d2b50b0804dcd8";
 const DENSITY_ORDER = 6;
-const COVERAGE_ORDER = 6;
-const TAI_MINUS_UTC_S = 37; // valid since 2017-01-01; fixture-only conversion
-const FINK_FIXTURE_OBJECTS = 1800;
-const FIXTURE_FOOTPRINT_DEC = [-72, 8];
-const DETAIL_SHARDS = { antares: 4, fink: 16 };
+// TAI - UTC on every date of the Fink cohort; the extractor checks it with ERFA.
+const FINK_TAI_MINUS_UTC_S = 37;
+const DETAIL_SHARDS = { antares: 4, fink: 64 };
 const DEMO_MAG_CLIP = [13.5, 25.5];
 
 const VERSIONS = {
@@ -60,7 +62,8 @@ const inputPaths = {
   skyPoints: "public/data/sky_points.json",
   lightcurves: "public/data/lightcurve_samples.json",
   demoManifest: "public/data/public_manifest.json",
-  finkEvidence: "scripts/observatory/inputs/fink-evidence.fd02c8e.json"
+  finkEvidence: "scripts/observatory/inputs/fink-evidence.fd02c8e.json",
+  finkCatalog: "scripts/observatory/inputs/fink-catalog.final-five-window-analytics-20261006-v1.json.gz"
 };
 
 const check = process.argv.includes("--check");
@@ -88,36 +91,6 @@ const round = (v, d) => (v === null || !Number.isFinite(v) ? null : Number(v.toF
 const sig = (v, n = 4) => (v === null || !Number.isFinite(v) ? null : Number(v.toPrecision(n)));
 function fail(message) {
   throw new Error(`First-Light generator: ${message}`);
-}
-function mjdUtcOfDate(date) {
-  return utcDateToMs(date) / 86_400_000 + 40587;
-}
-
-function prng(seedText) {
-  let a = fnv1a32(seedText);
-  const next = () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  next.uniform = (lo, hi) => lo + (hi - lo) * next();
-  next.int = (lo, hiInclusive) => lo + Math.floor(next() * (hiInclusive - lo + 1));
-  next.normal = () => {
-    const u = Math.max(next(), 1e-12);
-    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * next());
-  };
-  next.pick = (weights) => {
-    const total = Object.values(weights).reduce((s, w) => s + w, 0);
-    let x = next() * total;
-    for (const [key, w] of Object.entries(weights)) {
-      x -= w;
-      if (x <= 0) return key;
-    }
-    return Object.keys(weights).at(-1);
-  };
-  return next;
 }
 
 function cap(scope, area, name, state, evidence, summary, reason, { codes = [], qualifications = [] } = {}) {
@@ -206,14 +179,16 @@ function nightStatesFromWindows(range, windows) {
 
 async function readInput(relative) {
   const bytes = await readFile(path.join(webRoot, relative));
-  return { relative, bytes, sha256: sha256(bytes), json: JSON.parse(bytes.toString("utf8")) };
+  const text = relative.endsWith(".gz") ? gunzipSync(bytes).toString("utf8") : bytes.toString("utf8");
+  return { relative, bytes, sha256: sha256(bytes), json: JSON.parse(text) };
 }
 
 const inputs = {
   skyPoints: await readInput(inputPaths.skyPoints),
   lightcurves: await readInput(inputPaths.lightcurves),
   demoManifest: await readInput(inputPaths.demoManifest),
-  finkEvidence: await readInput(inputPaths.finkEvidence)
+  finkEvidence: await readInput(inputPaths.finkEvidence),
+  finkCatalog: await readInput(inputPaths.finkCatalog)
 };
 
 /* --------------------------------------------------------------- ANTARES */
@@ -503,324 +478,74 @@ function buildAntares() {
 
 /* ------------------------------------------------------------------ Fink */
 
-function lcFeatures(points, allowedKeys) {
-  // points: [{t, f, e}] sorted by t; returns a map of computed features.
-  const n = points.length;
-  if (n < 3) return null;
-  const f = points.map((p) => p.f);
-  const e = points.map((p) => p.e);
-  const t = points.map((p) => p.t);
-  const mean = f.reduce((s, v) => s + v, 0) / n;
-  const w = e.map((x) => 1 / (x * x));
-  const wsum = w.reduce((s, v) => s + v, 0);
-  const wmean = f.reduce((s, v, i) => s + v * w[i], 0) / wsum;
-  const sd = Math.sqrt(f.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1));
-  const sorted = [...f].sort((a, b) => a - b);
-  const q = (p) => {
-    const pos = (n - 1) * p;
-    const lo = Math.floor(pos);
-    const hi = Math.ceil(pos);
-    return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
-  };
-  const median = q(0.5);
-  const amplitude = (sorted[n - 1] - sorted[0]) / 2;
-  const m2 = f.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
-  const m3 = f.reduce((s, v) => s + (v - mean) ** 3, 0) / n;
-  const m4 = f.reduce((s, v) => s + (v - mean) ** 4, 0) / n;
-  const skew = m2 > 0 ? (Math.sqrt(n * (n - 1)) / (n - 2)) * (m3 / m2 ** 1.5) : null;
-  const kurtosis = n >= 4 && m2 > 0 ? ((n - 1) / ((n - 2) * (n - 3))) * ((n + 1) * (m4 / m2 ** 2 - 3) + 6) : null;
-  const tm = t.reduce((s, v) => s + v, 0) / n;
-  const stt = t.reduce((s, v) => s + (v - tm) ** 2, 0);
-  const slope = stt > 0 ? t.reduce((s, v, i) => s + (v - tm) * (f[i] - mean), 0) / stt : null;
-  const resid = slope === null ? null : f.map((v, i) => v - (mean + slope * (t[i] - tm)));
-  const noise = resid && n > 2 ? Math.sqrt(resid.reduce((s, v) => s + v * v, 0) / (n - 2)) : null;
-  const slopeSigma = noise !== null && stt > 0 ? noise / Math.sqrt(stt) : null;
-  const twm = t.reduce((s, v, i) => s + v * w[i], 0) / wsum;
-  const wtt = t.reduce((s, v, i) => s + w[i] * (v - twm) ** 2, 0);
-  const wslope = wtt > 0 ? t.reduce((s, v, i) => s + w[i] * (v - twm) * (f[i] - wmean), 0) / wtt : null;
-  const wfitChi2 =
-    wslope === null || n <= 2
-      ? null
-      : f.reduce((s, v, i) => s + ((v - (wmean + wslope * (t[i] - twm))) / e[i]) ** 2, 0) / (n - 2);
-  let maxSlope = 0;
-  for (let i = 1; i < n; i += 1) {
-    const dt = t[i] - t[i - 1];
-    if (dt > 0) maxSlope = Math.max(maxSlope, Math.abs((f[i] - f[i - 1]) / dt));
-  }
-  const mad = (() => {
-    const dev = f.map((v) => Math.abs(v - median)).sort((a, b) => a - b);
-    return dev[Math.floor((n - 1) / 2)];
-  })();
-  const chi2 = f.reduce((s, v, i) => s + ((v - wmean) / e[i]) ** 2, 0) / (n - 1);
-  const delta = f.map((v, i) => Math.sqrt(n / (n - 1)) * ((v - wmean) / e[i]));
-  const stetsonK =
-    delta.reduce((s, v) => s + Math.abs(v), 0) / n / Math.sqrt(delta.reduce((s, v) => s + v * v, 0) / n);
-  const values = {
-    mean,
-    weighted_mean: wmean,
-    standard_deviation: sd,
-    median,
-    amplitude,
-    beyond_1_std: f.filter((v) => Math.abs(v - mean) > sd).length / n,
-    inter_percentile_range_10: q(0.9) - q(0.1),
-    kurtosis,
-    linear_trend: slope,
-    linear_trend_sigma: slopeSigma,
-    linear_trend_noise: noise,
-    linear_fit_slope: wslope,
-    linear_fit_slope_sigma: wtt > 0 ? 1 / Math.sqrt(wtt) : null,
-    linear_fit_reduced_chi2: wfitChi2,
-    maximum_slope: maxSlope,
-    median_absolute_deviation: mad,
-    median_buffer_range_percentage_10: f.filter((v) => Math.abs(v - median) < 0.1 * (sorted[n - 1] - sorted[0])).length / n,
-    percent_amplitude: Math.max(Math.abs(sorted[n - 1] - median), Math.abs(sorted[0] - median)),
-    mean_variance: Math.abs(mean) > 1e-9 ? sd / mean : null,
-    chi2,
-    skew,
-    stetson_K: stetsonK
-  };
-  const out = {};
-  for (const [key, value] of Object.entries(values)) {
-    if (!allowedKeys.includes(key)) fail(`fixture lc_features key ${key} is not in the pinned Light Static schema`);
-    const v = sig(value, 4);
-    if (v !== null) out[key] = v;
-  }
-  return out;
-}
-
 function buildFink() {
+  // Schema reference: the pinned Light Static schema excerpt (fd02c8e). The
+  // population itself comes from the read-only catalog extract.
   const ev = inputs.finkEvidence.json;
-  if (ev.revision !== "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d") fail("Fink evidence excerpt is not at the pinned revision");
   const schema = ev.light_static_schema;
-  const byLabel = Object.fromEntries(ev.acquisitions.map((a) => [a.label, a]));
-  const m1 = byLabel["Month-1"];
-  if (!m1 || m1.state !== "DELIVERY_VALIDATED" || !m1.characterization || !ev.cohort.acquisitions.includes(m1.acquisition_id)) {
-    fail("Month-1 must be delivery-validated, characterized and admitted to the accepted cohort");
-  }
-  const buildId = `fink.first-light-fixture.${ev.revision.slice(0, 7)}.${ADAPTER_TAG}`;
-
-  // Acquisition windows strictly from committed evidence.
-  const windows = ev.acquisitions.map((a) => {
-    const validated = a.state === "DELIVERY_VALIDATED" && a.delivery?.reconciliation_passed === true;
-    const admitted = ev.cohort.acquisitions.includes(a.acquisition_id);
-    const characterized = Boolean(a.characterization);
-    let state;
-    let codes;
-    let caveat;
-    if (validated && admitted && characterized) {
-      state = "AVAILABLE";
-      codes = ["DELIVERY_VALIDATED", "ADMITTED", "CHARACTERIZED"];
-      caveat =
-        "Delivery reconciled three ways (expected topic messages = terminal committed = local readable rows, lag 0) and characterized (G4A). " +
-        "Transport reconciliation is not Rubin scientific completeness. Per-date delivered counts are not committed evidence and are not shown.";
-    } else if (validated) {
-      state = "UNQUALIFIED";
-      codes = ["DELIVERY_VALIDATED", admitted ? "ADMITTED" : "NOT_ADMITTED", characterized ? "CHARACTERIZED" : "UNCHARACTERIZED"];
-      caveat =
-        "Transport-validated but scientifically uncharacterized and not admitted to the analytical cohort. " +
-        "Its delivered row total must not be read as an alert rate or compared with other windows.";
-    } else {
-      state = "UNAVAILABLE";
-      codes = ["NOT_DELIVERY_VALIDATED", "NOT_ADMITTED"];
-      caveat = `Upstream state ${a.state}: not delivery-validated and not admitted to this basis. This is not missing data; it is not yet available.`;
+  const cat = inputs.finkCatalog.json;
+  const c = cat.catalog;
+  if (cat.kind !== "uso.fink-catalog-extract" || cat.version !== 1) fail("Fink catalog extract has an unknown kind/version");
+  if (c.contract_id !== "analysis_contract_v1" || c.qualification_status !== "PASS") fail("Fink catalog must be a PASS analysis_contract_v1 catalog");
+  if (!cat.reader?.read_only || !cat.reader?.raw_fingerprints_reverified) fail("Fink catalog extract must come from the native read-only opener");
+  if (cat.time_scale.tai_minus_utc_s !== FINK_TAI_MINUS_UTC_S) fail("TAI - UTC over the cohort window must be the ERFA-verified 37 s");
+  for (const a of cat.acquisitions) {
+    if (a.state !== "DELIVERY_VALIDATED" || a.expected_rows !== a.validated_rows || !a.characterization || !c.cohort_acquisitions.includes(a.acquisition_id)) {
+      fail(`${a.acquisition_id} must be delivery-validated, reconciled, characterized and admitted to ${c.cohort_name}`);
     }
+    if (a.schema_groups.length !== 1 || !schema.schema_groups[0].startsWith(`${a.schema_groups[0]}=`)) fail(`${a.acquisition_id} schema group differs from the pinned Light Static schema`);
+  }
+  const buildId = `fink.catalog.${c.run_id}.${inputs.finkCatalog.sha256.slice(0, 12)}.${ADAPTER_TAG}`;
+  const TAI = "VALIDATED_TRANSPORT_EVIDENCE";
+  const taiToUtcMjd = (mjdTai) => mjdTai - FINK_TAI_MINUS_UTC_S / 86400;
+
+  /* --- acquisition windows from the catalog's build manifest --- */
+  const acquisitions = [...cat.acquisitions].sort((a, b) => (a.start < b.start ? -1 : 1));
+  const windows = acquisitions.map((a, i) => {
     const facts = [
       { label: "Acquisition state", value: a.state, evidence: "COMMITTED_OPERATIONAL_RECORD" },
-      { label: "State recorded (UTC)", value: a.state_at_utc, evidence: "COMMITTED_OPERATIONAL_RECORD" },
-      { label: "Science profile", value: a.science_profile, evidence: "COMMITTED_OPERATIONAL_RECORD" }
+      { label: "Science profile", value: a.profile, evidence: "COMMITTED_OPERATIONAL_RECORD" },
+      { label: "Delivered rows (validated = expected)", value: a.validated_rows, unit: "rows", evidence: TAI },
+      { label: "DIA rows", value: a.qc.dia_rows, unit: "rows", evidence: TAI },
+      { label: "SSO rows", value: a.qc.sso_rows, unit: "rows", evidence: TAI },
+      { label: "Ambiguous rows", value: a.qc.ambiguous_rows, unit: "rows", evidence: TAI },
+      { label: "Distinct DIA objects in this window", value: a.qc.distinct_dia_objects, unit: "DiaObjects", evidence: TAI },
+      { label: "Readable Parquet files", value: a.parquet_files, unit: "files", evidence: TAI },
+      { label: "Delivered bytes", value: a.raw_total_bytes, unit: "bytes", evidence: TAI },
+      { label: "Characterization run", value: a.characterization.run_id, evidence: "COMMITTED_OPERATIONAL_RECORD" },
+      { label: "Analytical cohort", value: c.cohort_name, evidence: "COMMITTED_OPERATIONAL_RECORD" }
     ];
-    if (a.delivery) {
-      facts.push(
-        { label: "Delivered readable rows (transport)", value: a.delivery.readable_rows, unit: "rows", evidence: "VALIDATED_TRANSPORT_EVIDENCE" },
-        { label: "Readable Parquet files", value: a.delivery.readable_parquet_files, unit: "files", evidence: "VALIDATED_TRANSPORT_EVIDENCE" },
-        { label: "Delivered bytes", value: a.delivery.total_bytes, unit: "bytes", evidence: "VALIDATED_TRANSPORT_EVIDENCE" },
-        { label: "Three-way reconciliation", value: a.delivery.reconciliation_passed, evidence: "VALIDATED_TRANSPORT_EVIDENCE" },
-        { label: "Terminal consumer lag", value: a.delivery.terminal_lag, unit: "messages", evidence: "VALIDATED_TRANSPORT_EVIDENCE" }
-      );
-    }
-    if (a.characterization) facts.push({ label: "Characterization run", value: a.characterization.run_id, evidence: "COMMITTED_OPERATIONAL_RECORD" });
-    facts.push({ label: "Analytical cohort", value: admitted ? ev.cohort.cohort_name : "not admitted", evidence: "COMMITTED_OPERATIONAL_RECORD" });
     return {
-      id: `fink.${a.label.toLowerCase()}`,
-      label: `${a.label} · ${a.window.start} → ${a.window.stop}`,
-      start: a.window.start,
-      stop: a.window.stop,
-      state,
+      id: `fink.month-${i + 1}`,
+      label: `Month-${i + 1} · ${a.start} → ${a.stop}`,
+      start: a.start,
+      stop: a.stop,
+      state: "AVAILABLE",
       source_state: a.state,
-      delivery_validation: validated ? "DELIVERY_VALIDATED" : "NOT_DELIVERY_VALIDATED",
-      admission: admitted ? "ADMITTED" : "NOT_ADMITTED",
-      status_codes: codes,
-      evidence: a.delivery ? ["VALIDATED_TRANSPORT_EVIDENCE", "COMMITTED_OPERATIONAL_RECORD"] : ["COMMITTED_OPERATIONAL_RECORD"],
+      delivery_validation: "DELIVERY_VALIDATED",
+      admission: "ADMITTED",
+      status_codes: ["DELIVERY_VALIDATED", "ADMITTED", "CHARACTERIZED"],
+      evidence: [TAI, "COMMITTED_OPERATIONAL_RECORD"],
       facts,
       rate_comparison: "PROHIBITED",
-      caveat
+      caveat:
+        `Delivery-validated (expected = validated rows), characterized (${a.characterization.run_id}) and admitted to the accepted ` +
+        `${c.cohort_name} cohort. Delivered rows are transport facts, not Rubin scientific completeness, and are never compared ` +
+        "across windows as rates. A zero-row date had no delivered rows; it is not a survey non-observation."
     };
   });
-  const range = { start: windows[0].start, stop: windows.at(-1).stop };
-  const nights = nightStatesFromWindows(range, windows);
-
-  /* --- synthetic fixture population, confined to the Month-1 window --- */
-  const r = prng(SEED);
-  const m1Dates = utcDateRange(m1.window.start, m1.window.stop);
-  const m1StopMjd = mjdUtcOfDate(m1.window.stop);
-  const dateWeights = Object.fromEntries(m1Dates.map((d) => [d, 0.45 + 0.9 * r()]));
-  const coverage = new Set();
-  // Fixture footprint at COVERAGE_ORDER: cells whose center lies in the declination band.
-  for (let p = 0; p < 12 * 4 ** COVERAGE_ORDER; p += 1) {
-    const [, dec] = pixToRaDec(COVERAGE_ORDER, p);
-    if (dec >= FIXTURE_FOOTPRINT_DEC[0] && dec <= FIXTURE_FOOTPRINT_DEC[1]) coverage.add(p);
-  }
-  const archetypeWeights = { transient: 0.3, periodic: 0.35, stochastic: 0.15, sparse: 0.2 };
-  const bandWeights = { u: 0.04, g: 0.24, r: 0.28, i: 0.24, z: 0.14, y: 0.06 };
-  const bandDepth = { u: 2.2, g: 1, r: 1, i: 1.2, z: 1.6, y: 2.4 };
-  const bandColour = { u: 0.6, g: 1, r: 0.95, i: 0.85, z: 0.75, y: 0.65 };
-  const flux = (mag) => 10 ** ((31.4 - mag) / 2.5);
-  const lcKeys = schema.lc_features_fields;
-  for (const key of ["snnSnVsOthers_score", "cats_class", "cats_score", "earlySNIa_score"]) {
-    if (!schema.clf_fields.includes(key)) fail(`clf field ${key} absent from pinned schema`);
-  }
-
-  const objects = [];
-  let sourceCounter = 0;
-  for (let i = 0; i < FINK_FIXTURE_OBJECTS; i += 1) {
-    const archetype = r.pick(archetypeWeights);
-    let ra;
-    let dec;
-    for (;;) {
-      ra = r() * 360;
-      dec = (Math.asin(2 * r() - 1) * 180) / Math.PI;
-      if (!coverage.has(radecToPix(COVERAGE_ORDER, ra, dec))) continue;
-      const [l, b] = icrsToGalactic(ra, dec);
-      const lw = l > 180 ? l - 360 : l;
-      const absB = Math.abs(b);
-      let weight = 1;
-      if (archetype === "periodic") weight = 0.12 + 0.88 * Math.exp(-absB / 9) + 0.8 * Math.exp(-((lw / 14) ** 2) - (b / 9) ** 2);
-      if (archetype === "transient" || archetype === "stochastic") weight = 0.1 + 0.9 * Math.min(1, absB / 35);
-      if (r() < Math.min(1, weight)) break;
-    }
-    const firstDate = r.pick(dateWeights);
-    const nTarget = {
-      transient: r.int(2, 9),
-      periodic: r.int(6, 30),
-      stochastic: r.int(4, 18),
-      sparse: r() < 0.3 ? 2 : 1
-    }[archetype];
-    const gap = {
-      transient: () => r.uniform(0.6, 4.5),
-      periodic: () => r.uniform(0.3, 2.6),
-      stochastic: () => r.uniform(0.9, 4.2),
-      sparse: () => r.uniform(0.012, 0.05)
-    }[archetype];
-    const m0 = { transient: r.uniform(20, 23.4), periodic: r.uniform(17.5, 22), stochastic: r.uniform(19, 22.5), sparse: r.uniform(21, 23.8) }[archetype];
-    const peakT = r.uniform(1, 9);
-    const rise = r.uniform(2, 6);
-    const decline = r.uniform(8, 26);
-    const period = 10 ** r.uniform(Math.log10(0.3), Math.log10(14));
-    const ampFrac = r.uniform(0.15, 0.85);
-    const phase = r.uniform(0, 2 * Math.PI);
-    const drift = r.uniform(-0.03, 0.03);
-    const stochastic = [r.uniform(4, 30), r.uniform(4, 30), r.uniform(0, 6.28), r.uniform(0, 6.28)];
-
-    const t0 = mjdUtcOfDate(firstDate) + r.uniform(0.02, 0.4);
-    const times = [t0];
-    while (times.length < nTarget) {
-      const next = times.at(-1) + gap();
-      if (next >= m1StopMjd) break; // the fixture never extends past the admitted Month-1 window
-      times.push(next);
-    }
-    const sources = times.map((tUtc) => {
-      sourceCounter += 1;
-      const band = r.pick(bandWeights);
-      const dt = tUtc - t0;
-      let model;
-      if (archetype === "transient") {
-        model = flux(m0) * (dt < peakT ? Math.exp(-(peakT - dt) / rise) : Math.exp(-(dt - peakT) / decline));
-      } else if (archetype === "periodic") {
-        model = flux(m0) * ampFrac * Math.sin((2 * Math.PI * dt) / period + phase);
-      } else if (archetype === "stochastic") {
-        model =
-          flux(m0) * (0.25 * Math.sin((2 * Math.PI * dt) / stochastic[0] + stochastic[2]) + 0.18 * Math.sin((2 * Math.PI * dt) / stochastic[1] + stochastic[3]) + drift * dt);
-      } else {
-        model = flux(m0) * r.uniform(0.8, 1.25);
-      }
-      model *= bandColour[band];
-      const err = 180 * r.uniform(0.7, 1.6) * bandDepth[band];
-      const observed = model + err * r.normal();
-      return {
-        diaSourceId: `991${String(sourceCounter).padStart(15, "0")}`,
-        midpointMjdTai: round(tUtc + TAI_MINUS_UTC_S / 86400, 6),
-        tUtc,
-        band,
-        psfFlux: round(observed, 1),
-        psfFluxErr: round(err, 1),
-        snr: round(Math.abs(observed) / err, 2),
-        reliability: round(archetype === "sparse" ? r.uniform(0.12, 0.8) : r.uniform(0.74, 0.995), 3),
-        ra: ra + (r.normal() * 0.1) / 3600 / Math.max(0.05, Math.cos((dec * Math.PI) / 180)),
-        dec: dec + (r.normal() * 0.1) / 3600
-      };
-    });
-
-    const cataloged = archetype === "periodic" ? r() < 0.5 : archetype === "stochastic" ? r() < 0.3 : r() < 0.05;
-    const otype =
-      archetype === "periodic" && r() < 0.32
-        ? ["RRLyr", "EB*", "LP*", "V*"][r.int(0, 3)]
-        : archetype === "stochastic" && r() < 0.25
-          ? "QSO"
-          : null;
-    const catsClass = { transient: [11, 12, 13], periodic: [21, 22], stochastic: [31], sparse: [11, 21, 31] }[archetype];
-    const snapshotIdx = [...new Set([0, sources.length - 2, sources.length - 1].filter((k) => k >= 0))];
-    const snapshots = snapshotIdx.map((k) => {
-      const history = sources.slice(0, k + 1);
-      const lc = {};
-      for (const band of Object.keys(bandWeights)) {
-        const pts = history.filter((s) => s.band === band).map((s) => ({ t: s.midpointMjdTai, f: s.psfFlux, e: s.psfFluxErr }));
-        const feats = lcFeatures(pts, lcKeys);
-        if (feats) lc[band] = feats;
-      }
-      const grow = 1 - Math.exp(-(k + 1) / 3);
-      const snn = { transient: 0.35 + 0.55 * grow, periodic: 0.15, stochastic: 0.25, sparse: 0.4 }[archetype] + 0.12 * r.normal();
-      const cats = { transient: 0.55 + 0.3 * grow, periodic: 0.6, stochastic: 0.5, sparse: 0.35 }[archetype] + 0.15 * r.normal();
-      return {
-        diaSourceId: sources[k].diaSourceId,
-        midpointMjdTai: sources[k].midpointMjdTai,
-        fink_science_version: "FIXTURE",
-        pred: { is_sso: false, is_first: k === 0, is_cataloged: cataloged },
-        clf: {
-          snnSnVsOthers_score: k === 0 && r() < 0.3 ? null : round(Math.min(1, Math.max(0, snn)), 4),
-          cats_class: catsClass[r.int(0, catsClass.length - 1)],
-          cats_score: r() < 0.02 ? null : round(Math.min(1, Math.max(0, cats)), 4),
-          earlySNIa_score: archetype === "transient" && history.length >= 3 ? round(Math.min(1, Math.max(0, 0.2 + 0.5 * r() * grow)), 4) : null
-        },
-        xm: { simbad_otype: otype },
-        lc_features: lc
-      };
-    });
-
-    // Unit-vector mean: safe across the RA = 0/360 seam and near the poles.
-    const v = sources.reduce(
-      (acc, x) => {
-        const a = (x.ra * Math.PI) / 180;
-        const b = (x.dec * Math.PI) / 180;
-        return [acc[0] + Math.cos(b) * Math.cos(a), acc[1] + Math.cos(b) * Math.sin(a), acc[2] + Math.sin(b)];
-      },
-      [0, 0, 0]
-    );
-    const raMean = (Math.atan2(v[1], v[0]) * 180) / Math.PI;
-    const decMean = (Math.atan2(v[2], Math.hypot(v[0], v[1])) * 180) / Math.PI;
-    objects.push({ archetypeIndex: i, sources, snapshots, ra: ((raMean % 360) + 360) % 360, dec: decMean });
-  }
-
-  const records = objects.map((o, i) => ({
-    kind: "fink.diaObject",
-    id: `990${String(i + 1).padStart(15, "0")}`,
-    ra: round(o.ra, 5),
-    dec: round(o.dec, 5),
-    entity_date: utcMjdToUtcDate(o.sources[0].tUtc),
-    n_dia_sources: o.sources.length,
-    first_midpoint_mjd_tai: o.sources[0].midpointMjdTai,
-    last_midpoint_mjd_tai: o.sources.at(-1).midpointMjdTai,
-    bands: [...new Set(o.sources.map((s) => s.band))].sort((a, b) => "ugrizy".indexOf(a) - "ugrizy".indexOf(b))
-  }));
+  const range = { start: c.requested_start, stop: c.requested_stop };
+  if (range.start !== windows[0].start || range.stop !== windows.at(-1).stop) fail("acquisition windows must tile the cohort range");
+  const daily = new Map(cat.daily.map((d) => [d.date, d]));
+  const nights = utcDateRange(range.start, range.stop).map((date) => {
+    const w = windows.find((x) => date >= x.start && date < x.stop);
+    const d = daily.get(date);
+    if (!w || !d) fail(`cohort date ${date} has no window or daily coverage`);
+    return d.delivered_rows > 0
+      ? { date, state: "AVAILABLE", reason: "DELIVERED_ROWS", window_id: w.id, evidence: w.evidence }
+      : { date, state: "ZERO", reason: "ZERO_ROWS_IN_VALIDATED_DELIVERY", window_id: w.id, evidence: w.evidence };
+  });
+  if (cat.rows_outside_requested_dates !== 0) fail("delivered rows outside the requested dates must be shown, not dropped");
 
   const timeSemantics = {
     stored_field: "midpointMjdTai",
@@ -829,14 +554,10 @@ function buildFink() {
     scale_label: "TAI",
     scale_basis: "Fink analysis_contract_v1: midpointMjdTai is the authoritative observation time, MJD on the TAI scale.",
     date_binning:
-      "UTC date of the TAI time converted with a leap-second table, half-open [00:00, 24:00) UTC. Fixture conversion: TAI − UTC = 37 s (valid since 2017-01-01); a real adapter must use ERFA/Astropy.",
+      "UTC date from the catalog's own UTC-midnight boundaries expressed in TAI MJD, half-open [00:00, 24:00) UTC. " +
+      "TAI − UTC = 37 s on every date of the cohort (ERFA leap-second table, checked at extraction).",
     entity_date_rule: "UTC date of the first delivered DiaSource of the DiaObject in this basis."
   };
-
-  const countValues = {};
-  for (const rec of records) countValues[rec.entity_date] = (countValues[rec.entity_date] ?? 0) + 1;
-  const m1Window = windows.find((w) => w.source_state === "DELIVERY_VALIDATED" && w.state === "AVAILABLE");
-  for (const d of m1Dates) if (!countValues[d]) fail(`fixture produced no DiaObjects on Month-1 date ${d}`);
   const time = {
     contract: CONTRACT,
     domain: "fink",
@@ -846,39 +567,63 @@ function buildFink() {
     nights,
     windows,
     counts: {
-      quantity: "Synthetic fixture DiaObjects by first-delivered-DiaSource UTC date (Month-1 window only)",
-      unit: "DiaObjects",
-      evidence: ["SYNTHETIC_FIXTURE"],
-      values: Object.fromEntries(m1Dates.filter((d) => d >= m1Window.start && d < m1Window.stop).map((d) => [d, countValues[d]]))
+      quantity: "Delivered alert rows per UTC date (every DIA and SSO DiaSource packet in the cohort)",
+      unit: "alert rows",
+      evidence: [TAI],
+      values: Object.fromEntries(nights.map((n) => [n.date, daily.get(n.date).delivered_rows]))
     }
   };
 
+  /* --- sky: complete DiaObject density from the extract --- */
+  const dens = cat.density;
+  if (dens.order !== DENSITY_ORDER) fail(`Fink density must be at order ${DENSITY_ORDER}`);
   const sky = {
     contract: CONTRACT,
     domain: "fink",
     build_id: buildId,
-    density: densityMap(records, "Synthetic fixture DiaObjects", "DiaObjects", ["SYNTHETIC_FIXTURE"]),
-    coverage: {
-      max_order: COVERAGE_ORDER,
+    density: {
+      order: dens.order,
       ordering: "NESTED",
       frame: "ICRS",
-      meaning:
-        `Synthetic fixture footprint (${FIXTURE_FOOTPRINT_DEC[0]}° ≤ Dec ≤ +${FIXTURE_FOOTPRINT_DEC[1]}° cell centers) used to generate the fixture population. ` +
-        "NOT the Rubin footprint and not Fink delivery coverage.",
-      evidence: ["SYNTHETIC_FIXTURE"],
-      moc: normalizeMoc(coverage, COVERAGE_ORDER)
+      quantity: `DiaObjects, complete cohort population (${dens.objects.toLocaleString("en-US")} derived DIA groups)`,
+      unit: "DiaObjects",
+      evidence: [TAI],
+      pixels: dens.pixels,
+      values: dens.values
     },
-    coverage_unavailable_reason: null
+    coverage: null,
+    coverage_unavailable_reason:
+      "Fink Light Static delivers alerts, not survey pointings: the Rubin observing footprint is not in this basis. " +
+      "Cells with delivered DiaObjects are density, not coverage; an empty cell is not evidence that Rubin did not observe it."
   };
 
+  /* --- entities: a simple random sample of DiaObjects --- */
+  const sample = cat.sample;
+  if (sample.population !== dens.objects) fail("sample population must equal the density population");
+  const objects = sample.objects.map((o) => {
+    if (radecToPix(DENSITY_ORDER, o.ra, o.dec) !== o.pix) fail(`HEALPix parity: ${o.id} differs between the extractor and the kernel`);
+    if (!o.sources.length) fail(`${o.id} has no delivered sources`);
+    return o;
+  });
+  const records = objects.map((o) => ({
+    kind: "fink.diaObject",
+    id: o.id,
+    ra: o.ra,
+    dec: o.dec,
+    entity_date: utcMjdToUtcDate(taiToUtcMjd(o.sources[0].midpointMjdTai)),
+    n_dia_sources: o.sources.length,
+    first_midpoint_mjd_tai: o.sources[0].midpointMjdTai,
+    last_midpoint_mjd_tai: o.sources.at(-1).midpointMjdTai,
+    bands: [...new Set(o.sources.map((s) => s.band))].sort((a, b) => "ugrizy".indexOf(a) - "ugrizy".indexOf(b))
+  }));
   const fields = [
-    { key: "diaObjectId", label: "diaObjectId", unit: null, evidence: "SYNTHETIC_FIXTURE", description: "Derived DIA grouping key (pred.is_sso false AND diaObjectId > 0); int64 carried as a decimal string. Fixture ids use the reserved 990… prefix." },
-    { key: "ra", label: "RA (ICRS)", unit: "deg", evidence: "SYNTHETIC_FIXTURE", description: "Unit-vector mean of delivered DiaSource positions." },
-    { key: "dec", label: "Dec (ICRS)", unit: "deg", evidence: "SYNTHETIC_FIXTURE", description: "Unit-vector mean of delivered DiaSource positions." },
-    { key: "n_dia_sources", label: "Delivered DiaSources", unit: "rows", evidence: "SYNTHETIC_FIXTURE", description: "Delivered DiaSource rows in this basis; not lifetime detections." },
-    { key: "first_midpoint_mjd_tai", label: "First midpointMjdTai", unit: "MJD (TAI)", evidence: "SYNTHETIC_FIXTURE", description: "Earliest delivered DiaSource midpoint, TAI." },
-    { key: "last_midpoint_mjd_tai", label: "Last midpointMjdTai", unit: "MJD (TAI)", evidence: "SYNTHETIC_FIXTURE", description: "Latest delivered DiaSource midpoint, TAI." },
-    { key: "bands", label: "Bands", unit: null, evidence: "SYNTHETIC_FIXTURE", description: "LSST bands among delivered DiaSources." }
+    { key: "diaObjectId", label: "diaObjectId", unit: null, evidence: TAI, description: "Derived DIA grouping key (pred.is_sso false AND diaObjectId > 0); int64 carried as a decimal string." },
+    { key: "ra", label: "RA (ICRS)", unit: "deg", evidence: TAI, description: "Unit-vector mean of delivered DiaSource positions, rounded to 1e-5 deg." },
+    { key: "dec", label: "Dec (ICRS)", unit: "deg", evidence: TAI, description: "Unit-vector mean of delivered DiaSource positions, rounded to 1e-5 deg." },
+    { key: "n_dia_sources", label: "Delivered DiaSources", unit: "rows", evidence: TAI, description: "Delivered DiaSource rows in this basis; not lifetime detections." },
+    { key: "first_midpoint_mjd_tai", label: "First midpointMjdTai", unit: "MJD (TAI)", evidence: TAI, description: "Earliest delivered DiaSource midpoint, TAI." },
+    { key: "last_midpoint_mjd_tai", label: "Last midpointMjdTai", unit: "MJD (TAI)", evidence: TAI, description: "Latest delivered DiaSource midpoint, TAI." },
+    { key: "bands", label: "Bands", unit: null, evidence: TAI, description: "LSST bands among delivered DiaSources." }
   ];
   const entities = {
     contract: CONTRACT,
@@ -888,23 +633,34 @@ function buildFink() {
     native_label: "Rubin DiaObject (Fink-delivered DIA grouping)",
     id_field: "diaObjectId",
     population: {
-      complete: true,
+      complete: false,
       represented: records.length,
-      total: records.length,
-      sampling: `Complete synthetic fixture population (${records.length} DiaObjects, seed "${SEED}"). Not drawn from any Fink delivery.`
+      total: sample.population,
+      sampling:
+        `Simple random sample of ${records.length.toLocaleString("en-US")} of ${sample.population.toLocaleString("en-US")} DiaObjects ` +
+        "(the lowest md5 of the decimal diaObjectId), with every delivered DiaSource of each. Sky density and per-date counts are complete; " +
+        "this layer is not, so it is never aggregated into population counts."
     },
     fields,
     records,
     detail: { shard_count: DETAIL_SHARDS.fink, path_template: "detail/{shard}.json", shard_rule: "fnv1a32(id) mod shard_count" }
   };
 
-  /* --- feature registry and columns --- */
+  /* --- feature registry and columns (sample) --- */
   const latestSnapshot = (o) => o.snapshots.at(-1);
   const posMag = (o, band) => {
     const vals = o.sources.filter((s) => s.band === band && s.psfFlux > 0).map((s) => 31.4 - 2.5 * Math.log10(s.psfFlux));
     return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
   };
-  const lcDim = (key, label, short, scale, unit, definitionExtra) =>
+  const positive = (v) => (v === null || v === undefined || !Number.isFinite(v) || v <= 0 ? null : v);
+  const unitScore = (v) => (v === null || v === undefined || !Number.isFinite(v) || v < 0 || v > 1 ? null : v);
+  const census = cat.clf_census;
+  const censusNote = (key) => {
+    const x = census[key];
+    return `Population census over ${x.rows.toLocaleString("en-US")} DIA rows: ${x.unit_interval_rows.toLocaleString("en-US")} in [0, 1], ` +
+      `${x.minus_one_rows.toLocaleString("en-US")} at −1, ${x.null_rows.toLocaleString("en-US")} null, ${x.other_rows.toLocaleString("en-US")} other.`;
+  };
+  const lcDim = (key, label, short, scale, unit) =>
     dim({
       id: `fink.lc_features.r.${key}`,
       domain: "fink",
@@ -913,12 +669,20 @@ function buildFink() {
       short,
       unit,
       scale,
-      definition: `lc_features["r"].${key} from the latest delivered source-time snapshot in this basis.${definitionExtra ? ` ${definitionExtra}` : ""}`,
-      evidence: "SYNTHETIC_FIXTURE",
+      definition:
+        `lc_features["r"].${key} from the latest delivered source-time snapshot in this basis. Fink computes lc_features over the history it holds ` +
+        "for the object at alert time, which can include detections that were not delivered in this basis.",
+      evidence: TAI,
       snapshot: "Latest delivered snapshot; features summarize the history visible to Fink at that alert time, not a timeless object property.",
-      qualifications: ["Requires ≥ 3 r-band DiaSources in the snapshot history; otherwise undefined."]
+      qualifications: [
+        "Null where Fink delivered no r-band features or a non-finite value" + (scale === "log" ? ", or a non-positive value on this log axis." : ".")
+      ]
     });
-  const clfDim = (key, label) =>
+  // Where CATS assigned no class (cats_class -1) Fink delivers cats_score 0.0; that
+  // 0.0 is a placeholder, not a score (inferred from the paired values).
+  const catsPlaceholder = (snap) => snap.clf.cats_class === -1;
+  const catsPlaceholders = objects.filter((o) => catsPlaceholder(latestSnapshot(o))).length;
+  const clfDim = (key, label, extra = []) =>
     dim({
       id: `fink.clf.${key}`,
       domain: "fink",
@@ -928,9 +692,14 @@ function buildFink() {
       unit: "score",
       extent: [0, 1],
       definition: `clf.${key} from the latest delivered source-time snapshot in this basis.`,
-      evidence: "SYNTHETIC_FIXTURE",
+      evidence: TAI,
       snapshot: "Latest delivered snapshot; classifier outputs change as alerts arrive and are not timeless classifications.",
-      qualifications: ["Model score, not a calibrated probability."]
+      qualifications: [
+        "Model score, not a calibrated probability.",
+        "Values outside [0, 1] (Fink's −1 'not computed' sentinel) are shown as null here and kept verbatim in the inspector.",
+        censusNote(key),
+        ...extra
+      ]
     });
   const dimensions = [
     dim({
@@ -941,8 +710,8 @@ function buildFink() {
       short: "N src",
       unit: "rows",
       scale: "log",
-      definition: "Count of delivered DiaSource rows grouped by diaObjectId within the admitted window.",
-      evidence: "SYNTHETIC_FIXTURE",
+      definition: "Count of delivered DiaSource rows grouped by diaObjectId within the cohort.",
+      evidence: TAI,
       qualifications: ["Light Static carries no complete history; this is not a lifetime detection count."]
     }),
     dim({
@@ -953,8 +722,8 @@ function buildFink() {
       short: "Δt",
       unit: "days",
       definition: "last − first midpointMjdTai of delivered DiaSources (TAI day difference).",
-      evidence: "SYNTHETIC_FIXTURE",
-      qualifications: ["Bounded by the admitted window; not the object's full baseline."]
+      evidence: TAI,
+      qualifications: ["Bounded by the cohort window; not the object's full baseline.", "Zero for single-source DiaObjects."]
     }),
     dim({
       id: "fink.max_snr",
@@ -965,7 +734,8 @@ function buildFink() {
       unit: null,
       scale: "log",
       definition: "Maximum snr over delivered DiaSources.",
-      evidence: "SYNTHETIC_FIXTURE"
+      evidence: TAI,
+      qualifications: ["Null when no delivered DiaSource has a positive snr."]
     }),
     dim({
       id: "fink.peak_psf_mag",
@@ -976,7 +746,7 @@ function buildFink() {
       unit: "AB mag",
       reversed: true,
       definition: "−2.5·log10(max psfFlux / nJy) + 31.4 over delivered DiaSources.",
-      evidence: "SYNTHETIC_FIXTURE",
+      evidence: TAI,
       qualifications: ["Difference-image flux, not a total magnitude; undefined without a positive psfFlux."]
     }),
     dim({
@@ -988,7 +758,7 @@ function buildFink() {
       unit: "mag",
       definition: "Mean positive-psfFlux AB magnitude in g minus that in r over delivered DiaSources.",
       state: "PARTIALLY_QUALIFIED",
-      evidence: "SYNTHETIC_FIXTURE",
+      evidence: TAI,
       qualifications: ["Non-contemporaneous bands.", "Difference-image fluxes; not a source colour.", "Requires positive flux in both bands."]
     }),
     lcDim("chi2", "Reduced χ² about weighted mean", "χ²(r)", "log", null),
@@ -997,9 +767,11 @@ function buildFink() {
     lcDim("amplitude", "Half range of psfFlux", "amp(r)", "log", "nJy"),
     lcDim("linear_fit_reduced_chi2", "Linear-fit reduced χ²", "χ²_lin(r)", "log", null),
     clfDim("snnSnVsOthers_score", "SuperNNova SN-vs-others score"),
-    clfDim("cats_score", "CATS score"),
+    clfDim("cats_score", "CATS score", [
+      `Where cats_class is −1 (no CATS class) the delivered cats_score 0.0 is a placeholder and is shown as null (${catsPlaceholders.toLocaleString("en-US")} of ${objects.length.toLocaleString("en-US")} sampled latest snapshots; inferred from the paired values).`
+    ]),
     clfDim("earlySNIa_score", "Early SN Ia score"),
-    ...positionDims("fink", "SYNTHETIC_FIXTURE"),
+    ...positionDims("fink", TAI),
     dim({
       id: "fink.forced_photometry",
       domain: "fink",
@@ -1021,8 +793,8 @@ function buildFink() {
   ];
   const columns = {
     "fink.n_dia_sources": objects.map((o) => o.sources.length),
-    "fink.time_baseline_days": objects.map((o) => round(o.sources.at(-1).tUtc - o.sources[0].tUtc, 4)),
-    "fink.max_snr": objects.map((o) => round(Math.max(...o.sources.map((s) => s.snr)), 2)),
+    "fink.time_baseline_days": objects.map((o) => round(o.sources.at(-1).midpointMjdTai - o.sources[0].midpointMjdTai, 4)),
+    "fink.max_snr": objects.map((o) => round(positive(Math.max(...o.sources.map((s) => s.snr ?? -Infinity))), 2)),
     "fink.peak_psf_mag": objects.map((o) => {
       const peak = Math.max(...o.sources.map((s) => s.psfFlux));
       return peak > 0 ? round(31.4 - 2.5 * Math.log10(peak), 3) : null;
@@ -1033,11 +805,18 @@ function buildFink() {
       return g !== null && rr !== null ? round(g - rr, 3) : null;
     })
   };
-  for (const key of ["chi2", "skew", "stetson_K", "amplitude", "linear_fit_reduced_chi2"]) {
-    columns[`fink.lc_features.r.${key}`] = objects.map((o) => latestSnapshot(o).lc_features.r?.[key] ?? null);
+  for (const dm of dimensions.filter((x) => x.id.startsWith("fink.lc_features.r."))) {
+    const key = dm.id.slice("fink.lc_features.r.".length);
+    columns[dm.id] = objects.map((o) => {
+      const v = latestSnapshot(o).lc_features.r?.[key] ?? null;
+      return dm.scale === "log" ? positive(v) : v !== null && Number.isFinite(v) ? v : null;
+    });
   }
   for (const key of ["snnSnVsOthers_score", "cats_score", "earlySNIa_score"]) {
-    columns[`fink.clf.${key}`] = objects.map((o) => latestSnapshot(o).clf[key] ?? null);
+    columns[`fink.clf.${key}`] = objects.map((o) => {
+      const snap = latestSnapshot(o);
+      return key === "cats_score" && catsPlaceholder(snap) ? null : unitScore(snap.clf[key]);
+    });
   }
   columns["fink.galactic_latitude"] = records.map((rec) => round(icrsToGalactic(rec.ra, rec.dec)[1], 4));
   columns["fink.ecliptic_latitude"] = records.map((rec) => round(icrsToEcliptic(rec.ra, rec.dec)[1], 4));
@@ -1048,23 +827,23 @@ function buildFink() {
     registry: VERSIONS.feature_registry,
     kernel: VERSIONS.analysis_kernel,
     dimensions,
-    lab_defaults: { x: "fink.time_baseline_days", y: "fink.lc_features.r.chi2" },
+    lab_defaults: { x: "fink.peak_psf_mag", y: "fink.clf.snnSnVsOthers_score" },
     columns
   };
 
+  /* --- detail shards --- */
   const shards = Array.from({ length: DETAIL_SHARDS.fink }, (_, shard) => ({
     contract: CONTRACT,
     domain: "fink",
     build_id: buildId,
     shard,
-    evidence: ["SYNTHETIC_FIXTURE"],
+    evidence: [TAI],
     records: {}
   }));
-  objects.forEach((o, i) => {
-    const id = records[i].id;
-    shards[shardOf(id, DETAIL_SHARDS.fink)].records[id] = {
+  objects.forEach((o) => {
+    shards[shardOf(o.id, DETAIL_SHARDS.fink)].records[o.id] = {
       kind: "fink.diaObject",
-      id,
+      id: o.id,
       sources: o.sources.map((s) => ({
         diaSourceId: s.diaSourceId,
         midpointMjdTai: s.midpointMjdTai,
@@ -1074,59 +853,69 @@ function buildFink() {
         snr: s.snr,
         reliability: s.reliability
       })),
-      snapshots: o.snapshots,
+      snapshots: o.snapshots.map((s) => ({
+        diaSourceId: s.diaSourceId,
+        midpointMjdTai: s.midpointMjdTai,
+        fink_science_version: s.fink_science_version,
+        pred: s.pred,
+        clf: s.clf,
+        xm: s.xm,
+        lc_features: s.lc_features
+      })),
       snapshot_policy:
-        "First and last two delivered source-time snapshots per DiaObject (mirrors the G4A sampling). The fixture computes a subset of the pinned lc_features keys from synthetic psfFlux; absent keys were not computed."
+        "First and last two delivered source-time snapshots per DiaObject (the G4A policy). clf values are verbatim (−1 is Fink's " +
+        `'not computed' sentinel). lc_features shows ${sample.lc_feature_keys.length} of the ${schema.lc_features_fields.length} Light Static keys; ` +
+        "xm fields Fink delivered as null are omitted."
     };
   });
 
   const pin = {
     domain: "fink",
     build_id: buildId,
-    build_kind: "SYNTHETIC_FIXTURE_WITH_COMMITTED_EVIDENCE",
-    label: "Fink · committed acquisition evidence + synthetic fixture population",
-    evidence: ["VALIDATED_TRANSPORT_EVIDENCE", "COMMITTED_OPERATIONAL_RECORD", "SYNTHETIC_FIXTURE"],
+    build_kind: "QUALIFIED_COHORT_CATALOG",
+    label: `Fink · accepted ${c.cohort_name} catalog (${c.run_id})`,
+    evidence: [TAI, "COMMITTED_OPERATIONAL_RECORD"],
     science_ready: false,
     native_ontology:
       "Rubin DiaSource rows delivered by Fink (Light Static packet). DiaObject is a derived grouping key; broker fields are source-time snapshots.",
-    source: { repository: ev.repository, revision: ev.revision, paths: ev.extracted_files.map((f) => f.path) },
+    source: {
+      repository: ev.repository,
+      revision: c.code_commit_sha,
+      paths: [c.cohort_config, "src/fink_lsst/analytics/contract.py", "src/fink_lsst/analytics/catalog.py"]
+    },
     time: timeSemantics
   };
 
-  const acquisitions = ev.acquisitions.map((a) => {
-    const w = windows.find((x) => x.start === a.window.start);
-    return {
-      domain: "fink",
-      acquisition_id: a.acquisition_id,
-      label: a.label,
-      window: a.window,
-      science_profile: a.science_profile,
-      state: a.state,
-      state_at_utc: a.state_at_utc,
-      delivery: a.delivery
-        ? {
-            topic: a.delivery.topic,
-            readable_rows: a.delivery.readable_rows,
-            parquet_files: a.delivery.parquet_files,
-            total_bytes: a.delivery.total_bytes,
-            reconciliation_passed: a.delivery.reconciliation_passed,
-            terminal_lag: a.delivery.terminal_lag,
-            meaning: a.delivery.meaning
-          }
-        : null,
-      characterization: a.characterization,
-      delivery_validation: w.delivery_validation,
-      admission: w.admission,
-      scientific_status: a.characterization ? "CHARACTERIZED" : a.delivery ? "UNCHARACTERIZED" : "NOT_DELIVERY_VALIDATED",
-      cohort: ev.cohort.acquisitions.includes(a.acquisition_id) ? ev.cohort.cohort_name : null
-    };
-  });
+  const provenanceAcquisitions = acquisitions.map((a, i) => ({
+    domain: "fink",
+    acquisition_id: a.acquisition_id,
+    label: `Month-${i + 1}`,
+    window: { start: a.start, stop: a.stop, semantics: "half-open UTC date window [start, stop)" },
+    science_profile: a.profile,
+    state: a.state,
+    state_at_utc: c.finished_utc,
+    delivery: {
+      topic: a.topic,
+      readable_rows: a.validated_rows,
+      parquet_files: a.parquet_files,
+      total_bytes: a.raw_total_bytes,
+      reconciliation_passed: a.expected_rows === a.validated_rows,
+      terminal_lag: null,
+      meaning: "Validated rows equal expected topic messages; raw stat fingerprint re-verified when the catalog was opened. Transport evidence only."
+    },
+    characterization: a.characterization,
+    delivery_validation: "DELIVERY_VALIDATED",
+    admission: "ADMITTED",
+    scientific_status: "CHARACTERIZED",
+    cohort: c.cohort_name
+  }));
   const fieldEvidence = [
     ...fields.map((f) => ({ field: f.key, evidence: f.evidence, note: f.description })),
-    { field: "acquisition windows", evidence: "COMMITTED_OPERATIONAL_RECORD", note: "Requests and state logs at the pinned Fink revision." },
-    { field: "delivery totals", evidence: "VALIDATED_TRANSPORT_EVIDENCE", note: "Three-way reconciliation; transport evidence only." }
+    { field: "acquisition windows", evidence: "COMMITTED_OPERATIONAL_RECORD", note: "Catalog build manifest and cohort configuration." },
+    { field: "per-date delivered rows", evidence: TAI, note: "Catalog daily_coverage, recomputed from sources at extraction. Transport evidence only." },
+    { field: "sky density", evidence: TAI, note: "Every derived DIA group, HEALPix NESTED order 6." }
   ];
-  return { pin, time, sky, entities, features, shards, windows, acquisitions, fieldEvidence, buildId, ev };
+  return { pin, time, sky, entities, features, shards, windows, acquisitions: provenanceAcquisitions, fieldEvidence, buildId, ev, cat };
 }
 
 /* --------------------------------------------------------------- assemble */
@@ -1145,13 +934,14 @@ capabilities.push(
   cap("antares", "time", "transport_totals", "UNAVAILABLE", [], "Published nightly totals",
     "No published ANTARES nightly manifests are pinned in this basis.", { codes: ["NOT_IN_BASIS"] }),
   cap("fink", "time", "date_states", "AVAILABLE", ["VALIDATED_TRANSPORT_EVIDENCE", "COMMITTED_OPERATIONAL_RECORD"],
-    "Per-date states from committed acquisition windows",
-    "Each date inherits the state of its acquisition window at the pinned Fink revision.",
-    { qualifications: ["Per-date delivered counts (G4A daily coverage) are data-plane artifacts and are not in this basis."] }),
-  cap("fink", "time", "date_counts", "PARTIALLY_QUALIFIED", ["SYNTHETIC_FIXTURE"], "Fixture DiaObjects per date (Month-1 only)",
-    "Synthetic fixture counts inside the admitted Month-1 window; no counts exist for Month-2 or Month-3 by design.", { codes: ["SYNTHETIC_FIXTURE"] }),
+    "Per-date states from the accepted cohort catalog",
+    "Each date inherits its acquisition window's state; dates with no delivered rows are ZERO, not missing.",
+    { qualifications: ["A zero-row date is not a survey non-observation."] }),
+  cap("fink", "time", "date_counts", "AVAILABLE", ["VALIDATED_TRANSPORT_EVIDENCE"], "Delivered alert rows per UTC date (complete)",
+    "Every delivered DIA and SSO DiaSource packet of the cohort, binned by the UTC date of midpointMjdTai.",
+    { codes: ["TRANSPORT_ONLY"], qualifications: ["Delivered rows are not Rubin completeness and are never read as alert rates."] }),
   cap("fink", "time", "transport_totals", "AVAILABLE", ["VALIDATED_TRANSPORT_EVIDENCE"], "Delivered row totals per acquisition",
-    "Three-way reconciled transport totals per validated delivery.",
+    "Validated rows equal expected topic messages for every acquisition in the cohort.",
     { codes: ["TRANSPORT_ONLY"], qualifications: ["Transport totals are not Rubin completeness and must never be compared across windows as rates."] })
 );
 for (const w of fink.windows) {
@@ -1166,9 +956,12 @@ capabilities.push(
   cap("antares", "sky", "density", "AVAILABLE", ["LEGACY_SAMPLE"], "Locus density on HEALPix", "Counts of demo-sample loci per equal-area cell."),
   cap("antares", "sky", "coverage", "UNAVAILABLE", [], "Footprint / coverage", antares.sky.coverage_unavailable_reason, { codes: ["NOT_IN_BASIS"] }),
   cap("antares", "sky", "filtered_density", "AVAILABLE", ["LEGACY_SAMPLE"], "Cross-filtered density", "The entity table is the complete population of this basis."),
-  cap("fink", "sky", "density", "AVAILABLE", ["SYNTHETIC_FIXTURE"], "DiaObject density on HEALPix", "Counts of fixture DiaObjects per equal-area cell."),
-  cap("fink", "sky", "coverage", "PARTIALLY_QUALIFIED", ["SYNTHETIC_FIXTURE"], "Fixture footprint", fink.sky.coverage.meaning, { codes: ["SYNTHETIC_FIXTURE"] }),
-  cap("fink", "sky", "filtered_density", "AVAILABLE", ["SYNTHETIC_FIXTURE"], "Cross-filtered density", "The entity table is the complete population of this basis.")
+  cap("fink", "sky", "density", "AVAILABLE", ["VALIDATED_TRANSPORT_EVIDENCE"], "DiaObject density on HEALPix (complete)",
+    "Counts of every derived DIA group in the cohort per equal-area cell."),
+  cap("fink", "sky", "coverage", "UNAVAILABLE", [], "Footprint / coverage", fink.sky.coverage_unavailable_reason, { codes: ["NOT_IN_BASIS"] }),
+  cap("fink", "sky", "filtered_density", "UNAVAILABLE", [], "Cross-filtered density",
+    "The Fink entity layer is a random sample; filtering it would present sample counts as population counts. Filters apply to sampled points only.",
+    { codes: ["SAMPLED_ENTITY_LAYER"] })
 );
 // Entities
 capabilities.push(
@@ -1177,19 +970,25 @@ capabilities.push(
     "Only synthetic demo stories exist (10 loci); they are not ANTARES alert photometry.", { codes: ["SYNTHETIC_DEMO"] }),
   cap("antares", "entity", "broker_inference", "PARTIALLY_QUALIFIED", ["LEGACY_SAMPLE"], "ANTARES tags",
     "Filter-pipeline memberships only; not astrophysical classes and not scores.", { codes: ["TAGS_ARE_NOT_CLASSES"] }),
-  cap("fink", "entity", "inspector", "AVAILABLE", ["SYNTHETIC_FIXTURE"], "Native Fink DiaObject / DiaSource record", "Delivered DiaSources and source-time broker snapshots."),
-  cap("fink", "entity", "lightcurve", "AVAILABLE", ["SYNTHETIC_FIXTURE"], "Delivered psfFlux history",
+  cap("fink", "entity", "inspector", "AVAILABLE", ["VALIDATED_TRANSPORT_EVIDENCE"], "Native Fink DiaObject / DiaSource record",
+    "Delivered DiaSources and source-time broker snapshots of the sampled DiaObjects.", { qualifications: [fink.entities.population.sampling] }),
+  cap("fink", "entity", "lightcurve", "AVAILABLE", ["VALIDATED_TRANSPORT_EVIDENCE"], "Delivered psfFlux history",
     "Difference-image psfFlux of delivered DiaSources per band.", { qualifications: ["No forced photometry or upper limits (Light Static)."] }),
-  cap("fink", "entity", "broker_inference", "AVAILABLE", ["SYNTHETIC_FIXTURE"], "Source-time classifier snapshots",
-    "clf/pred/xm/lc_features as delivered with each DiaSource.", { qualifications: ["Model scores are not calibrated probabilities.", "Snapshots are not timeless classifications."] })
+  cap("fink", "entity", "broker_inference", "AVAILABLE", ["VALIDATED_TRANSPORT_EVIDENCE"], "Source-time classifier snapshots",
+    "clf/pred/xm/lc_features as delivered with each DiaSource.",
+    { qualifications: ["Model scores are not calibrated probabilities.", "Snapshots are not timeless classifications.", "fink_science_version changes within the cohort; scores from different versions are not strictly comparable."] })
 );
 // Features
 for (const d of ["antares", "fink"]) {
   const dims = both[d].features.dimensions;
   const usable = dims.filter((x) => x.state !== "UNAVAILABLE").length;
   capabilities.push(
-    cap(d, "features", "population", "AVAILABLE", d === "antares" ? ["LEGACY_SAMPLE", "SYNTHETIC_DEMO"] : ["SYNTHETIC_FIXTURE"],
-      "Parameter-space population", `${usable} of ${dims.length} registered dimensions are selectable; the rest are declared unavailable with reasons.`)
+    d === "antares"
+      ? cap(d, "features", "population", "AVAILABLE", ["LEGACY_SAMPLE", "SYNTHETIC_DEMO"],
+          "Parameter-space population", `${usable} of ${dims.length} registered dimensions are selectable; the rest are declared unavailable with reasons.`)
+      : cap(d, "features", "population", "PARTIALLY_QUALIFIED", ["VALIDATED_TRANSPORT_EVIDENCE"], "Parameter-space population (random sample)",
+          `${usable} of ${dims.length} registered dimensions are selectable over the sampled DiaObjects; the rest are declared unavailable with reasons.`,
+          { codes: ["SAMPLED_ENTITY_LAYER"], qualifications: [fink.entities.population.sampling] })
   );
 }
 // Relation and workspace
@@ -1218,7 +1017,7 @@ const basis = {
   contract: CONTRACT,
   contract_version: CONTRACT_VERSION,
   basis_id: BASIS_ID,
-  label: "First Light · fixture basis",
+  label: "First Light · ANTARES demo + Fink accepted catalog",
   status: "FIRST_LIGHT_FIXTURE",
   science_ready: false,
   domains: { antares: antares.pin, fink: fink.pin },
@@ -1234,7 +1033,8 @@ const basis = {
     "A missing ANTARES night is not a zero-row night.",
     "Source density is not survey coverage.",
     "Fink midpointMjdTai is TAI; the historical ANTARES exporter treats MJD as UTC. They are never silently aligned.",
-    "No cross-broker identity matching is performed in this basis."
+    "No cross-broker identity matching is performed in this basis.",
+    "The Fink entity layer is a random sample; sample counts are never population counts."
   ]
 };
 
@@ -1245,7 +1045,10 @@ const provenance = {
     { id: "antares.sky_points", label: "SkyPulse demo sky points", repository: "darim1151/ANTARES_Analysis", revision: BASELINE_REVISION, path: `web/${inputPaths.skyPoints}`, sha256: inputs.skyPoints.sha256, role: "ANTARES legacy demo loci", evidence: "LEGACY_SAMPLE" },
     { id: "antares.lightcurve_samples", label: "SkyPulse demo lightcurves", repository: "darim1151/ANTARES_Analysis", revision: BASELINE_REVISION, path: `web/${inputPaths.lightcurves}`, sha256: inputs.lightcurves.sha256, role: "Synthetic demo brightness stories", evidence: "SYNTHETIC_DEMO" },
     { id: "antares.public_manifest", label: "SkyPulse demo manifest", repository: "darim1151/ANTARES_Analysis", revision: BASELINE_REVISION, path: `web/${inputPaths.demoManifest}`, sha256: inputs.demoManifest.sha256, role: "Demo export identity", evidence: "SYNTHETIC_DEMO" },
-    { id: "fink.evidence_excerpt", label: "Fink evidence excerpt", repository: "darim1151/ANTARES_Analysis", revision: null, path: `web/${inputPaths.finkEvidence}`, sha256: inputs.finkEvidence.sha256, role: "Extracted at the pinned Fink revision", evidence: "COMMITTED_OPERATIONAL_RECORD" },
+    { id: "fink.evidence_excerpt", label: "Fink evidence excerpt", repository: "darim1151/ANTARES_Analysis", revision: null, path: `web/${inputPaths.finkEvidence}`, sha256: inputs.finkEvidence.sha256, role: "Pinned Light Static schema (broker field names)", evidence: "COMMITTED_OPERATIONAL_RECORD" },
+    { id: "fink.catalog_extract", label: "Fink catalog extract", repository: "darim1151/ANTARES_Analysis", revision: null, path: `web/${inputPaths.finkCatalog}`, sha256: inputs.finkCatalog.sha256, role: "Read-only extract of the accepted Fink catalog", evidence: "VALIDATED_TRANSPORT_EVIDENCE" },
+    { id: "fink.catalog", label: `${fink.cat.catalog.run_id} analytics catalog`, repository: "Fink data root (Arnor)", revision: fink.cat.catalog.code_commit_sha, path: fink.cat.catalog.catalog_relative_path, sha256: fink.cat.catalog.catalog_sha256, role: `Accepted ${fink.cat.catalog.cohort_name} DuckDB catalog (opened read-only)`, evidence: "VALIDATED_TRANSPORT_EVIDENCE" },
+    { id: "fink.catalog_manifest", label: "Catalog build manifest", repository: "Fink data root (Arnor)", revision: fink.cat.catalog.code_commit_sha, path: fink.cat.catalog.manifest_relative_path, sha256: fink.cat.catalog.manifest_sha256, role: `Build manifest (${fink.cat.catalog.completion_status})`, evidence: "COMMITTED_OPERATIONAL_RECORD" },
     ...fink.ev.extracted_files.map((f) => ({
       id: `fink.${f.path}`,
       label: path.basename(f.path),
@@ -1262,8 +1065,10 @@ const provenance = {
     { id: "healpix.nested", description: `Entity positions indexed on HEALPix NESTED; density maps at order ${DENSITY_ORDER}.`, kernel: KERNEL_TAG },
     { id: "coords.galactic", description: "ICRS -> Galactic with the Astropy/Hipparcos rotation matrix.", kernel: KERNEL_TAG },
     { id: "coords.ecliptic", description: "ICRS -> mean ecliptic of J2000.0 (obliquity 23.4392911°).", kernel: KERNEL_TAG },
-    { id: "fink.object_position", description: "DiaObject position = unit-vector mean of delivered DiaSource positions.", kernel: KERNEL_TAG },
-    { id: "fink.fixture_time_scale", description: `Fixture UTC→TAI with a fixed ${TAI_MINUS_UTC_S} s offset (real adapters use ERFA/Astropy).`, kernel: KERNEL_TAG },
+    { id: "fink.object_position", description: "DiaObject position = unit-vector mean of delivered DiaSource positions, rounded to 1e-5 deg.", kernel: KERNEL_TAG },
+    { id: "fink.density", description: `Complete DiaObject density computed at extraction with a NumPy port of the kernel's ang2pixNest; every sampled object's cell is re-checked against the kernel.`, kernel: KERNEL_TAG },
+    { id: "fink.time_scale", description: `UTC dates from TAI with TAI − UTC = ${FINK_TAI_MINUS_UTC_S} s, verified with ERFA over every cohort date.`, kernel: KERNEL_TAG },
+    { id: "fink.sample", description: fink.cat.sample.method, kernel: KERNEL_TAG },
     { id: "antares.clipped_magnitudes", description: `${antares.clipped} demo magnitudes at the exporter clip bounds were nulled.`, kernel: KERNEL_TAG }
   ],
   field_evidence: { antares: antares.fieldEvidence, fink: fink.fieldEvidence }
@@ -1290,8 +1095,8 @@ for (const [d, built] of Object.entries(both)) {
   }
 }
 
-const asOf = [inputs.demoManifest.json.generated_at_utc, ...fink.ev.acquisitions.map((a) => a.state_at_utc)]
-  .map((s) => s.replace(/\+00:00$/, "Z"))
+const asOf = [inputs.demoManifest.json.generated_at_utc, fink.cat.catalog.finished_utc]
+  .map((s) => s.replace(/(\.\d+)?\+00:00$/, "Z"))
   .sort()
   .at(-1);
 const manifest = {
@@ -1302,13 +1107,18 @@ const manifest = {
   science_ready: false,
   as_of_utc: asOf,
   evidence_policy:
-    "Fixture and demo values are labelled per payload and per field and must never be presented as accepted science. " +
-    "Only committed Fink acquisition evidence is real, and it is transport/operational evidence only.",
+    "ANTARES fixture and demo values are labelled per payload and per field and must never be presented as accepted science. " +
+    "Fink values are read from the accepted five-window catalog and are transport/operational evidence, not accepted science. " +
+    "Fink per-date counts and sky density are complete; the Fink entity layer is a labelled random sample.",
   generator: {
     ...GENERATOR,
     deterministic: true,
-    seed: SEED,
-    inputs: Object.values(inputs).map((i) => ({ path: `web/${i.relative}`, sha256: i.sha256, role: i === inputs.finkEvidence ? "fink-evidence" : "antares-legacy-demo" }))
+    seed: null,
+    inputs: Object.values(inputs).map((i) => ({
+      path: `web/${i.relative}`,
+      sha256: i.sha256,
+      role: i === inputs.finkEvidence ? "fink-evidence" : i === inputs.finkCatalog ? "fink-catalog-extract" : "antares-legacy-demo"
+    }))
   },
   basis: "basis.json",
   capabilities: "capabilities.json",
@@ -1368,6 +1178,6 @@ if (check) {
   console.log(
     `Wrote ${files.size} files (${(bytes / 1e6).toFixed(2)} MB) to ${path.relative(webRoot, outputRoot)}: ` +
       `ANTARES ${antares.entities.records.length} loci (${antares.clipped} clipped magnitudes nulled), ` +
-      `Fink ${fink.entities.records.length} fixture DiaObjects.`
+      `Fink ${fink.entities.records.length} sampled of ${fink.entities.population.total} DiaObjects, ${fink.sky.density.pixels.length} density cells.`
   );
 }

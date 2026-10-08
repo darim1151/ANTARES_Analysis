@@ -1,6 +1,6 @@
 {
   "contract": "uso.observatory-bundle",
-  "basis_id": "basis.uso.first-light.e475af0a72c3",
+  "basis_id": "basis.uso.first-light.d49c7c31f129",
   "sources": [
     {
       "id": "antares.sky_points",
@@ -39,7 +39,37 @@
       "revision": null,
       "path": "web/scripts/observatory/inputs/fink-evidence.fd02c8e.json",
       "sha256": "8ee7bbd5be6dd52379d0fdcd6d119142d8e2c817c44e0fa7a6cfecce5d89f06a",
-      "role": "Extracted at the pinned Fink revision",
+      "role": "Pinned Light Static schema (broker field names)",
+      "evidence": "COMMITTED_OPERATIONAL_RECORD"
+    },
+    {
+      "id": "fink.catalog_extract",
+      "label": "Fink catalog extract",
+      "repository": "darim1151/ANTARES_Analysis",
+      "revision": null,
+      "path": "web/scripts/observatory/inputs/fink-catalog.final-five-window-analytics-20261006-v1.json.gz",
+      "sha256": "caa455ccc5f66b0c87c8ba87af672feedfd62e944804119969685c0f25f7acf4",
+      "role": "Read-only extract of the accepted Fink catalog",
+      "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+    },
+    {
+      "id": "fink.catalog",
+      "label": "final-five-window-analytics-20261006-v1 analytics catalog",
+      "repository": "Fink data root (Arnor)",
+      "revision": "7e58b13c77bd0e4bc81e41e3c2b4759db382499b",
+      "path": "data/processed/final-five-window-analytics-20261006-v1/analytics.duckdb",
+      "sha256": "bb308e3106d4ea3f8323e8e7032b73e84588275a546b31f3794dc23d18e5cefb",
+      "role": "Accepted accepted_five_window_20260225_20260714 DuckDB catalog (opened read-only)",
+      "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+    },
+    {
+      "id": "fink.catalog_manifest",
+      "label": "Catalog build manifest",
+      "repository": "Fink data root (Arnor)",
+      "revision": "7e58b13c77bd0e4bc81e41e3c2b4759db382499b",
+      "path": "manifests/final-five-window-analytics-20261006-v1/manifest.json",
+      "sha256": "166fc39792fbe41a68f03e2b3024f677e6ba0d76916da475938e0a66c2e52ac8",
+      "role": "Build manifest (PASS_WITH_LIMITATIONS)",
       "evidence": "COMMITTED_OPERATIONAL_RECORD"
     },
     {
@@ -171,29 +201,29 @@
       "window": {
         "start": "2026-02-25",
         "stop": "2026-03-25",
-        "semantics": "half_open_utc_dates"
+        "semantics": "half-open UTC date window [start, stop)"
       },
       "science_profile": "lsst_light_static_all_alerts_v1",
       "state": "DELIVERY_VALIDATED",
-      "state_at_utc": "2026-10-05T23:42:35Z",
+      "state_at_utc": "2026-10-06T10:41:20.900684+00:00",
       "delivery": {
         "topic": "ftransfer_lsst_2026-10-05_555200",
         "readable_rows": 1658642,
         "parquet_files": 16591,
         "total_bytes": 1460135494,
         "reconciliation_passed": true,
-        "terminal_lag": 0,
-        "meaning": "transport reconciliation of the delivered topic; not Rubin scientific completeness"
+        "terminal_lag": null,
+        "meaning": "Validated rows equal expected topic messages; raw stat fingerprint re-verified when the catalog was opened. Transport evidence only."
       },
       "characterization": {
+        "code_sha": "d34f6c244a2cc0c6ec6840d63e274b7c79fd7424",
         "run_id": "g4a-month1-20260225_20260325-v1",
-        "summary_sha256": "47a7adf35689cc409a90f6de739a05d1b510dde7f416dbffb95073bd67c9e540",
-        "code_sha": "d34f6c244a2cc0c6ec6840d63e274b7c79fd7424"
+        "summary_sha256": "47a7adf35689cc409a90f6de739a05d1b510dde7f416dbffb95073bd67c9e540"
       },
       "delivery_validation": "DELIVERY_VALIDATED",
       "admission": "ADMITTED",
       "scientific_status": "CHARACTERIZED",
-      "cohort": "accepted_month1"
+      "cohort": "accepted_five_window_20260225_20260714"
     },
     {
       "domain": "fink",
@@ -202,25 +232,29 @@
       "window": {
         "start": "2026-03-25",
         "stop": "2026-04-25",
-        "semantics": "half_open_utc_dates"
+        "semantics": "half-open UTC date window [start, stop)"
       },
       "science_profile": "lsst_light_static_all_alerts_v1",
       "state": "DELIVERY_VALIDATED",
-      "state_at_utc": "2026-10-06T07:21:14Z",
+      "state_at_utc": "2026-10-06T10:41:20.900684+00:00",
       "delivery": {
         "topic": "ftransfer_lsst_2026-10-06_270011",
         "readable_rows": 76133,
         "parquet_files": 767,
         "total_bytes": 72730564,
         "reconciliation_passed": true,
-        "terminal_lag": 0,
-        "meaning": "transport reconciliation of the delivered topic; not Rubin scientific completeness"
+        "terminal_lag": null,
+        "meaning": "Validated rows equal expected topic messages; raw stat fingerprint re-verified when the catalog was opened. Transport evidence only."
       },
-      "characterization": null,
+      "characterization": {
+        "code_sha": "952b1401430d01cc1d6b00c58dac44c87225a691",
+        "run_id": "g5-month2-characterization-v1",
+        "summary_sha256": "4081484c4c22359ab6a7588c8de30e5ce127d26a01d58966ca957d76542807ac"
+      },
       "delivery_validation": "DELIVERY_VALIDATED",
-      "admission": "NOT_ADMITTED",
-      "scientific_status": "UNCHARACTERIZED",
-      "cohort": null
+      "admission": "ADMITTED",
+      "scientific_status": "CHARACTERIZED",
+      "cohort": "accepted_five_window_20260225_20260714"
     },
     {
       "domain": "fink",
@@ -229,17 +263,91 @@
       "window": {
         "start": "2026-04-25",
         "stop": "2026-05-25",
-        "semantics": "half_open_utc_dates"
+        "semantics": "half-open UTC date window [start, stop)"
       },
       "science_profile": "lsst_light_static_all_alerts_v1",
-      "state": "PRODUCER_COMPLETE",
-      "state_at_utc": "2026-10-06T07:31:14Z",
-      "delivery": null,
-      "characterization": null,
-      "delivery_validation": "NOT_DELIVERY_VALIDATED",
-      "admission": "NOT_ADMITTED",
-      "scientific_status": "NOT_DELIVERY_VALIDATED",
-      "cohort": null
+      "state": "DELIVERY_VALIDATED",
+      "state_at_utc": "2026-10-06T10:41:20.900684+00:00",
+      "delivery": {
+        "topic": "ftransfer_lsst_2026-10-06_644744",
+        "readable_rows": 266496,
+        "parquet_files": 2668,
+        "total_bytes": 143714745,
+        "reconciliation_passed": true,
+        "terminal_lag": null,
+        "meaning": "Validated rows equal expected topic messages; raw stat fingerprint re-verified when the catalog was opened. Transport evidence only."
+      },
+      "characterization": {
+        "code_sha": "769568231e9c692802a2d6dfa79aab8efd7d59f8",
+        "run_id": "final-month3-characterization-20261006-v1",
+        "summary_sha256": "dcd47100a8d58f5b04b95e2b7d651da3ba7f72cf0e03b518ebd0673a50915e47"
+      },
+      "delivery_validation": "DELIVERY_VALIDATED",
+      "admission": "ADMITTED",
+      "scientific_status": "CHARACTERIZED",
+      "cohort": "accepted_five_window_20260225_20260714"
+    },
+    {
+      "domain": "fink",
+      "acquisition_id": "acq_lsst_ls_v1_2026-05-25_to_2026-06-25_ecc26d8ca904",
+      "label": "Month-4",
+      "window": {
+        "start": "2026-05-25",
+        "stop": "2026-06-25",
+        "semantics": "half-open UTC date window [start, stop)"
+      },
+      "science_profile": "lsst_light_static_all_alerts_v1",
+      "state": "DELIVERY_VALIDATED",
+      "state_at_utc": "2026-10-06T10:41:20.900684+00:00",
+      "delivery": {
+        "topic": "ftransfer_lsst_2026-10-06_863953",
+        "readable_rows": 923667,
+        "parquet_files": 9242,
+        "total_bytes": 407951807,
+        "reconciliation_passed": true,
+        "terminal_lag": null,
+        "meaning": "Validated rows equal expected topic messages; raw stat fingerprint re-verified when the catalog was opened. Transport evidence only."
+      },
+      "characterization": {
+        "code_sha": "769568231e9c692802a2d6dfa79aab8efd7d59f8",
+        "run_id": "final-month4-characterization-20261006-v1",
+        "summary_sha256": "b1bf36bfb159a70851d7eba681137d7d558f8aab3bbe672f9095ed2ff1745fd8"
+      },
+      "delivery_validation": "DELIVERY_VALIDATED",
+      "admission": "ADMITTED",
+      "scientific_status": "CHARACTERIZED",
+      "cohort": "accepted_five_window_20260225_20260714"
+    },
+    {
+      "domain": "fink",
+      "acquisition_id": "acq_lsst_ls_v1_2026-06-25_to_2026-07-14_1ad0e9dadca7",
+      "label": "Month-5",
+      "window": {
+        "start": "2026-06-25",
+        "stop": "2026-07-14",
+        "semantics": "half-open UTC date window [start, stop)"
+      },
+      "science_profile": "lsst_light_static_all_alerts_v1",
+      "state": "DELIVERY_VALIDATED",
+      "state_at_utc": "2026-10-06T10:41:20.900684+00:00",
+      "delivery": {
+        "topic": "ftransfer_lsst_2026-10-06_945583",
+        "readable_rows": 4177009,
+        "parquet_files": 41774,
+        "total_bytes": 1813007795,
+        "reconciliation_passed": true,
+        "terminal_lag": null,
+        "meaning": "Validated rows equal expected topic messages; raw stat fingerprint re-verified when the catalog was opened. Transport evidence only."
+      },
+      "characterization": {
+        "code_sha": "769568231e9c692802a2d6dfa79aab8efd7d59f8",
+        "run_id": "final-month5-characterization-20261006-v1",
+        "summary_sha256": "d2db345bf0403e30863731df9eba34ed65267e75afda9c27954bdcef53b2a1cc"
+      },
+      "delivery_validation": "DELIVERY_VALIDATED",
+      "admission": "ADMITTED",
+      "scientific_status": "CHARACTERIZED",
+      "cohort": "accepted_five_window_20260225_20260714"
     }
   ],
   "derivations": [
@@ -260,12 +368,22 @@
     },
     {
       "id": "fink.object_position",
-      "description": "DiaObject position = unit-vector mean of delivered DiaSource positions.",
+      "description": "DiaObject position = unit-vector mean of delivered DiaSource positions, rounded to 1e-5 deg.",
       "kernel": "uso.analysis-kernel/ak-0.1.0"
     },
     {
-      "id": "fink.fixture_time_scale",
-      "description": "Fixture UTC→TAI with a fixed 37 s offset (real adapters use ERFA/Astropy).",
+      "id": "fink.density",
+      "description": "Complete DiaObject density computed at extraction with a NumPy port of the kernel's ang2pixNest; every sampled object's cell is re-checked against the kernel.",
+      "kernel": "uso.analysis-kernel/ak-0.1.0"
+    },
+    {
+      "id": "fink.time_scale",
+      "description": "UTC dates from TAI with TAI − UTC = 37 s, verified with ERFA over every cohort date.",
+      "kernel": "uso.analysis-kernel/ak-0.1.0"
+    },
+    {
+      "id": "fink.sample",
+      "description": "Simple random sample without replacement: the DiaObjects with the lowest md5(decimal diaObjectId).",
       "kernel": "uso.analysis-kernel/ak-0.1.0"
     },
     {
@@ -315,48 +433,53 @@
     "fink": [
       {
         "field": "diaObjectId",
-        "evidence": "SYNTHETIC_FIXTURE",
-        "note": "Derived DIA grouping key (pred.is_sso false AND diaObjectId > 0); int64 carried as a decimal string. Fixture ids use the reserved 990… prefix."
+        "evidence": "VALIDATED_TRANSPORT_EVIDENCE",
+        "note": "Derived DIA grouping key (pred.is_sso false AND diaObjectId > 0); int64 carried as a decimal string."
       },
       {
         "field": "ra",
-        "evidence": "SYNTHETIC_FIXTURE",
-        "note": "Unit-vector mean of delivered DiaSource positions."
+        "evidence": "VALIDATED_TRANSPORT_EVIDENCE",
+        "note": "Unit-vector mean of delivered DiaSource positions, rounded to 1e-5 deg."
       },
       {
         "field": "dec",
-        "evidence": "SYNTHETIC_FIXTURE",
-        "note": "Unit-vector mean of delivered DiaSource positions."
+        "evidence": "VALIDATED_TRANSPORT_EVIDENCE",
+        "note": "Unit-vector mean of delivered DiaSource positions, rounded to 1e-5 deg."
       },
       {
         "field": "n_dia_sources",
-        "evidence": "SYNTHETIC_FIXTURE",
+        "evidence": "VALIDATED_TRANSPORT_EVIDENCE",
         "note": "Delivered DiaSource rows in this basis; not lifetime detections."
       },
       {
         "field": "first_midpoint_mjd_tai",
-        "evidence": "SYNTHETIC_FIXTURE",
+        "evidence": "VALIDATED_TRANSPORT_EVIDENCE",
         "note": "Earliest delivered DiaSource midpoint, TAI."
       },
       {
         "field": "last_midpoint_mjd_tai",
-        "evidence": "SYNTHETIC_FIXTURE",
+        "evidence": "VALIDATED_TRANSPORT_EVIDENCE",
         "note": "Latest delivered DiaSource midpoint, TAI."
       },
       {
         "field": "bands",
-        "evidence": "SYNTHETIC_FIXTURE",
+        "evidence": "VALIDATED_TRANSPORT_EVIDENCE",
         "note": "LSST bands among delivered DiaSources."
       },
       {
         "field": "acquisition windows",
         "evidence": "COMMITTED_OPERATIONAL_RECORD",
-        "note": "Requests and state logs at the pinned Fink revision."
+        "note": "Catalog build manifest and cohort configuration."
       },
       {
-        "field": "delivery totals",
+        "field": "per-date delivered rows",
         "evidence": "VALIDATED_TRANSPORT_EVIDENCE",
-        "note": "Three-way reconciliation; transport evidence only."
+        "note": "Catalog daily_coverage, recomputed from sources at extraction. Transport evidence only."
+      },
+      {
+        "field": "sky density",
+        "evidence": "VALIDATED_TRANSPORT_EVIDENCE",
+        "note": "Every derived DIA group, HEALPix NESTED order 6."
       }
     ]
   }

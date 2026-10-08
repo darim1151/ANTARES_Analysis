@@ -1,14 +1,14 @@
 {
   "contract": "uso.observatory-bundle",
   "contract_version": "1.0.0",
-  "basis_id": "basis.uso.first-light.e475af0a72c3",
-  "label": "First Light · fixture basis",
+  "basis_id": "basis.uso.first-light.d49c7c31f129",
+  "label": "First Light · ANTARES demo + Fink accepted catalog",
   "status": "FIRST_LIGHT_FIXTURE",
   "science_ready": false,
   "domains": {
     "antares": {
       "domain": "antares",
-      "build_id": "antares.skypulse-demo.2026-08-22T18:04:07Z.g1.1",
+      "build_id": "antares.skypulse-demo.2026-08-22T18:04:07Z.g1.2",
       "build_kind": "LEGACY_DEMO_EXPORT",
       "label": "ANTARES · SkyPulse legacy demo export",
       "evidence": [
@@ -38,32 +38,22 @@
     },
     "fink": {
       "domain": "fink",
-      "build_id": "fink.first-light-fixture.fd02c8e.g1.1",
-      "build_kind": "SYNTHETIC_FIXTURE_WITH_COMMITTED_EVIDENCE",
-      "label": "Fink · committed acquisition evidence + synthetic fixture population",
+      "build_id": "fink.catalog.final-five-window-analytics-20261006-v1.caa455ccc5f6.g1.2",
+      "build_kind": "QUALIFIED_COHORT_CATALOG",
+      "label": "Fink · accepted accepted_five_window_20260225_20260714 catalog (final-five-window-analytics-20261006-v1)",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
-        "COMMITTED_OPERATIONAL_RECORD",
-        "SYNTHETIC_FIXTURE"
+        "COMMITTED_OPERATIONAL_RECORD"
       ],
       "science_ready": false,
       "native_ontology": "Rubin DiaSource rows delivered by Fink (Light Static packet). DiaObject is a derived grouping key; broker fields are source-time snapshots.",
       "source": {
         "repository": "darim1151/Fink_Alerts-Analysis-LSST",
-        "revision": "fd02c8eabcaf3a1160e0ed2c5c1d6959ac11d23d",
+        "revision": "7e58b13c77bd0e4bc81e41e3c2b4759db382499b",
         "paths": [
-          "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/evidence/delivery_1.json",
-          "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/request.json",
-          "configs/acquisitions/acq_lsst_ls_v1_2026-02-25_to_2026-03-25_b1c7b482b56b/state_log.jsonl",
-          "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/evidence/delivery_1.json",
-          "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/request.json",
-          "configs/acquisitions/acq_lsst_ls_v1_2026-03-25_to_2026-04-25_0c852cd059fa/state_log.jsonl",
-          "configs/acquisitions/acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f/request.json",
-          "configs/acquisitions/acq_lsst_ls_v1_2026-04-25_to_2026-05-25_1ccf601aa29f/state_log.jsonl",
-          "configs/analysis_cohorts/month1.json",
-          "configs/delivery_evidence/ftransfer_lsst_2026-10-04_177446/avro_schema_ftransfer_lsst_2026-10-04_177446.json",
-          "configs/delivery_evidence/ftransfer_lsst_2026-10-04_177446/delivery_evidence.json",
-          "src/fink_lsst/analytics/contract.py"
+          "configs/analysis_cohorts/final_20260225_20260714.json",
+          "src/fink_lsst/analytics/contract.py",
+          "src/fink_lsst/analytics/catalog.py"
         ]
       },
       "time": {
@@ -72,7 +62,7 @@
         "scale": "TAI",
         "scale_label": "TAI",
         "scale_basis": "Fink analysis_contract_v1: midpointMjdTai is the authoritative observation time, MJD on the TAI scale.",
-        "date_binning": "UTC date of the TAI time converted with a leap-second table, half-open [00:00, 24:00) UTC. Fixture conversion: TAI − UTC = 37 s (valid since 2017-01-01); a real adapter must use ERFA/Astropy.",
+        "date_binning": "UTC date from the catalog's own UTC-midnight boundaries expressed in TAI MJD, half-open [00:00, 24:00) UTC. TAI − UTC = 37 s on every date of the cohort (ERFA leap-second table, checked at extraction).",
         "entity_date_rule": "UTC date of the first delivered DiaSource of the DiaObject in this basis."
       }
     }
@@ -100,6 +90,7 @@
     "A missing ANTARES night is not a zero-row night.",
     "Source density is not survey coverage.",
     "Fink midpointMjdTai is TAI; the historical ANTARES exporter treats MJD as UTC. They are never silently aligned.",
-    "No cross-broker identity matching is performed in this basis."
+    "No cross-broker identity matching is performed in this basis.",
+    "The Fink entity layer is a random sample; sample counts are never population counts."
   ]
 }

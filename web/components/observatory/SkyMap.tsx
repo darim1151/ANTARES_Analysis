@@ -73,7 +73,8 @@ export default function SkyMap({
   const overlays = state.presentation.overlays;
   const mask = masks[d];
   const filteredCap = capability(model, d, "sky.filtered_density");
-  const filterActive = Boolean(state.selection.time || mask.featureActive) && isUsable(filteredCap.state);
+  const filterRequested = Boolean(state.selection.time || mask.featureActive);
+  const filterActive = filterRequested && isUsable(filteredCap.state);
   const frame: Frame = useMemo(() => fitFrame(size.width, size.height, compact ? 26 : 38, compact ? 6 : 10), [compact, size]);
   const scale = useMemo(() => densityScale(domain, order), [domain, order]);
   const coverage = domain.coverageAt(order);
@@ -257,6 +258,11 @@ export default function SkyMap({
     >
       <canvas ref={canvasRef} style={{ width: size.width, height: size.height }} />
       {unadmitted && <div className="uso-unadmitted-veil">{`${domain.id.toUpperCase()}: ${unadmitted}. No counts exist, which is not zero.`}</div>}
+      {!unadmitted && filterRequested && !filterActive && layer === "density" && (
+        <div className="uso-sky-note" title={filteredCap.reason}>
+          Unfiltered density of the complete population · filters apply to the sampled points (Entities layer)
+        </div>
+      )}
       <svg width={size.width} height={size.height} className="uso-skysvg" aria-hidden="true">
         <defs>
           <clipPath id={`clip-${clipId}`}>

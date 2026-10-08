@@ -135,7 +135,9 @@ export default function SkyLens({ placement }: { placement: "primary" | "seconda
                 <EvidenceChips list={domain.bundle.sky.density.evidence} compact />
                 {admission[d]?.status === "PARTIAL" && <AdmissionNote domain={d} admission={admission[d]} />}
                 <span className="uso-skycol-n">
-                  {m.counts.exceptSky === m.counts.total ? `N ${m.counts.total.toLocaleString("en-US")}` : `${m.counts.exceptSky.toLocaleString("en-US")} of ${m.counts.total.toLocaleString("en-US")} in cross-filter`}
+                  {m.counts.exceptSky === m.counts.total
+                    ? `N ${m.counts.total.toLocaleString("en-US")}${domain.complete ? "" : " sampled"}`
+                    : `${m.counts.exceptSky.toLocaleString("en-US")} of ${m.counts.total.toLocaleString("en-US")}${domain.complete ? "" : " sampled"} in cross-filter`}
                 </span>
               </div>
               <SkyMap domain={domain} compact={placement === "dock"} unadmitted={admission[d]?.status === "NONE" ? admissionLabel(admission[d]!) : null} />

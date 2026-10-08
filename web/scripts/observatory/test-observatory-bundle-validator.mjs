@@ -92,7 +92,7 @@ const cases = [
     (d) => edit(d, "capabilities.json", (c) => (c.capabilities.find((k) => k.id === "workspace:compare.difference_map").state = "PARTIALLY_QUALIFIED"))
   ],
   [
-    "Month-3 (producer complete) cannot be labelled MISSING",
+    "a delivered window cannot be labelled MISSING",
     "MISSING is reserved for genuinely absent data",
     (d) =>
       edit(d, FINK_TIME, (t) => {
@@ -102,25 +102,35 @@ const cases = [
       })
   ],
   [
-    "Month-3 must stay NOT_DELIVERY_VALIDATED / NOT_ADMITTED",
-    "must be NOT_DELIVERY_VALIDATED and NOT_ADMITTED",
-    (d) => edit(d, FINK_TIME, (t) => (t.windows.find((x) => x.id === "fink.month-3").admission = "ADMITTED"))
+    "an AVAILABLE window must stay admitted",
+    "an AVAILABLE window must be admitted",
+    (d) => edit(d, FINK_TIME, (t) => (t.windows.find((x) => x.id === "fink.month-2").admission = "NOT_ADMITTED"))
   ],
   [
-    "Month-2 cannot be promoted to AVAILABLE",
-    "window state must be UNQUALIFIED",
+    "a validated catalog window cannot be relabelled unavailable",
+    "window state must be AVAILABLE",
     (d) =>
       edit(d, FINK_TIME, (t) => {
         const w = t.windows.find((x) => x.id === "fink.month-2");
-        w.state = "AVAILABLE";
-        w.admission = "ADMITTED";
-        for (const n of t.nights) if (n.window_id === w.id) n.state = "AVAILABLE";
+        Object.assign(w, { state: "UNAVAILABLE", delivery_validation: "NOT_DELIVERY_VALIDATED", admission: "NOT_ADMITTED", status_codes: ["NOT_DELIVERY_VALIDATED", "NOT_ADMITTED"] });
+        for (const n of t.nights) if (n.window_id === w.id) n.state = "UNAVAILABLE";
+        for (const date of Object.keys(t.counts.values)) if (date >= w.start && date < w.stop) delete t.counts.values[date];
       })
   ],
   [
-    "Month-2 cannot carry per-date counts",
-    "counts are only allowed on AVAILABLE/ZERO dates, not UNQUALIFIED",
-    (d) => edit(d, FINK_TIME, (t) => (t.counts.values["2026-04-01"] = 12))
+    "per-date counts must equal the catalog's delivered rows",
+    "count must equal the catalog's delivered rows",
+    (d) => edit(d, FINK_TIME, (t) => (t.counts.values["2026-02-25"] += 1))
+  ],
+  [
+    "a zero-row date cannot be shown as available",
+    "night state must follow the catalog's delivered rows",
+    (d) =>
+      edit(d, FINK_TIME, (t) => {
+        const n = t.nights.find((x) => x.state === "ZERO");
+        n.state = "AVAILABLE";
+        t.counts.values[n.date] = 1;
+      })
   ],
   [
     "Month-2 transport totals cannot be compared as rates",
@@ -132,17 +142,43 @@ const cases = [
   [
     "fixture evidence cannot be dropped",
     "must declare their synthetic evidence",
-    (d) => edit(d, "basis.json", (b) => (b.domains.fink.evidence = ["VALIDATED_TRANSPORT_EVIDENCE"]))
+    (d) => edit(d, "basis.json", (b) => (b.domains.antares.evidence = ["LEGACY_SAMPLE"]))
+  ],
+  [
+    "a catalog domain cannot carry synthetic evidence",
+    "must not carry synthetic evidence",
+    (d) => edit(d, "domains/fink/sky.json", (s) => s.density.evidence.push("SYNTHETIC_FIXTURE"))
+  ],
+  [
+    "Fink density must equal the catalog extract",
+    "complete DiaObject density",
+    (d) => edit(d, "domains/fink/sky.json", (s) => (s.density.values[0] += 1))
+  ],
+  [
+    "the Fink sample cannot claim client-side filtered density",
+    "cannot be AVAILABLE for an incomplete population",
+    (d) =>
+      edit(d, "capabilities.json", (c) => {
+        const x = c.capabilities.find((k) => k.id === "fink:sky.filtered_density");
+        x.state = "AVAILABLE";
+        x.evidence = ["VALIDATED_TRANSPORT_EVIDENCE"];
+      })
   ],
   [
     "int64 identifiers must be strings",
-    "diaObjectId must be a positive int64 decimal string",
+    // Real diaObjectIds exceed 2^53, so the global unsafe-number scan fires first.
+    "int64 values must be decimal strings",
     (d) => edit(d, FINK_ENTITIES, (e) => (e.records[0].id = Number(e.records[0].id)))
   ],
   [
-    "fixture ids keep the reserved prefix",
-    "reserved 990 prefix",
-    (d) => edit(d, FINK_ENTITIES, (e) => (e.records[0].id = `1${e.records[0].id.slice(1)}`))
+    "sampled entities must be catalog DiaObjects",
+    "not a sampled catalog DiaObject",
+    (d) => edit(d, FINK_ENTITIES, (e) => (e.records[0].id = "123456789012345678"))
+  ],
+  [
+    "sampled entities keep their catalog positions",
+    "record disagrees with the catalog extract",
+    (d) => edit(d, FINK_ENTITIES, (e) => (e.records[0].ra = (e.records[0].ra + 1) % 360))
   ],
   [
     "model scores must not become probabilities",
@@ -171,7 +207,7 @@ const cases = [
     (d) => edit(d, ANTARES_SKY, (s) => (s.density.values[0] += 1))
   ],
   [
-    "fixture sources cannot leak into Month-2",
+    "sources cannot fall outside the cohort",
     "lies outside the admitted window",
     async (d) => {
       const entities = await load(d, FINK_ENTITIES);
@@ -180,7 +216,7 @@ const cases = [
       const rel = `domains/fink/detail/${String(shardOf(id, entities.detail.shard_count)).padStart(2, "0")}.json`;
       await edit(d, rel, (shard) => {
         const sources = shard.records[id].sources;
-        sources[sources.length - 1].midpointMjdTai = 61135.2; // 2026-04-04, Month-2
+        sources[sources.length - 1].midpointMjdTai = 61300.2; // 2026-09-17, after the cohort
       });
     }
   ],
@@ -228,7 +264,7 @@ const cases = [
   [
     "entities cannot fall on unavailable dates",
     "must fall on an AVAILABLE date",
-    (d) => edit(d, FINK_ENTITIES, (e) => (e.records[0].entity_date = "2026-05-01"))
+    (d) => edit(d, FINK_ENTITIES, (e) => (e.records[0].entity_date = "2026-08-01"))
   ]
 ];
 

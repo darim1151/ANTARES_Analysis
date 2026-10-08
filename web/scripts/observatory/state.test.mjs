@@ -97,18 +97,18 @@ test("URL round trip restores the full scientific state", () => {
   assert.deepEqual(back.state, s);
 });
 
-test("Month-2 and Month-3 dates select no Fink entities; the fixture never enters them", () => {
+test("Fink zero-row dates are ZERO, never MISSING, and sampled entities stay inside the cohort", () => {
   const fink = model.domains.fink;
-  for (const time of [
-    { kind: "utc_dates", start: "2026-03-25", stop: "2026-04-25" },
-    { kind: "utc_dates", start: "2026-04-25", stop: "2026-05-25" }
-  ]) {
-    assert.equal(computeMasks(fink.cols, { version: 1, time, sky: null, feature: {} }).counts.all, 0);
-  }
   const states = new Map(fink.bundle.time.nights.map((n) => [n.date, n.state]));
-  assert.equal(states.get("2026-04-01"), "UNQUALIFIED");
-  assert.equal(states.get("2026-05-01"), "UNAVAILABLE");
-  assert.ok(![...states.values()].includes("MISSING"), "nothing in the pinned Fink evidence is genuinely missing");
+  assert.equal(states.get("2026-02-25"), "AVAILABLE");
+  assert.equal(states.get("2026-03-05"), "ZERO");
+  assert.equal(fink.bundle.time.counts.values["2026-03-05"], 0);
+  assert.ok([...states.values()].every((st) => st === "AVAILABLE" || st === "ZERO"), "every cohort date is delivered or zero-row");
+  assert.equal(states.size, 139);
+  assert.ok(fink.cols.dates.every((d) => states.get(d) === "AVAILABLE"), "sampled DiaObjects start on delivered dates");
+  const after = { kind: "utc_dates", start: "2026-07-14", stop: "2026-08-01" };
+  assert.equal(computeMasks(fink.cols, { version: 1, time: after, sky: null, feature: {} }).counts.all, 0);
+  assert.equal(fink.complete, false, "the Fink entity layer is a sample");
 });
 
 test("view manifest pins the basis, carries the state and declares evidence in view", () => {
@@ -124,20 +124,25 @@ test("view manifest pins the basis, carries the state and declares evidence in v
   assert.deepEqual(vm.evidence_by_lens["sky.antares.density"], ["LEGACY_SAMPLE"]);
   assert.deepEqual(vm.evidence_by_lens["lab.antares.y"], ["LEGACY_SAMPLE"]);
   assert.equal(vm.evidence_by_lens["sky.fink.density"], undefined);
-  assert.deepEqual(vm.evidence_by_lens["time.fink"], ["SYNTHETIC_FIXTURE", "COMMITTED_OPERATIONAL_RECORD", "VALIDATED_TRANSPORT_EVIDENCE"]);
-  // A focused fixture DiaObject never claims transport evidence for itself.
+  assert.deepEqual(vm.evidence_by_lens["time.fink"], ["COMMITTED_OPERATIONAL_RECORD", "VALIDATED_TRANSPORT_EVIDENCE"]);
+  // Real catalog values are transport evidence, never accepted science and never synthetic.
   const focused = buildViewManifest(model, reduce(s, { type: "focus", focus: { domain: "fink", kind: "fink.diaObject", id: model.domains.fink.records[0].id } }));
-  assert.deepEqual(focused.evidence_by_lens["inspector.fink"], ["SYNTHETIC_FIXTURE"]);
+  assert.deepEqual(focused.evidence_by_lens["inspector.fink"], ["VALIDATED_TRANSPORT_EVIDENCE"]);
   const compare = buildViewManifest(model, reduce(s, { type: "mode", mode: "compare" }));
-  assert.deepEqual(compare.evidence_by_lens["sky.fink.density"], ["SYNTHETIC_FIXTURE"]);
+  assert.deepEqual(compare.evidence_by_lens["sky.fink.density"], ["VALIDATED_TRANSPORT_EVIDENCE"]);
+  for (const [lens, evidence] of Object.entries(compare.evidence_by_lens)) {
+    if (lens.includes("fink")) assert.ok(!evidence.some((e) => e.startsWith("SYNTHETIC")), `${lens} must not be synthetic`);
+  }
 });
 
 test("time admission distinguishes not-admitted dates from zero", async () => {
   const { timeAdmission } = await import("../../lib/observatory/model.ts");
-  const m2 = timeAdmission(model.domains.fink, { kind: "utc_dates", start: "2026-04-01", stop: "2026-04-11" });
-  assert.deepEqual(m2, { total: 10, admitted: 0, byState: { UNQUALIFIED: 10 }, status: "NONE" });
-  const m3 = timeAdmission(model.domains.fink, { kind: "utc_dates", start: "2026-05-01", stop: "2026-05-03" });
-  assert.deepEqual(m3.byState, { UNAVAILABLE: 2 });
+  // Zero-row dates are admitted (ZERO), not missing.
+  const march = timeAdmission(model.domains.fink, { kind: "utc_dates", start: "2026-03-05", stop: "2026-03-12" });
+  assert.deepEqual(march, { total: 7, admitted: 7, byState: { ZERO: 2, AVAILABLE: 5 }, status: "FULL" });
+  const pastCohort = timeAdmission(model.domains.fink, { kind: "utc_dates", start: "2026-07-12", stop: "2026-07-16" });
+  assert.equal(pastCohort.admitted, 2);
+  assert.equal(pastCohort.status, "PARTIAL");
   const antaresOutside = timeAdmission(model.domains.antares, { kind: "utc_dates", start: "2026-03-02", stop: "2026-03-06" });
   assert.equal(antaresOutside.status, "PARTIAL");
   assert.deepEqual(antaresOutside.byState, { AVAILABLE: 2, OUTSIDE_COVERAGE: 2 });
@@ -154,7 +159,10 @@ test("capability lookups never invent availability", () => {
   assert.equal(capability(model, "relation", "relation.cross_broker_association").state, "UNAVAILABLE");
   assert.equal(capability(model, "workspace", "compare.difference_map").state, "UNAVAILABLE");
   assert.equal(capability(model, "antares", "sky.coverage").state, "UNAVAILABLE");
-  assert.equal(capability(model, "fink", "time.acquisition.month-3").state, "UNAVAILABLE");
-  assert.deepEqual(capability(model, "fink", "time.acquisition.month-3").codes, ["NOT_DELIVERY_VALIDATED", "NOT_ADMITTED"]);
+  assert.equal(capability(model, "fink", "time.acquisition.month-3").state, "AVAILABLE");
+  assert.deepEqual(capability(model, "fink", "time.acquisition.month-3").codes, ["DELIVERY_VALIDATED", "ADMITTED", "CHARACTERIZED"]);
+  assert.equal(capability(model, "fink", "sky.coverage").state, "UNAVAILABLE");
+  assert.equal(capability(model, "fink", "sky.filtered_density").state, "UNAVAILABLE");
+  assert.deepEqual(capability(model, "fink", "sky.filtered_density").codes, ["SAMPLED_ENTITY_LAYER"]);
   assert.equal(capability(model, "fink", "something.undeclared").state, "UNAVAILABLE");
 });

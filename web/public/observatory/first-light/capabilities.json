@@ -1,7 +1,7 @@
 {
   "contract": "uso.observatory-bundle",
   "contract_version": "1.0.0",
-  "basis_id": "basis.uso.first-light.e475af0a72c3",
+  "basis_id": "basis.uso.first-light.d49c7c31f129",
   "capabilities": [
     {
       "id": "antares:time.date_states",
@@ -59,11 +59,11 @@
         "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ],
-      "summary": "Per-date states from committed acquisition windows",
-      "reason": "Each date inherits the state of its acquisition window at the pinned Fink revision.",
+      "summary": "Per-date states from the accepted cohort catalog",
+      "reason": "Each date inherits its acquisition window's state; dates with no delivered rows are ZERO, not missing.",
       "codes": [],
       "qualifications": [
-        "Per-date delivered counts (G4A daily coverage) are data-plane artifacts and are not in this basis."
+        "A zero-row date is not a survey non-observation."
       ]
     },
     {
@@ -71,16 +71,18 @@
       "scope": "fink",
       "area": "time",
       "name": "date_counts",
-      "state": "PARTIALLY_QUALIFIED",
+      "state": "AVAILABLE",
       "evidence": [
-        "SYNTHETIC_FIXTURE"
+        "VALIDATED_TRANSPORT_EVIDENCE"
       ],
-      "summary": "Fixture DiaObjects per date (Month-1 only)",
-      "reason": "Synthetic fixture counts inside the admitted Month-1 window; no counts exist for Month-2 or Month-3 by design.",
+      "summary": "Delivered alert rows per UTC date (complete)",
+      "reason": "Every delivered DIA and SSO DiaSource packet of the cohort, binned by the UTC date of midpointMjdTai.",
       "codes": [
-        "SYNTHETIC_FIXTURE"
+        "TRANSPORT_ONLY"
       ],
-      "qualifications": []
+      "qualifications": [
+        "Delivered rows are not Rubin completeness and are never read as alert rates."
+      ]
     },
     {
       "id": "fink:time.transport_totals",
@@ -92,7 +94,7 @@
         "VALIDATED_TRANSPORT_EVIDENCE"
       ],
       "summary": "Delivered row totals per acquisition",
-      "reason": "Three-way reconciled transport totals per validated delivery.",
+      "reason": "Validated rows equal expected topic messages for every acquisition in the cohort.",
       "codes": [
         "TRANSPORT_ONLY"
       ],
@@ -111,7 +113,7 @@
         "COMMITTED_OPERATIONAL_RECORD"
       ],
       "summary": "Month-1 · 2026-02-25 → 2026-03-25",
-      "reason": "Delivery reconciled three ways (expected topic messages = terminal committed = local readable rows, lag 0) and characterized (G4A). Transport reconciliation is not Rubin scientific completeness. Per-date delivered counts are not committed evidence and are not shown.",
+      "reason": "Delivery-validated (expected = validated rows), characterized (g4a-month1-20260225_20260325-v1) and admitted to the accepted accepted_five_window_20260225_20260714 cohort. Delivered rows are transport facts, not Rubin scientific completeness, and are never compared across windows as rates. A zero-row date had no delivered rows; it is not a survey non-observation.",
       "codes": [
         "DELIVERY_VALIDATED",
         "ADMITTED",
@@ -124,17 +126,17 @@
       "scope": "fink",
       "area": "time",
       "name": "acquisition.month-2",
-      "state": "PARTIALLY_QUALIFIED",
+      "state": "AVAILABLE",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ],
       "summary": "Month-2 · 2026-03-25 → 2026-04-25",
-      "reason": "Transport-validated but scientifically uncharacterized and not admitted to the analytical cohort. Its delivered row total must not be read as an alert rate or compared with other windows.",
+      "reason": "Delivery-validated (expected = validated rows), characterized (g5-month2-characterization-v1) and admitted to the accepted accepted_five_window_20260225_20260714 cohort. Delivered rows are transport facts, not Rubin scientific completeness, and are never compared across windows as rates. A zero-row date had no delivered rows; it is not a survey non-observation.",
       "codes": [
         "DELIVERY_VALIDATED",
-        "NOT_ADMITTED",
-        "UNCHARACTERIZED"
+        "ADMITTED",
+        "CHARACTERIZED"
       ],
       "qualifications": []
     },
@@ -143,13 +145,55 @@
       "scope": "fink",
       "area": "time",
       "name": "acquisition.month-3",
-      "state": "UNAVAILABLE",
-      "evidence": [],
+      "state": "AVAILABLE",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ],
       "summary": "Month-3 · 2026-04-25 → 2026-05-25",
-      "reason": "Upstream state PRODUCER_COMPLETE: not delivery-validated and not admitted to this basis. This is not missing data; it is not yet available.",
+      "reason": "Delivery-validated (expected = validated rows), characterized (final-month3-characterization-20261006-v1) and admitted to the accepted accepted_five_window_20260225_20260714 cohort. Delivered rows are transport facts, not Rubin scientific completeness, and are never compared across windows as rates. A zero-row date had no delivered rows; it is not a survey non-observation.",
       "codes": [
-        "NOT_DELIVERY_VALIDATED",
-        "NOT_ADMITTED"
+        "DELIVERY_VALIDATED",
+        "ADMITTED",
+        "CHARACTERIZED"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "fink:time.acquisition.month-4",
+      "scope": "fink",
+      "area": "time",
+      "name": "acquisition.month-4",
+      "state": "AVAILABLE",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ],
+      "summary": "Month-4 · 2026-05-25 → 2026-06-25",
+      "reason": "Delivery-validated (expected = validated rows), characterized (final-month4-characterization-20261006-v1) and admitted to the accepted accepted_five_window_20260225_20260714 cohort. Delivered rows are transport facts, not Rubin scientific completeness, and are never compared across windows as rates. A zero-row date had no delivered rows; it is not a survey non-observation.",
+      "codes": [
+        "DELIVERY_VALIDATED",
+        "ADMITTED",
+        "CHARACTERIZED"
+      ],
+      "qualifications": []
+    },
+    {
+      "id": "fink:time.acquisition.month-5",
+      "scope": "fink",
+      "area": "time",
+      "name": "acquisition.month-5",
+      "state": "AVAILABLE",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ],
+      "summary": "Month-5 · 2026-06-25 → 2026-07-14",
+      "reason": "Delivery-validated (expected = validated rows), characterized (final-month5-characterization-20261006-v1) and admitted to the accepted accepted_five_window_20260225_20260714 cohort. Delivered rows are transport facts, not Rubin scientific completeness, and are never compared across windows as rates. A zero-row date had no delivered rows; it is not a survey non-observation.",
+      "codes": [
+        "DELIVERY_VALIDATED",
+        "ADMITTED",
+        "CHARACTERIZED"
       ],
       "qualifications": []
     },
@@ -202,10 +246,10 @@
       "name": "density",
       "state": "AVAILABLE",
       "evidence": [
-        "SYNTHETIC_FIXTURE"
+        "VALIDATED_TRANSPORT_EVIDENCE"
       ],
-      "summary": "DiaObject density on HEALPix",
-      "reason": "Counts of fixture DiaObjects per equal-area cell.",
+      "summary": "DiaObject density on HEALPix (complete)",
+      "reason": "Counts of every derived DIA group in the cohort per equal-area cell.",
       "codes": [],
       "qualifications": []
     },
@@ -214,14 +258,12 @@
       "scope": "fink",
       "area": "sky",
       "name": "coverage",
-      "state": "PARTIALLY_QUALIFIED",
-      "evidence": [
-        "SYNTHETIC_FIXTURE"
-      ],
-      "summary": "Fixture footprint",
-      "reason": "Synthetic fixture footprint (-72° ≤ Dec ≤ +8° cell centers) used to generate the fixture population. NOT the Rubin footprint and not Fink delivery coverage.",
+      "state": "UNAVAILABLE",
+      "evidence": [],
+      "summary": "Footprint / coverage",
+      "reason": "Fink Light Static delivers alerts, not survey pointings: the Rubin observing footprint is not in this basis. Cells with delivered DiaObjects are density, not coverage; an empty cell is not evidence that Rubin did not observe it.",
       "codes": [
-        "SYNTHETIC_FIXTURE"
+        "NOT_IN_BASIS"
       ],
       "qualifications": []
     },
@@ -230,13 +272,13 @@
       "scope": "fink",
       "area": "sky",
       "name": "filtered_density",
-      "state": "AVAILABLE",
-      "evidence": [
-        "SYNTHETIC_FIXTURE"
-      ],
+      "state": "UNAVAILABLE",
+      "evidence": [],
       "summary": "Cross-filtered density",
-      "reason": "The entity table is the complete population of this basis.",
-      "codes": [],
+      "reason": "The Fink entity layer is a random sample; filtering it would present sample counts as population counts. Filters apply to sampled points only.",
+      "codes": [
+        "SAMPLED_ENTITY_LAYER"
+      ],
       "qualifications": []
     },
     {
@@ -293,12 +335,14 @@
       "name": "inspector",
       "state": "AVAILABLE",
       "evidence": [
-        "SYNTHETIC_FIXTURE"
+        "VALIDATED_TRANSPORT_EVIDENCE"
       ],
       "summary": "Native Fink DiaObject / DiaSource record",
-      "reason": "Delivered DiaSources and source-time broker snapshots.",
+      "reason": "Delivered DiaSources and source-time broker snapshots of the sampled DiaObjects.",
       "codes": [],
-      "qualifications": []
+      "qualifications": [
+        "Simple random sample of 5,000 of 3,487,175 DiaObjects (the lowest md5 of the decimal diaObjectId), with every delivered DiaSource of each. Sky density and per-date counts are complete; this layer is not, so it is never aggregated into population counts."
+      ]
     },
     {
       "id": "fink:entity.lightcurve",
@@ -307,7 +351,7 @@
       "name": "lightcurve",
       "state": "AVAILABLE",
       "evidence": [
-        "SYNTHETIC_FIXTURE"
+        "VALIDATED_TRANSPORT_EVIDENCE"
       ],
       "summary": "Delivered psfFlux history",
       "reason": "Difference-image psfFlux of delivered DiaSources per band.",
@@ -323,14 +367,15 @@
       "name": "broker_inference",
       "state": "AVAILABLE",
       "evidence": [
-        "SYNTHETIC_FIXTURE"
+        "VALIDATED_TRANSPORT_EVIDENCE"
       ],
       "summary": "Source-time classifier snapshots",
       "reason": "clf/pred/xm/lc_features as delivered with each DiaSource.",
       "codes": [],
       "qualifications": [
         "Model scores are not calibrated probabilities.",
-        "Snapshots are not timeless classifications."
+        "Snapshots are not timeless classifications.",
+        "fink_science_version changes within the cohort; scores from different versions are not strictly comparable."
       ]
     },
     {
@@ -353,14 +398,18 @@
       "scope": "fink",
       "area": "features",
       "name": "population",
-      "state": "AVAILABLE",
+      "state": "PARTIALLY_QUALIFIED",
       "evidence": [
-        "SYNTHETIC_FIXTURE"
+        "VALIDATED_TRANSPORT_EVIDENCE"
       ],
-      "summary": "Parameter-space population",
-      "reason": "15 of 17 registered dimensions are selectable; the rest are declared unavailable with reasons.",
-      "codes": [],
-      "qualifications": []
+      "summary": "Parameter-space population (random sample)",
+      "reason": "15 of 17 registered dimensions are selectable over the sampled DiaObjects; the rest are declared unavailable with reasons.",
+      "codes": [
+        "SAMPLED_ENTITY_LAYER"
+      ],
+      "qualifications": [
+        "Simple random sample of 5,000 of 3,487,175 DiaObjects (the lowest md5 of the decimal diaObjectId), with every delivered DiaSource of each. Sky density and per-date counts are complete; this layer is not, so it is never aggregated into population counts."
+      ]
     },
     {
       "id": "relation:relation.cross_broker_association",

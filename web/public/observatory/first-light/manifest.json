@@ -1,16 +1,16 @@
 {
   "contract": "uso.observatory-bundle",
   "contract_version": "1.0.0",
-  "bundle_id": "uso-first-light-0001",
+  "bundle_id": "uso-first-light-0002",
   "bundle_class": "FIRST_LIGHT_FIXTURE",
   "science_ready": false,
-  "as_of_utc": "2026-10-06T07:31:14Z",
-  "evidence_policy": "Fixture and demo values are labelled per payload and per field and must never be presented as accepted science. Only committed Fink acquisition evidence is real, and it is transport/operational evidence only.",
+  "as_of_utc": "2026-10-06T10:41:20Z",
+  "evidence_policy": "ANTARES fixture and demo values are labelled per payload and per field and must never be presented as accepted science. Fink values are read from the accepted five-window catalog and are transport/operational evidence, not accepted science. Fink per-date counts and sky density are complete; the Fink entity layer is a labelled random sample.",
   "generator": {
     "name": "web/scripts/observatory/build-first-light-bundle.mjs",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "deterministic": true,
-    "seed": "uso-first-light/fink-fixture/v1",
+    "seed": null,
     "inputs": [
       {
         "path": "web/public/data/sky_points.json",
@@ -31,6 +31,11 @@
         "path": "web/scripts/observatory/inputs/fink-evidence.fd02c8e.json",
         "sha256": "8ee7bbd5be6dd52379d0fdcd6d119142d8e2c817c44e0fa7a6cfecce5d89f06a",
         "role": "fink-evidence"
+      },
+      {
+        "path": "web/scripts/observatory/inputs/fink-catalog.final-five-window-analytics-20261006-v1.json.gz",
+        "sha256": "caa455ccc5f66b0c87c8ba87af672feedfd62e944804119969685c0f25f7acf4",
+        "role": "fink-catalog-extract"
       }
     ]
   },
@@ -54,188 +59,476 @@
   "files": [
     {
       "path": "basis.json",
-      "bytes": 5063,
-      "sha256": "ad18241abdff1841abe90776906fd46911766f3a3242bf93b04606ed9ca21cbb",
+      "bytes": 4226,
+      "sha256": "34ba4f402691e7379973c3200e7c67a95443e3bc3140e4e611ecd5d4ef1b1512",
       "role": "basis"
     },
     {
       "path": "capabilities.json",
-      "bytes": 13378,
-      "sha256": "2d956056094daa31a4c32b2d61102b13456c1cb2a80fafe24d4f7c8e9acb11ed",
+      "bytes": 16730,
+      "sha256": "fcc4c3181acfb39d001bb9a1989bfcaa09c77aebb36f814318e28d14396c2f59",
       "role": "capabilities"
     },
     {
       "path": "domains/antares/detail/00.json",
       "bytes": 123578,
-      "sha256": "bf2f02134f82f446b1a873c602fe62db67035aa8c9187a587ea5a7a06d8ed67f",
+      "sha256": "0d0d93b596a5c638033cb6ea21c2cd838e25aac7d11ede3adea76b324cbf29ad",
       "role": "antares.detail"
     },
     {
       "path": "domains/antares/detail/01.json",
       "bytes": 126793,
-      "sha256": "5fc102af7764cf092e18854250f8e5da3f807a77624dcf1ab27398d94336702b",
+      "sha256": "8e4c43e54adf694a85b0517107658d7b8bd9626abc85ea19a455c21112e3cd50",
       "role": "antares.detail"
     },
     {
       "path": "domains/antares/detail/02.json",
       "bytes": 110079,
-      "sha256": "e6a48f284ca161fdd7c0144d54736bd5f4c94da588ccb51c09a9e99eccfbd4d1",
+      "sha256": "3c422e4d86db2d7e8d8a655200b4a0fbaabfa04fe9d9c675e902cfb00c4e50ab",
       "role": "antares.detail"
     },
     {
       "path": "domains/antares/detail/03.json",
       "bytes": 119065,
-      "sha256": "21eacaa18c52a0a178bf815065532187305eb9c6b1c598d13e75d69dc95d18d4",
+      "sha256": "3d9e060e6d7d99545a260ee871b709a8e58d6fdbf28c8e69cc49d1c0d4983f5f",
       "role": "antares.detail"
     },
     {
       "path": "domains/antares/entities.json",
       "bytes": 503645,
-      "sha256": "870b30bfb581279885517ec1c366169879753557e734e568131ef0c64bde540c",
+      "sha256": "273406f6e48f818b27e1c8fc00f566459eae3bae75712e82415c5f6844385c14",
       "role": "antares.entities"
     },
     {
       "path": "domains/antares/features.json",
       "bytes": 75238,
-      "sha256": "4e65f14b214cffa159dcc9432f5ee26a016976d8a04db043f981f08a05b1c3fa",
+      "sha256": "6f499198ba09f30f32af840f5992cad3c938b5e106806d343d43a36fba4e9d8e",
       "role": "antares.features"
     },
     {
       "path": "domains/antares/sky.json",
       "bytes": 13319,
-      "sha256": "a857b6469bc24879a1a0fefb7162a708af44fd5005d697b3b807469bce29f8f6",
+      "sha256": "5af0e5cde75228b874e2b02a41646216821208bd32673f2b99b96c2c20a7380f",
       "role": "antares.sky"
     },
     {
       "path": "domains/antares/time.json",
       "bytes": 4102,
-      "sha256": "e909d215d9d65df9f0eb20be6874728ba89b90d89294b2dcd4a3d3b505216233",
+      "sha256": "49b6a84aeeb0e0a0aee4b357f2c9a353c155e7c28816f8b8328404612877aabb",
       "role": "antares.time"
     },
     {
       "path": "domains/fink/detail/00.json",
-      "bytes": 287871,
-      "sha256": "c267618a98a4e90ef2362f6817c80d41153711d5e201b1aa4564d74625cb8e2e",
+      "bytes": 136432,
+      "sha256": "3809cbcd09648b8b4639be612884fea865b198bbd5901d5d32498b8cde6b4207",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/01.json",
-      "bytes": 312820,
-      "sha256": "ae6f8b0f62e50398f2800ad15c7741d0fc4dbcfc8a091a50e82da3396b7fd6ec",
+      "bytes": 131455,
+      "sha256": "bed2766c840bfa04114b4de556d0498fd1db6374f666d101ac26322e7551b760",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/02.json",
-      "bytes": 324385,
-      "sha256": "bfdb886297d6da8c70c6e8eef326f08dde898c7f0c873167f451c65c6b3f71d9",
+      "bytes": 126502,
+      "sha256": "cceb069bc3f64c67c22bcec0db8f760037eca5e32eee284cb70f2a8828269af9",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/03.json",
-      "bytes": 310078,
-      "sha256": "4f2ba6801bb30d022175047796f0153167b7c487317d9429ceee40a34a63be68",
+      "bytes": 138054,
+      "sha256": "5279de92543dc532c3e4aa94607562f6127a4c7120949710c73bf6a0a963bc12",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/04.json",
-      "bytes": 304924,
-      "sha256": "c51b53f1b1d575d46ad66a4779127ea518992174e9aba65d65f88d0c56074d04",
+      "bytes": 121570,
+      "sha256": "d21af760f496948e1e57bfa03dbea64323c7857f19cbea9bde21a0c810288b63",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/05.json",
-      "bytes": 308653,
-      "sha256": "cd0899e0983b741f14ba9bf7c234ad8d90b67b7b4895cfedc2f39a6035e55319",
+      "bytes": 154460,
+      "sha256": "27e91161405ae666139c44dbab52d005edce921ed04be64a4955e23028e3dbc0",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/06.json",
-      "bytes": 308693,
-      "sha256": "e10a7cea16fb7e6e4fe49cea8801b193cecfd7a885bdb1e11ce2846e8d9bff3e",
+      "bytes": 120973,
+      "sha256": "b14777c3f20017ca94f7f95668928def4b7150c36862ba81cd82f625439c14b6",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/07.json",
-      "bytes": 258863,
-      "sha256": "22785fbf9a09fb80189ade05b31c19e9e01300eb0475bbe3510d12d1814d50ec",
+      "bytes": 154328,
+      "sha256": "eca002a81703b04aadc07e3c723a827aede0efcc9736065f5e473d366eb37074",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/08.json",
-      "bytes": 285640,
-      "sha256": "cbc4a132fd4d24f76b5735ff192d0b6cadee849737c2475a6b636f149e9b3caf",
+      "bytes": 142362,
+      "sha256": "6b02652e5207b13ef6dc752de7faff8bea1707d3ec8262435c399ae233b6e540",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/09.json",
-      "bytes": 311357,
-      "sha256": "287e15e27f6ab2543a248f8cf879f2e8688949ff388ad6160ee0aeee559b08ae",
+      "bytes": 149157,
+      "sha256": "bf25aba072b0b0422df9f7494cfec1cc56ba3c8cc883aa03d871a1ca6b70b580",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/10.json",
-      "bytes": 259613,
-      "sha256": "cbff727d07fde82b8d8f931f363b2bab74ecc61ed33127ad3a74c815e090e761",
+      "bytes": 130923,
+      "sha256": "ece586cabe96031b3812c55f17b90bce4405297fbd790ad4c19bea769cf609d1",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/11.json",
-      "bytes": 269808,
-      "sha256": "6f69c3061253f62aa45c17132f5d383219668c77972a5d05857e747165e9fd1a",
+      "bytes": 124930,
+      "sha256": "5623a46c151c3690801da7198c94d51efaf652312eef026a0ff624b921ceea12",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/12.json",
-      "bytes": 312970,
-      "sha256": "f6525f986958d6cf2e373a8ba752f728b85dd67fcac5315bb646f169ad1b6671",
+      "bytes": 158831,
+      "sha256": "4dd499991a69004641ccd729e18abb97b55695666f32bb8ea42bb6e702f6bdfb",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/13.json",
-      "bytes": 264939,
-      "sha256": "c6145e096fb6ad100d2b68036f3e20aa96fb57027ac351289859b53fa05cedf3",
+      "bytes": 142745,
+      "sha256": "3907a3404fd91dabd0bfce2500c898ef0c8ab41966e02f7f1037c6a23a2a1432",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/14.json",
-      "bytes": 317757,
-      "sha256": "8f1b8108935a865ebe002d2ac61e7b12128cc77dd6ce00a46f99418876212fda",
+      "bytes": 167576,
+      "sha256": "6dd5567289e112a9fc9e018a4cf406e83b557775b890c883f08ea2e0acd682e5",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/detail/15.json",
-      "bytes": 307210,
-      "sha256": "1d75867ef64f882d47d1e6bc7b8cc0c6180f27883d5d14160f8332f8474716ca",
+      "bytes": 119493,
+      "sha256": "22281cf615927f6689efd942bf4350136b3387ea8b7b1729f6f84887c4574403",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/16.json",
+      "bytes": 138949,
+      "sha256": "a18db47a6c6f01f694f57796262e28bda67fbd363d2d3d71d987d54b4e2bef7a",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/17.json",
+      "bytes": 128119,
+      "sha256": "687762458653a63895b2ef3a03772e8fc5ff5d2634b22199b0006c4db91df738",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/18.json",
+      "bytes": 177209,
+      "sha256": "ea0801a0e3f235a3610d3c74b9f36c771a354f011a73f4f15b7bd90ed743bfbf",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/19.json",
+      "bytes": 114268,
+      "sha256": "584409725a4591b2b3562666233ec7f13d48be03c730f1f4375bfa253b92d2e5",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/20.json",
+      "bytes": 102202,
+      "sha256": "20b493c656a9a74b7387d4d0698a8a0cdc5191c40983e443d40d6a69304b3a02",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/21.json",
+      "bytes": 116249,
+      "sha256": "2ac3c33fe40d7109ac385dc6ba37203be78cbe14253c8de7a7426e44e946b43c",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/22.json",
+      "bytes": 128559,
+      "sha256": "6bdd8e97848f105137b003fd7dbb9bfe792866bc6a28e94effbb850e548ede93",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/23.json",
+      "bytes": 102419,
+      "sha256": "21e30338665f1977d944b1a0834d646fdbcf8a48d1a17410e69aae71577a8db0",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/24.json",
+      "bytes": 106465,
+      "sha256": "bb1118aee2c696c4a2ea6b9cf8fcaba81a78609103fb883c4a475490a9e96b08",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/25.json",
+      "bytes": 103826,
+      "sha256": "1c2172cd8447f1d43444ad2c7343251bf5a27ec4e7ec405f8dec94dd5053fe2b",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/26.json",
+      "bytes": 134170,
+      "sha256": "de6961786df8ee578c365b9e303d4aa42bb3504d952fee25eda8f6961b0b3f02",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/27.json",
+      "bytes": 113424,
+      "sha256": "91fa92ca38342babe81b65e1bf65e03cf2741642292c769c56520b528223b222",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/28.json",
+      "bytes": 129651,
+      "sha256": "d2d443d416118223455826a5e087aea770f795f84e7b73c5c832cfd59afc3b25",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/29.json",
+      "bytes": 141080,
+      "sha256": "86462a4bf42e53379696e4d3d0368f226d7c521cbe50ed1f0a78ee97977ee5cf",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/30.json",
+      "bytes": 159786,
+      "sha256": "dfb1d82237a007796cae4dffd4a75cbb320c8d116b91ba7ccc437d9b4b845ead",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/31.json",
+      "bytes": 125883,
+      "sha256": "bac10f06e86439715c6c67ff3754360874f707fe5dcab4e6c7f0655bdc6ecc1f",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/32.json",
+      "bytes": 143229,
+      "sha256": "de14bc17abca1c35350c963835f85e3e643e323bee609c36e05439b22e065d38",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/33.json",
+      "bytes": 113318,
+      "sha256": "92e63663e59c4029983f57b7b85b2cf564d5ba93355be7f637dc362ca06f5c6b",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/34.json",
+      "bytes": 158736,
+      "sha256": "80f5d84c1040c90eda16776e172d848535fdac516427274088da5430c8ea5c17",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/35.json",
+      "bytes": 123335,
+      "sha256": "7e765940661e76bae699e50180d23e12f65cb2e4de2477368a3ca3a39ba9a1a3",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/36.json",
+      "bytes": 183964,
+      "sha256": "46c4819f178ccefff65c75f4a9533bb20bc09a0b8a2dbc25c244e609714bb749",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/37.json",
+      "bytes": 111680,
+      "sha256": "d7c2f969dc18d044292f2f2d427431fad478f445c654a9908bbe7aefd033c711",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/38.json",
+      "bytes": 105522,
+      "sha256": "174559d2466d6f783e451122deae63f338349e32abc516d56ed9976cfc50bb00",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/39.json",
+      "bytes": 129777,
+      "sha256": "cc73eca37ad0e2b8713cfdf1066ef8b27752d5fc4dc97fbde17e52a07cf2bf81",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/40.json",
+      "bytes": 129431,
+      "sha256": "c8d1381d106ab12da5dd7e7af375a071c65e0002e563a425af3e4b1f61c02dc6",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/41.json",
+      "bytes": 134768,
+      "sha256": "c97a725657708e402a50a31bd96653115eda4bd2a654b0084eb3359c92adec9e",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/42.json",
+      "bytes": 125168,
+      "sha256": "3b9aa7cfc656bbf33bf2607286fc027f901af8c15e7813c83d3c51060303ff26",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/43.json",
+      "bytes": 133032,
+      "sha256": "bb64a090f2823903871d6c413b4bbf13c304cd906a5348f4a3e1f28892710be5",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/44.json",
+      "bytes": 150070,
+      "sha256": "58c159f62bc40a15f297d333900cfe87c9843e6f578cde5eb2a2035bc58a0a70",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/45.json",
+      "bytes": 146811,
+      "sha256": "cdee6cf6e27fc391d2592b065f53061830f560b89e07a4a286c8e8a071da8041",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/46.json",
+      "bytes": 101286,
+      "sha256": "2f932b07e08969ff496baf91006870bbca50bf81196c7f15847e46dae5b9b64b",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/47.json",
+      "bytes": 115853,
+      "sha256": "8378c479ac0df48a7a84256f984b80f0349c4f5aac4cfb7792294eabe5dbb65f",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/48.json",
+      "bytes": 130922,
+      "sha256": "bd9393be46a103d642a3e4dfffa7ee185ed39835634a83b975d140dc60285999",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/49.json",
+      "bytes": 127338,
+      "sha256": "f4bfeb9b42e01ef6232b20af8abd283cded8326cf05ab734dc731da655ba6b75",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/50.json",
+      "bytes": 114275,
+      "sha256": "f7ea3ed497546f0354d8cc6c466b6ca16ea9507a245566feea7225dc33e50ed7",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/51.json",
+      "bytes": 145238,
+      "sha256": "5471b69f390cff5dd5c52224191277cffc93a055debf04ebffc0afd9da47b02b",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/52.json",
+      "bytes": 145291,
+      "sha256": "7aa3842f015cd37e6094d6d011a6206fa1084cfe93af0c9200a4c86ea6d38cfa",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/53.json",
+      "bytes": 111013,
+      "sha256": "bd24b8d93d6e9521c2e19e315934f2642c4b4ea33d153fbb9ed85cd84577384d",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/54.json",
+      "bytes": 162369,
+      "sha256": "6d26fc033bdf9736a161b0dd98aa1ea0fc5de6ae3e6aa2a09d6edea290752933",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/55.json",
+      "bytes": 111058,
+      "sha256": "a21caa7e5010a97e1e69863b486cfbd41ca39a819173d3c0943e85ca031942e7",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/56.json",
+      "bytes": 126744,
+      "sha256": "334171ceab84c77aceb9e42d769243bf42d43fe23c05a6d4f977e339a751a10e",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/57.json",
+      "bytes": 117614,
+      "sha256": "4fbb26b321f8832186d7f870133c90063d0ed1f47513356647b5ce85b0b5b007",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/58.json",
+      "bytes": 144820,
+      "sha256": "cda5fdbbd6f4ad900f85e90441c99bc3758b3cbaaa2c7650a1c64211e69cb554",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/59.json",
+      "bytes": 121505,
+      "sha256": "1db544641834bc19e7649dd675cf9141acf39ce5542f574126e36d585d52d41b",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/60.json",
+      "bytes": 139059,
+      "sha256": "fedd2ce686483864ffdd6505da18a19c8c31cfd3c68289c4605e5d2b86996802",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/61.json",
+      "bytes": 111666,
+      "sha256": "d98f1c20b17f664dd6b92aefece73e0e669ab07f63bbbd3a94f0ee7840ab5929",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/62.json",
+      "bytes": 180281,
+      "sha256": "4c33dcbb48a29db86e7f548a8b0e6a020143ee335d4530ed2edccb480b21d704",
+      "role": "fink.detail"
+    },
+    {
+      "path": "domains/fink/detail/63.json",
+      "bytes": 125359,
+      "sha256": "3eac27810078534ded44d78398f813b69f6a272216212ca16285933dde583078",
       "role": "fink.detail"
     },
     {
       "path": "domains/fink/entities.json",
-      "bytes": 405037,
-      "sha256": "653f1770dafd1e94c4e28ab5e62c96e0b94aa6ce951fab213382dca18148f442",
+      "bytes": 1138054,
+      "sha256": "e1af525b2e56566bc4cd8b48346f8a8b124123db51bdf4840dfd50653c2d9be2",
       "role": "fink.entities"
     },
     {
       "path": "domains/fink/features.json",
-      "bytes": 170315,
-      "sha256": "ec669cc2a1f85c2d7bc83d07c5da0ebcb8cf3295eca4621a66c888e98551620b",
+      "bytes": 427591,
+      "sha256": "d266698f7e680733d9a54518b4108120a6eea9b72c223176185b35c7dbc34318",
       "role": "fink.features"
     },
     {
       "path": "domains/fink/sky.json",
-      "bytes": 17551,
-      "sha256": "75a94ee1ab0870942bd214263273ca4a50742657e79c610e642557c70323e594",
+      "bytes": 24713,
+      "sha256": "0d7a7dc5306a70e93165060d01554e6078e5ff090f32a071738ea8a874dae508",
       "role": "fink.sky"
     },
     {
       "path": "domains/fink/time.json",
-      "bytes": 29010,
-      "sha256": "1976d3dc2b51f9ae6cd056031390cab0254e42b6638806a1ed39a09b2bbb99a1",
+      "bytes": 53630,
+      "sha256": "fbf63e364b040ba6c18daaab6bdfa7673fc64d18d2e5b0dcf0f11b6d041e14a8",
       "role": "fink.time"
     },
     {
       "path": "provenance.json",
-      "bytes": 14951,
-      "sha256": "f79ad28021642fe837daa6fba47ee0ee955cd96f9c74a0e09236d1ffae7e7d6f",
+      "bytes": 20911,
+      "sha256": "3ac3ca9caafc584ed5849e5ba83d4b611f2479ec2e4e36d85a5be4da6b471787",
       "role": "provenance"
     }
   ]

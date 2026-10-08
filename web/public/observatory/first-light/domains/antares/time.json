@@ -1,7 +1,7 @@
 {
   "contract": "uso.observatory-bundle",
   "domain": "antares",
-  "build_id": "antares.skypulse-demo.2026-08-22T18:04:07Z.g1.1",
+  "build_id": "antares.skypulse-demo.2026-08-22T18:04:07Z.g1.2",
   "semantics": {
     "stored_field": "newest_alert_observation_time",
     "format": "MJD",

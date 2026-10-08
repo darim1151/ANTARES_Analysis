@@ -169,7 +169,9 @@ export default function ProvenanceDrawer() {
                         </td>
                         <td>
                           {/* Deliberately prose, not an aligned numeric column: these totals are not rates. */}
-                          {a.delivery ? `${fmtInt(a.delivery.readable_rows)} readable rows reconciled (lag ${a.delivery.terminal_lag})` : "no validated delivery"}
+                          {a.delivery
+                            ? `${fmtInt(a.delivery.readable_rows)} readable rows reconciled${a.delivery.terminal_lag === null ? "" : ` (lag ${a.delivery.terminal_lag})`}`
+                            : "no validated delivery"}
                           <small>rate comparison prohibited</small>
                         </td>
                       </tr>

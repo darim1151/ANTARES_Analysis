@@ -5,11 +5,15 @@
 //   node scripts/observatory/validate-observatory-bundle.mjs [--bundle-dir=<dir>]
 //
 // Passing is a contract-integrity check. It is never scientific approval: in
-// this gate only FIRST_LIGHT_FIXTURE bundles are admissible.
+// this gate only FIRST_LIGHT_FIXTURE bundles are admissible. A domain may be
+// built from a real accepted cohort catalog (QUALIFIED_COHORT_CATALOG); its
+// payloads are then re-checked against the committed catalog extract and may
+// carry no synthetic evidence.
 
 import { createHash } from "node:crypto";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 
 import { mocCellsAtOrder, npix, radecToPix } from "../../lib/observatory/kernel/healpix.ts";
@@ -43,7 +47,9 @@ const CAP_STATES = new Set(["AVAILABLE", "PARTIALLY_QUALIFIED", "UNAVAILABLE"]);
 const FAMILIES = new Set(["position", "time", "multiplicity", "time_baseline", "photometry", "colour", "variability", "model_output", "crossmatch"]);
 const BANDS = new Set(["u", "g", "r", "i", "z", "y"]);
 const INT64_MAX = 9223372036854775807n;
+// TAI - UTC since 2017-01-01; the Fink catalog extractor re-checks it with ERFA.
 const FIXTURE_TAI_MINUS_UTC_DAYS = 37 / 86400;
+const CATALOG_BUILD = "QUALIFIED_COHORT_CATALOG";
 const FORBIDDEN_CLAIMS = ["rubin live feed", "official rubin result", "direct rubin catalog query", "real-time lsst stream", "classified transient"];
 const REQUIRED_DOMAIN_CAPS = [
   "time.date_states",
@@ -233,9 +239,34 @@ for (const d of DOMAINS) {
 }
 check(basis.domains.fink.time.scale === "TAI" && basis.domains.fink.time.stored_field === "midpointMjdTai", B, "Fink time must be midpointMjdTai on the TAI scale");
 check(basis.domains.antares.time.scale === "UTC", B, "ANTARES historical exporter time is declared UTC-treated");
-const synthetic = (pin) => pin.evidence.some((e) => e === "SYNTHETIC_DEMO" || e === "SYNTHETIC_FIXTURE");
+const isSynthetic = (e) => e === "SYNTHETIC_DEMO" || e === "SYNTHETIC_FIXTURE";
+const synthetic = (pin) => pin.evidence.some(isSynthetic);
 for (const d of DOMAINS) {
-  check(synthetic(basis.domains[d]), `${B}.domains.${d}`, "First-Light domain builds must declare their synthetic evidence");
+  if (basis.domains[d].build_kind === CATALOG_BUILD) {
+    check(!synthetic(basis.domains[d]), `${B}.domains.${d}`, "a cohort-catalog domain build must not carry synthetic evidence");
+  } else {
+    check(synthetic(basis.domains[d]), `${B}.domains.${d}`, "First-Light domain builds must declare their synthetic evidence");
+  }
+}
+check(basis.domains.antares.build_kind !== CATALOG_BUILD, B, "only the Fink domain has a cohort-catalog adapter in this gate");
+
+// The committed Fink catalog extract, when the Fink domain is built from it.
+const finkCatalogBuild = basis.domains.fink.build_kind === CATALOG_BUILD;
+let catalogExtract = null;
+if (finkCatalogBuild) {
+  const input = (manifest.generator?.inputs ?? []).find((i) => i.role === "fink-catalog-extract");
+  if (check(input, M, "a cohort-catalog Fink build must list its catalog extract as a generator input")) {
+    try {
+      const bytes = await readFile(path.join(webRoot, input.path.slice("web/".length)));
+      catalogExtract = JSON.parse(gunzipSync(bytes).toString("utf8"));
+      check(basis.domains.fink.build_id.includes(`.${sha256(bytes).slice(0, 12)}.`), B, "the Fink build id must carry the catalog extract digest");
+    } catch (error) {
+      err(M, `catalog extract cannot be read (${error.message})`);
+    }
+  }
+  if (!catalogExtract) finish();
+  check(catalogExtract.kind === "uso.fink-catalog-extract" && catalogExtract.reader?.read_only === true, M, "catalog extract must come from the read-only native opener");
+  check(catalogExtract.catalog?.qualification_status === "PASS" && catalogExtract.catalog?.contract_id === "analysis_contract_v1", M, "catalog must be a PASS analysis_contract_v1 catalog");
 }
 
 /* ----------------------------------------------------------- capabilities */
@@ -279,6 +310,12 @@ for (const d of DOMAINS) {
   for (const [rel, doc] of [[refs.time, time], [refs.sky, sky], [refs.entities, ents], [refs.features, feats]]) {
     check(doc.domain === d, rel, "domain mismatch");
     check(doc.build_id === pin.build_id, rel, "build_id must equal the basis pin");
+    if (pin.build_kind === CATALOG_BUILD) check(!JSON.stringify(doc).includes("SYNTHETIC_"), rel, "a cohort-catalog domain must not carry synthetic evidence");
+  }
+  if (pin.build_kind === CATALOG_BUILD) {
+    for (const c of capsDoc.capabilities ?? []) {
+      if (c.scope === d) check(!c.evidence.some(isSynthetic), `${C}[${c.id}]`, "a cohort-catalog domain must not carry synthetic evidence");
+    }
   }
 
   /* time */
@@ -377,7 +414,7 @@ for (const d of DOMAINS) {
       }
       check(r.first_midpoint_mjd_tai <= r.last_midpoint_mjd_tai && r.n_dia_sources >= 1, where, "time order / multiplicity invalid");
       check((r.bands ?? []).every((b) => BANDS.has(b)), where, "unknown band");
-      if (pin.build_kind.startsWith("SYNTHETIC_FIXTURE")) {
+      if (pin.build_kind.startsWith("SYNTHETIC_FIXTURE") || pin.build_kind === CATALOG_BUILD) {
         check(utcMjdToUtcDate(r.first_midpoint_mjd_tai - FIXTURE_TAI_MINUS_UTC_DAYS) === r.entity_date, where, "entity_date must be the UTC date of the first TAI time");
       }
     } else {
@@ -549,6 +586,55 @@ for (const d of DOMAINS) {
 /* --------------------------------------------- Fink windows vs evidence */
 
 const finkTime = docs.get(manifest.domains.fink.time);
+if (finkCatalogBuild) checkFinkAgainstCatalog();
+else checkFinkAgainstExcerpt();
+
+function checkFinkAgainstCatalog() {
+  const cat = catalogExtract;
+  const T = manifest.domains.fink.time;
+  const where = (x) => `${T}[${x}]`;
+  check(finkTime.range.start === cat.catalog.requested_start && finkTime.range.stop === cat.catalog.requested_stop, T, "the Fink lane must cover exactly the cohort range");
+  for (const a of cat.acquisitions) {
+    const w = finkTime.windows.find((x) => x.start === a.start && x.stop === a.stop);
+    if (!check(w, where(a.acquisition_id), "every cohort acquisition must appear as a window")) continue;
+    const admitted = cat.catalog.cohort_acquisitions.includes(a.acquisition_id);
+    const expected = a.state === "DELIVERY_VALIDATED" && admitted && a.characterization && a.expected_rows === a.validated_rows ? "AVAILABLE" : "UNAVAILABLE";
+    check(w.state === expected, where(a.acquisition_id), `window state must be ${expected} for catalog acquisition state ${a.state}`);
+    check(w.source_state === a.state, where(a.acquisition_id), "source_state must equal the catalog acquisition state");
+    const capability = caps.get(`fink:time.acquisition.${w.id.split(".")[1]}`);
+    check(capability?.state === (expected === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE"), C, `fink acquisition capability for ${w.id} must match its window`);
+    check(JSON.stringify(capability?.codes) === JSON.stringify(w.status_codes), C, `fink acquisition capability codes for ${w.id} must equal window status codes`);
+    const prov = provenance.acquisitions.find((x) => x.acquisition_id === a.acquisition_id);
+    if (check(prov, P, `acquisition ${a.acquisition_id} missing from provenance`)) {
+      check(prov.domain === "fink", P, `${a.acquisition_id} acquisition evidence must declare its domain (fink)`);
+      check(prov.state === a.state && prov.admission === w.admission && prov.delivery_validation === w.delivery_validation, P, `${a.acquisition_id} provenance disagrees with its window`);
+      check(prov.delivery?.readable_rows === a.validated_rows, P, `${a.acquisition_id} delivered rows disagree with the catalog extract`);
+    }
+  }
+  check(finkTime.windows.length === cat.acquisitions.length, T, "windows must be exactly the cohort acquisitions");
+  for (const day of cat.daily) {
+    const night = finkTime.nights.find((n) => n.date === day.date);
+    if (!check(night, where(day.date), "every cohort date needs a night")) continue;
+    check(night.state === (day.delivered_rows > 0 ? "AVAILABLE" : "ZERO"), where(day.date), "night state must follow the catalog's delivered rows");
+    check(finkTime.counts?.values?.[day.date] === day.delivered_rows, `${T}.counts[${day.date}]`, "count must equal the catalog's delivered rows");
+  }
+  const sky = docs.get(manifest.domains.fink.sky).density;
+  check(
+    sky.order === cat.density.order && JSON.stringify(sky.pixels) === JSON.stringify(cat.density.pixels) && JSON.stringify(sky.values) === JSON.stringify(cat.density.values),
+    manifest.domains.fink.sky,
+    "Fink density must equal the catalog extract's complete DiaObject density"
+  );
+  const ents = docs.get(manifest.domains.fink.entities);
+  check(ents.population.complete === false && ents.population.total === cat.density.objects, manifest.domains.fink.entities, "the Fink entity layer is a sample of the complete DiaObject population");
+  const sampled = new Map(cat.sample.objects.map((o) => [o.id, o]));
+  for (const [i, r] of ents.records.entries()) {
+    const o = sampled.get(r.id);
+    if (!check(o, `${manifest.domains.fink.entities}.records[${i}]`, "record is not a sampled catalog DiaObject")) continue;
+    check(o.ra === r.ra && o.dec === r.dec && o.sources.length === r.n_dia_sources, `${manifest.domains.fink.entities}.records[${i}]`, "record disagrees with the catalog extract");
+  }
+}
+
+function checkFinkAgainstExcerpt() {
 for (const a of excerpt.acquisitions) {
   const w = finkTime.windows.find((x) => x.start === a.window.start && x.stop === a.window.stop);
   const where = `${manifest.domains.fink.time}[${a.label}]`;
@@ -570,6 +656,7 @@ for (const a of excerpt.acquisitions) {
   }
 }
 check(provenance.sources.every((s) => s.sha256 === null || /^[0-9a-f]{64}$/.test(s.sha256)), P, "source digests must be sha256 hex");
+}
 for (const f of excerpt.extracted_files) {
   check(provenance.sources.some((s) => s.path === f.path && s.sha256 === f.sha256 && s.revision === excerpt.revision), P, `pinned Fink file ${f.path} must be cited with its digest`);
 }

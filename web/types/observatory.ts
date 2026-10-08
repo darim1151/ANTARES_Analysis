@@ -390,7 +390,13 @@ export type BrokerSnapshot = {
   diaSourceId: string;
   midpointMjdTai: number;
   fink_science_version: string;
-  pred: { is_sso: boolean; is_first: boolean | null; is_cataloged: boolean | null };
+  pred: {
+    is_sso: boolean;
+    is_first: boolean | null;
+    is_cataloged: boolean | null;
+    main_label_classifier?: number | null;
+    main_label_crossmatch?: string | null;
+  };
   clf: Record<string, number | null>;
   xm: Record<string, string | number | null>;
   lc_features: Record<string, Record<string, number | null>>;
@@ -502,7 +508,8 @@ export type AcquisitionEvidence = {
     parquet_files: number;
     total_bytes: number;
     reconciliation_passed: boolean;
-    terminal_lag: number;
+    /** Terminal consumer lag; null when the pinned evidence does not record it. */
+    terminal_lag: number | null;
     meaning: string;
   } | null;
   characterization: { run_id: string; summary_sha256: string; code_sha: string } | null;

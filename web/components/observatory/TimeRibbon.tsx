@@ -70,7 +70,8 @@ export default function TimeRibbon() {
         const time = dm.bundle.time;
         const nights = new Map<string, NightRecord>(time.nights.map((n) => [n.date, n]));
         const base = time.counts?.values ?? {};
-        const subsetActive = Boolean(state.selection.sky || masks[d].featureActive);
+        // A sampled entity layer is never drawn against population counts.
+        const subsetActive = dm.complete && Boolean(state.selection.sky || masks[d].featureActive);
         const selected: Record<string, number> = {};
         if (subsetActive) {
           const m = masks[d].exceptTime;
@@ -83,6 +84,8 @@ export default function TimeRibbon() {
       }),
     [masks, model, state.selection.sky]
   );
+
+  const countUnit = (d: DomainId) => model.domains[d].bundle.time.counts?.unit ?? ENTITY_NOUN[model.domains[d].bundle.entities.entity_kind].many;
 
   const sel = state.selection.time;
   const selFrom = sel ? indexOf.get(sel.start) ?? 0 : null;
@@ -158,7 +161,7 @@ export default function TimeRibbon() {
                 <EvidenceChips list={lane.countsCap.evidence} compact />
               </div>
               <span className="uso-lanelabel-q">
-                {ENTITY_NOUN[model.domains[lane.d].bundle.entities.entity_kind].many} / date · max {fmtInt(lane.max)}
+                {countUnit(lane.d)} / date · max {fmtInt(lane.max)}
               </span>
               <span className="uso-lanelabel-t" title={`${lane.time.semantics.scale_basis} ${lane.time.semantics.date_binning}`}>
                 {lane.time.semantics.stored_field} · MJD {lane.time.semantics.scale_label}
@@ -337,7 +340,7 @@ export default function TimeRibbon() {
                     </span>
                     {n !== undefined && (
                       <span>
-                        {fmtInt(n)} {ENTITY_NOUN[model.domains[lane.d].bundle.entities.entity_kind].many}
+                        {fmtInt(n)} {countUnit(lane.d)}
                         {lane.subsetActive && <> · {fmtInt(lane.selected[hovered] ?? 0)} in selection</>}
                       </span>
                     )}
@@ -347,7 +350,9 @@ export default function TimeRibbon() {
               })}
               {lanes.some((l) => l.countsCap.state !== "AVAILABLE") && (
                 <small className="uso-tip-foot">
-                  <CapabilityMark state="PARTIALLY_QUALIFIED" label={false} /> Counts are sample or fixture allocations, never rates.
+                  <CapabilityMark state="PARTIALLY_QUALIFIED" label={false} />{" "}
+                  {lanes.filter((l) => l.countsCap.state !== "AVAILABLE").map((l) => l.d.toUpperCase()).join(" and ")} counts are sample or fixture allocations,
+                  never rates.
                 </small>
               )}
             </div>

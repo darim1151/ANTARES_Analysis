@@ -59,12 +59,19 @@ FIRST_LIGHT_FIXTURE`, `science_ready: false`):
 - ANTARES: an adapter over the SkyPulse legacy demo above. Positions, tags and
   measurement counts are `LEGACY_SAMPLE`; dates and light curves are
   `SYNTHETIC_DEMO`; magnitudes the demo exporter clipped are null.
-- Fink: committed acquisition evidence extracted read-only at
-  `darim1151/Fink_Alerts-Analysis-LSST@fd02c8e` plus a `SYNTHETIC_FIXTURE`
-  population confined to the admitted Month-1 window. Month-2 is
-  `UNQUALIFIED` (delivery-validated, uncharacterized, not admitted, no counts,
-  no rate comparison). Month-3 is `UNAVAILABLE` (`PRODUCER_COMPLETE`,
-  `NOT_DELIVERY_VALIDATED`, `NOT_ADMITTED`), never `MISSING`.
+- Fink: real data from the accepted five-window cohort catalog
+  `final-five-window-analytics-20261006-v1` (`accepted_five_window_20260225_20260714`,
+  2026-02-25 → 2026-07-14, five delivery-validated, characterized and admitted
+  acquisitions; build kind `QUALIFIED_COHORT_CATALOG`). Values are labelled
+  `VALIDATED_TRANSPORT_EVIDENCE`, never accepted science.
+  - Complete: delivered alert rows (DIA + SSO) for every UTC date, with
+    zero-row dates as `ZERO`; DiaObject density on HEALPix order 6 over all
+    3,487,175 derived DIA groups.
+  - Sampled: a simple random sample of 5,000 DiaObjects (lowest md5 of the
+    decimal id) with every delivered DiaSource and first/last-two source-time
+    snapshots drives the entity layer, inspector and Lab. It is never
+    aggregated into population counts: `fink:sky.filtered_density` is
+    `UNAVAILABLE` and the time lane draws no sample subset.
 - No cross-broker relation exists in this basis.
 
 ```bash
@@ -73,7 +80,15 @@ pnpm run validate:observatory        # contract, evidence and integrity gate
 pnpm run validate:observatory:test   # validator mutation tests
 pnpm run observatory:check           # bundle == deterministic generator output
 pnpm run observatory:build           # regenerate after an input changes
+node scripts/observatory/fetch-fink-catalog.mjs   # re-extract the Fink catalog (read-only, over SSH)
 ```
+
+The Fink input `scripts/observatory/inputs/fink-catalog.<run id>.json.gz` is
+produced by `extract-fink-catalog.py`, streamed to the data host over SSH. It
+opens the catalog with Fink's native `open_catalog` (DuckDB `read_only`, raw
+input fingerprints re-verified), checks the catalog SHA256 against its build
+manifest and TAI − UTC with ERFA, disables DuckDB spilling and runs only
+SELECTs. Nothing is written on the host.
 
 Contract: `types/observatory.ts`. Each domain ships `time`, `sky`,
 `entities`, `features` and lazily loaded `detail/NN.json` shards; `basis`,

@@ -1,25 +1,25 @@
 {
   "contract": "uso.observatory-bundle",
   "domain": "fink",
-  "build_id": "fink.first-light-fixture.fd02c8e.g1.1",
+  "build_id": "fink.catalog.final-five-window-analytics-20261006-v1.caa455ccc5f6.g1.2",
   "semantics": {
     "stored_field": "midpointMjdTai",
     "format": "MJD",
     "scale": "TAI",
     "scale_label": "TAI",
     "scale_basis": "Fink analysis_contract_v1: midpointMjdTai is the authoritative observation time, MJD on the TAI scale.",
-    "date_binning": "UTC date of the TAI time converted with a leap-second table, half-open [00:00, 24:00) UTC. Fixture conversion: TAI − UTC = 37 s (valid since 2017-01-01); a real adapter must use ERFA/Astropy.",
+    "date_binning": "UTC date from the catalog's own UTC-midnight boundaries expressed in TAI MJD, half-open [00:00, 24:00) UTC. TAI − UTC = 37 s on every date of the cohort (ERFA leap-second table, checked at extraction).",
     "entity_date_rule": "UTC date of the first delivered DiaSource of the DiaObject in this basis."
   },
   "range": {
     "start": "2026-02-25",
-    "stop": "2026-05-25"
+    "stop": "2026-07-14"
   },
   "nights": [
     {
       "date": "2026-02-25",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -29,7 +29,7 @@
     {
       "date": "2026-02-26",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -39,7 +39,7 @@
     {
       "date": "2026-02-27",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -49,7 +49,7 @@
     {
       "date": "2026-02-28",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -59,7 +59,7 @@
     {
       "date": "2026-03-01",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -69,7 +69,7 @@
     {
       "date": "2026-03-02",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -79,7 +79,7 @@
     {
       "date": "2026-03-03",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -89,7 +89,7 @@
     {
       "date": "2026-03-04",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -98,8 +98,8 @@
     },
     {
       "date": "2026-03-05",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -109,7 +109,7 @@
     {
       "date": "2026-03-06",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -119,7 +119,7 @@
     {
       "date": "2026-03-07",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -129,7 +129,7 @@
     {
       "date": "2026-03-08",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -139,7 +139,7 @@
     {
       "date": "2026-03-09",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -149,7 +149,7 @@
     {
       "date": "2026-03-10",
       "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -158,8 +158,8 @@
     },
     {
       "date": "2026-03-11",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -168,8 +168,8 @@
     },
     {
       "date": "2026-03-12",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -178,8 +178,8 @@
     },
     {
       "date": "2026-03-13",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -188,8 +188,8 @@
     },
     {
       "date": "2026-03-14",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -198,8 +198,8 @@
     },
     {
       "date": "2026-03-15",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -208,8 +208,8 @@
     },
     {
       "date": "2026-03-16",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -218,8 +218,8 @@
     },
     {
       "date": "2026-03-17",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -228,8 +228,8 @@
     },
     {
       "date": "2026-03-18",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -238,8 +238,8 @@
     },
     {
       "date": "2026-03-19",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -248,8 +248,8 @@
     },
     {
       "date": "2026-03-20",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -258,8 +258,8 @@
     },
     {
       "date": "2026-03-21",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -268,8 +268,8 @@
     },
     {
       "date": "2026-03-22",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -278,8 +278,8 @@
     },
     {
       "date": "2026-03-23",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -288,8 +288,8 @@
     },
     {
       "date": "2026-03-24",
-      "state": "AVAILABLE",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-1",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -298,8 +298,8 @@
     },
     {
       "date": "2026-03-25",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -308,8 +308,8 @@
     },
     {
       "date": "2026-03-26",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -318,8 +318,8 @@
     },
     {
       "date": "2026-03-27",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -328,8 +328,8 @@
     },
     {
       "date": "2026-03-28",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -338,8 +338,8 @@
     },
     {
       "date": "2026-03-29",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -348,8 +348,8 @@
     },
     {
       "date": "2026-03-30",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -358,8 +358,8 @@
     },
     {
       "date": "2026-03-31",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -368,8 +368,8 @@
     },
     {
       "date": "2026-04-01",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -378,8 +378,8 @@
     },
     {
       "date": "2026-04-02",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -388,8 +388,8 @@
     },
     {
       "date": "2026-04-03",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -398,8 +398,8 @@
     },
     {
       "date": "2026-04-04",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -408,8 +408,8 @@
     },
     {
       "date": "2026-04-05",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -418,8 +418,8 @@
     },
     {
       "date": "2026-04-06",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -428,8 +428,8 @@
     },
     {
       "date": "2026-04-07",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -438,8 +438,8 @@
     },
     {
       "date": "2026-04-08",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -448,8 +448,8 @@
     },
     {
       "date": "2026-04-09",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -458,8 +458,8 @@
     },
     {
       "date": "2026-04-10",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -468,8 +468,8 @@
     },
     {
       "date": "2026-04-11",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -478,8 +478,8 @@
     },
     {
       "date": "2026-04-12",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -488,8 +488,8 @@
     },
     {
       "date": "2026-04-13",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -498,8 +498,8 @@
     },
     {
       "date": "2026-04-14",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -508,8 +508,8 @@
     },
     {
       "date": "2026-04-15",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -518,8 +518,8 @@
     },
     {
       "date": "2026-04-16",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -528,8 +528,8 @@
     },
     {
       "date": "2026-04-17",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -538,8 +538,8 @@
     },
     {
       "date": "2026-04-18",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -548,8 +548,8 @@
     },
     {
       "date": "2026-04-19",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -558,8 +558,8 @@
     },
     {
       "date": "2026-04-20",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -568,8 +568,8 @@
     },
     {
       "date": "2026-04-21",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -578,8 +578,8 @@
     },
     {
       "date": "2026-04-22",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -588,8 +588,8 @@
     },
     {
       "date": "2026-04-23",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -598,8 +598,8 @@
     },
     {
       "date": "2026-04-24",
-      "state": "UNQUALIFIED",
-      "reason": "DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-2",
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -608,271 +608,801 @@
     },
     {
       "date": "2026-04-25",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-04-26",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-04-27",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-04-28",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-04-29",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-04-30",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-01",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-02",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-03",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-04",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-05",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-06",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-07",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-08",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-09",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-10",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-11",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-12",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-13",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-14",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-15",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-16",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-17",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-18",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-19",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-20",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-21",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-22",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-23",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     },
     {
       "date": "2026-05-24",
-      "state": "UNAVAILABLE",
-      "reason": "NOT_DELIVERY_VALIDATED",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
       "window_id": "fink.month-3",
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-05-25",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-05-26",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-05-27",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-05-28",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-05-29",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-05-30",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-05-31",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-01",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-02",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-03",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-04",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-05",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-06",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-07",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-08",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-09",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-10",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-11",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-12",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-13",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-14",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-15",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-16",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-17",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-18",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-19",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-20",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-21",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-22",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-23",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-24",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-4",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-25",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-26",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-27",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-28",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-29",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-06-30",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-01",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-02",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-03",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-04",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-05",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-06",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-07",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-08",
+      "state": "ZERO",
+      "reason": "ZERO_ROWS_IN_VALIDATED_DELIVERY",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-09",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-10",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-11",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-12",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ]
+    },
+    {
+      "date": "2026-07-13",
+      "state": "AVAILABLE",
+      "reason": "DELIVERED_ROWS",
+      "window_id": "fink.month-5",
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ]
     }
@@ -903,19 +1433,38 @@
           "evidence": "COMMITTED_OPERATIONAL_RECORD"
         },
         {
-          "label": "State recorded (UTC)",
-          "value": "2026-10-05T23:42:35Z",
-          "evidence": "COMMITTED_OPERATIONAL_RECORD"
-        },
-        {
           "label": "Science profile",
           "value": "lsst_light_static_all_alerts_v1",
           "evidence": "COMMITTED_OPERATIONAL_RECORD"
         },
         {
-          "label": "Delivered readable rows (transport)",
+          "label": "Delivered rows (validated = expected)",
           "value": 1658642,
           "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "DIA rows",
+          "value": 1338941,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "SSO rows",
+          "value": 319701,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Ambiguous rows",
+          "value": 0,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Distinct DIA objects in this window",
+          "value": 175924,
+          "unit": "DiaObjects",
           "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
         },
         {
@@ -931,43 +1480,32 @@
           "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
         },
         {
-          "label": "Three-way reconciliation",
-          "value": true,
-          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
-        },
-        {
-          "label": "Terminal consumer lag",
-          "value": 0,
-          "unit": "messages",
-          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
-        },
-        {
           "label": "Characterization run",
           "value": "g4a-month1-20260225_20260325-v1",
           "evidence": "COMMITTED_OPERATIONAL_RECORD"
         },
         {
           "label": "Analytical cohort",
-          "value": "accepted_month1",
+          "value": "accepted_five_window_20260225_20260714",
           "evidence": "COMMITTED_OPERATIONAL_RECORD"
         }
       ],
       "rate_comparison": "PROHIBITED",
-      "caveat": "Delivery reconciled three ways (expected topic messages = terminal committed = local readable rows, lag 0) and characterized (G4A). Transport reconciliation is not Rubin scientific completeness. Per-date delivered counts are not committed evidence and are not shown."
+      "caveat": "Delivery-validated (expected = validated rows), characterized (g4a-month1-20260225_20260325-v1) and admitted to the accepted accepted_five_window_20260225_20260714 cohort. Delivered rows are transport facts, not Rubin scientific completeness, and are never compared across windows as rates. A zero-row date had no delivered rows; it is not a survey non-observation."
     },
     {
       "id": "fink.month-2",
       "label": "Month-2 · 2026-03-25 → 2026-04-25",
       "start": "2026-03-25",
       "stop": "2026-04-25",
-      "state": "UNQUALIFIED",
+      "state": "AVAILABLE",
       "source_state": "DELIVERY_VALIDATED",
       "delivery_validation": "DELIVERY_VALIDATED",
-      "admission": "NOT_ADMITTED",
+      "admission": "ADMITTED",
       "status_codes": [
         "DELIVERY_VALIDATED",
-        "NOT_ADMITTED",
-        "UNCHARACTERIZED"
+        "ADMITTED",
+        "CHARACTERIZED"
       ],
       "evidence": [
         "VALIDATED_TRANSPORT_EVIDENCE",
@@ -980,19 +1518,38 @@
           "evidence": "COMMITTED_OPERATIONAL_RECORD"
         },
         {
-          "label": "State recorded (UTC)",
-          "value": "2026-10-06T07:21:14Z",
-          "evidence": "COMMITTED_OPERATIONAL_RECORD"
-        },
-        {
           "label": "Science profile",
           "value": "lsst_light_static_all_alerts_v1",
           "evidence": "COMMITTED_OPERATIONAL_RECORD"
         },
         {
-          "label": "Delivered readable rows (transport)",
+          "label": "Delivered rows (validated = expected)",
           "value": 76133,
           "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "DIA rows",
+          "value": 51978,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "SSO rows",
+          "value": 24155,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Ambiguous rows",
+          "value": 0,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Distinct DIA objects in this window",
+          "value": 9240,
+          "unit": "DiaObjects",
           "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
         },
         {
@@ -1008,50 +1565,41 @@
           "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
         },
         {
-          "label": "Three-way reconciliation",
-          "value": true,
-          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
-        },
-        {
-          "label": "Terminal consumer lag",
-          "value": 0,
-          "unit": "messages",
-          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+          "label": "Characterization run",
+          "value": "g5-month2-characterization-v1",
+          "evidence": "COMMITTED_OPERATIONAL_RECORD"
         },
         {
           "label": "Analytical cohort",
-          "value": "not admitted",
+          "value": "accepted_five_window_20260225_20260714",
           "evidence": "COMMITTED_OPERATIONAL_RECORD"
         }
       ],
       "rate_comparison": "PROHIBITED",
-      "caveat": "Transport-validated but scientifically uncharacterized and not admitted to the analytical cohort. Its delivered row total must not be read as an alert rate or compared with other windows."
+      "caveat": "Delivery-validated (expected = validated rows), characterized (g5-month2-characterization-v1) and admitted to the accepted accepted_five_window_20260225_20260714 cohort. Delivered rows are transport facts, not Rubin scientific completeness, and are never compared across windows as rates. A zero-row date had no delivered rows; it is not a survey non-observation."
     },
     {
       "id": "fink.month-3",
       "label": "Month-3 · 2026-04-25 → 2026-05-25",
       "start": "2026-04-25",
       "stop": "2026-05-25",
-      "state": "UNAVAILABLE",
-      "source_state": "PRODUCER_COMPLETE",
-      "delivery_validation": "NOT_DELIVERY_VALIDATED",
-      "admission": "NOT_ADMITTED",
+      "state": "AVAILABLE",
+      "source_state": "DELIVERY_VALIDATED",
+      "delivery_validation": "DELIVERY_VALIDATED",
+      "admission": "ADMITTED",
       "status_codes": [
-        "NOT_DELIVERY_VALIDATED",
-        "NOT_ADMITTED"
+        "DELIVERY_VALIDATED",
+        "ADMITTED",
+        "CHARACTERIZED"
       ],
       "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
         "COMMITTED_OPERATIONAL_RECORD"
       ],
       "facts": [
         {
           "label": "Acquisition state",
-          "value": "PRODUCER_COMPLETE",
-          "evidence": "COMMITTED_OPERATIONAL_RECORD"
-        },
-        {
-          "label": "State recorded (UTC)",
-          "value": "2026-10-06T07:31:14Z",
+          "value": "DELIVERY_VALIDATED",
           "evidence": "COMMITTED_OPERATIONAL_RECORD"
         },
         {
@@ -1060,50 +1608,378 @@
           "evidence": "COMMITTED_OPERATIONAL_RECORD"
         },
         {
+          "label": "Delivered rows (validated = expected)",
+          "value": 266496,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "DIA rows",
+          "value": 239805,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "SSO rows",
+          "value": 26691,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Ambiguous rows",
+          "value": 0,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Distinct DIA objects in this window",
+          "value": 187317,
+          "unit": "DiaObjects",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Readable Parquet files",
+          "value": 2668,
+          "unit": "files",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Delivered bytes",
+          "value": 143714745,
+          "unit": "bytes",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Characterization run",
+          "value": "final-month3-characterization-20261006-v1",
+          "evidence": "COMMITTED_OPERATIONAL_RECORD"
+        },
+        {
           "label": "Analytical cohort",
-          "value": "not admitted",
+          "value": "accepted_five_window_20260225_20260714",
           "evidence": "COMMITTED_OPERATIONAL_RECORD"
         }
       ],
       "rate_comparison": "PROHIBITED",
-      "caveat": "Upstream state PRODUCER_COMPLETE: not delivery-validated and not admitted to this basis. This is not missing data; it is not yet available."
+      "caveat": "Delivery-validated (expected = validated rows), characterized (final-month3-characterization-20261006-v1) and admitted to the accepted accepted_five_window_20260225_20260714 cohort. Delivered rows are transport facts, not Rubin scientific completeness, and are never compared across windows as rates. A zero-row date had no delivered rows; it is not a survey non-observation."
+    },
+    {
+      "id": "fink.month-4",
+      "label": "Month-4 · 2026-05-25 → 2026-06-25",
+      "start": "2026-05-25",
+      "stop": "2026-06-25",
+      "state": "AVAILABLE",
+      "source_state": "DELIVERY_VALIDATED",
+      "delivery_validation": "DELIVERY_VALIDATED",
+      "admission": "ADMITTED",
+      "status_codes": [
+        "DELIVERY_VALIDATED",
+        "ADMITTED",
+        "CHARACTERIZED"
+      ],
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ],
+      "facts": [
+        {
+          "label": "Acquisition state",
+          "value": "DELIVERY_VALIDATED",
+          "evidence": "COMMITTED_OPERATIONAL_RECORD"
+        },
+        {
+          "label": "Science profile",
+          "value": "lsst_light_static_all_alerts_v1",
+          "evidence": "COMMITTED_OPERATIONAL_RECORD"
+        },
+        {
+          "label": "Delivered rows (validated = expected)",
+          "value": 923667,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "DIA rows",
+          "value": 882831,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "SSO rows",
+          "value": 40836,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Ambiguous rows",
+          "value": 0,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Distinct DIA objects in this window",
+          "value": 704252,
+          "unit": "DiaObjects",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Readable Parquet files",
+          "value": 9242,
+          "unit": "files",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Delivered bytes",
+          "value": 407951807,
+          "unit": "bytes",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Characterization run",
+          "value": "final-month4-characterization-20261006-v1",
+          "evidence": "COMMITTED_OPERATIONAL_RECORD"
+        },
+        {
+          "label": "Analytical cohort",
+          "value": "accepted_five_window_20260225_20260714",
+          "evidence": "COMMITTED_OPERATIONAL_RECORD"
+        }
+      ],
+      "rate_comparison": "PROHIBITED",
+      "caveat": "Delivery-validated (expected = validated rows), characterized (final-month4-characterization-20261006-v1) and admitted to the accepted accepted_five_window_20260225_20260714 cohort. Delivered rows are transport facts, not Rubin scientific completeness, and are never compared across windows as rates. A zero-row date had no delivered rows; it is not a survey non-observation."
+    },
+    {
+      "id": "fink.month-5",
+      "label": "Month-5 · 2026-06-25 → 2026-07-14",
+      "start": "2026-06-25",
+      "stop": "2026-07-14",
+      "state": "AVAILABLE",
+      "source_state": "DELIVERY_VALIDATED",
+      "delivery_validation": "DELIVERY_VALIDATED",
+      "admission": "ADMITTED",
+      "status_codes": [
+        "DELIVERY_VALIDATED",
+        "ADMITTED",
+        "CHARACTERIZED"
+      ],
+      "evidence": [
+        "VALIDATED_TRANSPORT_EVIDENCE",
+        "COMMITTED_OPERATIONAL_RECORD"
+      ],
+      "facts": [
+        {
+          "label": "Acquisition state",
+          "value": "DELIVERY_VALIDATED",
+          "evidence": "COMMITTED_OPERATIONAL_RECORD"
+        },
+        {
+          "label": "Science profile",
+          "value": "lsst_light_static_all_alerts_v1",
+          "evidence": "COMMITTED_OPERATIONAL_RECORD"
+        },
+        {
+          "label": "Delivered rows (validated = expected)",
+          "value": 4177009,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "DIA rows",
+          "value": 3797809,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "SSO rows",
+          "value": 379200,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Ambiguous rows",
+          "value": 0,
+          "unit": "rows",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Distinct DIA objects in this window",
+          "value": 2691242,
+          "unit": "DiaObjects",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Readable Parquet files",
+          "value": 41774,
+          "unit": "files",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Delivered bytes",
+          "value": 1813007795,
+          "unit": "bytes",
+          "evidence": "VALIDATED_TRANSPORT_EVIDENCE"
+        },
+        {
+          "label": "Characterization run",
+          "value": "final-month5-characterization-20261006-v1",
+          "evidence": "COMMITTED_OPERATIONAL_RECORD"
+        },
+        {
+          "label": "Analytical cohort",
+          "value": "accepted_five_window_20260225_20260714",
+          "evidence": "COMMITTED_OPERATIONAL_RECORD"
+        }
+      ],
+      "rate_comparison": "PROHIBITED",
+      "caveat": "Delivery-validated (expected = validated rows), characterized (final-month5-characterization-20261006-v1) and admitted to the accepted accepted_five_window_20260225_20260714 cohort. Delivered rows are transport facts, not Rubin scientific completeness, and are never compared across windows as rates. A zero-row date had no delivered rows; it is not a survey non-observation."
     }
   ],
   "counts": {
-    "quantity": "Synthetic fixture DiaObjects by first-delivered-DiaSource UTC date (Month-1 window only)",
-    "unit": "DiaObjects",
+    "quantity": "Delivered alert rows per UTC date (every DIA and SSO DiaSource packet in the cohort)",
+    "unit": "alert rows",
     "evidence": [
-      "SYNTHETIC_FIXTURE"
+      "VALIDATED_TRANSPORT_EVIDENCE"
     ],
     "values": {
-      "2026-02-25": 82,
-      "2026-02-26": 63,
-      "2026-02-27": 64,
-      "2026-02-28": 79,
-      "2026-03-01": 74,
-      "2026-03-02": 37,
-      "2026-03-03": 85,
-      "2026-03-04": 87,
-      "2026-03-05": 99,
-      "2026-03-06": 97,
-      "2026-03-07": 27,
-      "2026-03-08": 50,
-      "2026-03-09": 32,
-      "2026-03-10": 86,
-      "2026-03-11": 53,
-      "2026-03-12": 98,
-      "2026-03-13": 41,
-      "2026-03-14": 59,
-      "2026-03-15": 74,
-      "2026-03-16": 32,
-      "2026-03-17": 58,
-      "2026-03-18": 55,
-      "2026-03-19": 83,
-      "2026-03-20": 62,
-      "2026-03-21": 87,
-      "2026-03-22": 43,
-      "2026-03-23": 49,
-      "2026-03-24": 44
+      "2026-02-25": 798047,
+      "2026-02-26": 546797,
+      "2026-02-27": 278614,
+      "2026-02-28": 6475,
+      "2026-03-01": 2395,
+      "2026-03-02": 2448,
+      "2026-03-03": 1003,
+      "2026-03-04": 410,
+      "2026-03-05": 0,
+      "2026-03-06": 5198,
+      "2026-03-07": 4277,
+      "2026-03-08": 4334,
+      "2026-03-09": 6647,
+      "2026-03-10": 1997,
+      "2026-03-11": 0,
+      "2026-03-12": 0,
+      "2026-03-13": 0,
+      "2026-03-14": 0,
+      "2026-03-15": 0,
+      "2026-03-16": 0,
+      "2026-03-17": 0,
+      "2026-03-18": 0,
+      "2026-03-19": 0,
+      "2026-03-20": 0,
+      "2026-03-21": 0,
+      "2026-03-22": 0,
+      "2026-03-23": 0,
+      "2026-03-24": 0,
+      "2026-03-25": 0,
+      "2026-03-26": 0,
+      "2026-03-27": 0,
+      "2026-03-28": 0,
+      "2026-03-29": 0,
+      "2026-03-30": 0,
+      "2026-03-31": 0,
+      "2026-04-01": 0,
+      "2026-04-02": 0,
+      "2026-04-03": 0,
+      "2026-04-04": 834,
+      "2026-04-05": 3123,
+      "2026-04-06": 5954,
+      "2026-04-07": 12494,
+      "2026-04-08": 3368,
+      "2026-04-09": 6290,
+      "2026-04-10": 4984,
+      "2026-04-11": 3704,
+      "2026-04-12": 3962,
+      "2026-04-13": 6969,
+      "2026-04-14": 2154,
+      "2026-04-15": 7050,
+      "2026-04-16": 2654,
+      "2026-04-17": 0,
+      "2026-04-18": 0,
+      "2026-04-19": 0,
+      "2026-04-20": 0,
+      "2026-04-21": 9505,
+      "2026-04-22": 3088,
+      "2026-04-23": 0,
+      "2026-04-24": 0,
+      "2026-04-25": 0,
+      "2026-04-26": 0,
+      "2026-04-27": 0,
+      "2026-04-28": 0,
+      "2026-04-29": 0,
+      "2026-04-30": 7238,
+      "2026-05-01": 3554,
+      "2026-05-02": 3330,
+      "2026-05-03": 0,
+      "2026-05-04": 0,
+      "2026-05-05": 0,
+      "2026-05-06": 0,
+      "2026-05-07": 0,
+      "2026-05-08": 0,
+      "2026-05-09": 0,
+      "2026-05-10": 0,
+      "2026-05-11": 0,
+      "2026-05-12": 14998,
+      "2026-05-13": 0,
+      "2026-05-14": 0,
+      "2026-05-15": 0,
+      "2026-05-16": 3463,
+      "2026-05-17": 3307,
+      "2026-05-18": 11564,
+      "2026-05-19": 9991,
+      "2026-05-20": 0,
+      "2026-05-21": 0,
+      "2026-05-22": 20813,
+      "2026-05-23": 100766,
+      "2026-05-24": 87472,
+      "2026-05-25": 54928,
+      "2026-05-26": 118854,
+      "2026-05-27": 27161,
+      "2026-05-28": 0,
+      "2026-05-29": 2833,
+      "2026-05-30": 4598,
+      "2026-05-31": 19309,
+      "2026-06-01": 150,
+      "2026-06-02": 0,
+      "2026-06-03": 0,
+      "2026-06-04": 49060,
+      "2026-06-05": 24664,
+      "2026-06-06": 115,
+      "2026-06-07": 142485,
+      "2026-06-08": 72981,
+      "2026-06-09": 0,
+      "2026-06-10": 0,
+      "2026-06-11": 0,
+      "2026-06-12": 185329,
+      "2026-06-13": 26568,
+      "2026-06-14": 37833,
+      "2026-06-15": 0,
+      "2026-06-16": 0,
+      "2026-06-17": 0,
+      "2026-06-18": 0,
+      "2026-06-19": 0,
+      "2026-06-20": 156799,
+      "2026-06-21": 0,
+      "2026-06-22": 0,
+      "2026-06-23": 0,
+      "2026-06-24": 0,
+      "2026-06-25": 0,
+      "2026-06-26": 138821,
+      "2026-06-27": 663560,
+      "2026-06-28": 20102,
+      "2026-06-29": 61864,
+      "2026-06-30": 258312,
+      "2026-07-01": 32896,
+      "2026-07-02": 0,
+      "2026-07-03": 0,
+      "2026-07-04": 0,
+      "2026-07-05": 0,
+      "2026-07-06": 543950,
+      "2026-07-07": 623292,
+      "2026-07-08": 0,
+      "2026-07-09": 664612,
+      "2026-07-10": 228083,
+      "2026-07-11": 125275,
+      "2026-07-12": 71683,
+      "2026-07-13": 744559
     }
   }
 }
