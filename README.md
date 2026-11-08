@@ -1,8 +1,19 @@
 # ANTARES Analysis
 
-LSST-only ANTARES workflows for building a cumulative historical alert-era data store and comparing a real-time completed night against that stored history.
+Night-by-night extraction of LSST-associated loci from the [ANTARES](https://antares.noirlab.edu) broker, with each night certified only when no search tile is saturated.
 
-This project still uses ANTARES as the broker/source. Rubin Science Platform is used for compute and storage, not as a direct Rubin Butler/TAP replacement.
+ANTARES's search caps each query at about 10,000 results. A night of LSST-associated loci can exceed that, so a single query can return only part of the night. This project splits each night into time × RA × Dec tiles, probes each tile, splits any tile that reaches the cap, and refuses to mark a night complete while a tile is still saturated. Accepted nights are saved as Parquet with a manifest, and the cumulative index is rebuilt from those manifests.
+
+> [!NOTE]
+> **Which branch to read.** `main` is the notebook workflow used on the Rubin Science Platform (RSP), documented below. The packaged pipeline (resumable acquisition, transactional publication and an offline test suite of 570 test functions) is on [`release/g664-r3-v0.4.10`](https://github.com/darim1151/ANTARES_Analysis/tree/e7fd9f95c30b8e456def49d4e25a570125d1ff08) (commit `e7fd9f9`). Earlier versions are [tagged](https://github.com/darim1151/ANTARES_Analysis/tags) v0.4.1–v0.4.9.
+
+**Data so far.** 90 processed nights between 25 February and 26 June 2026 (not every night in that range; two returned zero rows), with 993,218 locus rows and 13,579,707 light-curve rows. A locus's light curve is its full ANTARES history, so these rows include earlier ZTF detections and are not a count of LSST alerts. The data is stored outside Git.
+
+**What the data is.** ANTARES loci with at least one Rubin/LSST identifier (see [LSST-Only Rule](#lsst-only-rule)). RSP is used for compute and storage; nothing here is Rubin Butler or TAP catalog data, and a locus can also carry older ZTF history.
+
+**Public view.** [SkyPulse](https://sky-pulse-theta.vercel.app) is a static map built from one export of this pipeline's saved products. It reads JSON files and does not query ANTARES or Rubin.
+
+**Credits.** Nirav Nemali started the repository and contributed the initial data pull, the first real-time comparison notebook and the original `src/` layout (February–April 2026). Parts of the later code and documentation were written with AI coding agents: commits authored or co-authored by `Claude`, and work on the `claude/*` and `codex/*` branches.
 
 ## What This Project Does
 
